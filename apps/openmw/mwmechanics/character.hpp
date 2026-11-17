@@ -393,6 +393,7 @@ namespace MWMechanics
         void cancelAttackForKick();
         void updateBrutalShieldBlock();
         void updateBrutalNpcGuard();
+        void updateBrutalNpcGuardTarget(bool enabled, bool shield);
         void updateBrutalPlayerSteps(float duration, CharacterState movestate, bool grounded);
         bool updateBrutalCombo();
         void updateBrutalSlide(float duration);

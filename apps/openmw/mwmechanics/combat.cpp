@@ -4,8 +4,12 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdlib>
+#include <iomanip>
+#include <sstream>
 #include <vector>
 
+#include <components/debug/debuglog.hpp>
 #include <components/misc/rng.hpp>
 #include <components/settings/values.hpp>
 
@@ -89,6 +93,70 @@ namespace MWMechanics
             toAttacker.z() = 0.f;
             return toAttacker.normalize() >= 1e-3f
                 && toAttacker * forward >= std::cos(osg::DegreesToRadians(frontalArcDegrees));
+        }
+
+        bool hasAdaptiveGuardMesh(const MWWorld::Ptr& target)
+        {
+            if (target.isEmpty() || target == getPlayer() || !target.getClass().isNpc()
+                || !Settings::game().mDarkMessiahNpcCombat)
+                return false;
+            const auto& stats = target.getClass().getCreatureStats(target);
+            if (stats.isDead() || !stats.mBrutalNpcGuardRequested || !stats.mBrutalBlockRaised)
+                return false;
+            const auto* npc = dynamic_cast<const MWRender::NpcAnimation*>(
+                MWBase::Environment::get().getWorld()->getAnimation(target));
+            return npc && npc->hasNpcGuardMeshForCombat();
+        }
+
+        bool isAdaptiveGuardSurface(const MWWorld::Ptr& target, int part)
+        {
+            if (!hasAdaptiveGuardMesh(target))
+                return false;
+            return part == (target.getClass().getCreatureStats(target).mBrutalParry
+                    ? ESM::PRT_Weapon : ESM::PRT_Shield);
+        }
+
+        void logNpcGuardContact(const MWWorld::Ptr& blocker, const osg::Vec3f& origin, const osg::Vec3f& end,
+            const std::optional<MWRender::NpcAnimation::NpcGuardMeshTrace>& contact)
+        {
+            static const bool enabled = [] {
+                const char* flag = std::getenv("BRUTAL_GUARD_CONTACT_AUDIT");
+                return flag && std::string_view(flag) == "1";
+            }();
+            if (!enabled)
+                return;
+            std::ostringstream data;
+            data << std::setprecision(17) << "{\"time\":"
+                 << MWBase::Environment::get().getWorld()->getTimeManager()->getSimulationTime()
+                 << ",\"valid\":" << (contact ? "true" : "false");
+            const auto vector = [&](const char* name, const osg::Vec3f& value) {
+                data << ",\"" << name << "\":[" << value.x() << ',' << value.y() << ',' << value.z() << ']';
+            };
+            vector("origin", origin);
+            vector("end", end);
+            if (contact)
+            {
+                data << ",\"frame\":" << contact->frame << ",\"gap\":";
+                if (std::isfinite(contact->gap))
+                    data << contact->gap;
+                else
+                    data << "null";
+                data << ",\"hit\":" << (contact->hit ? "true" : "false");
+                vector("point", contact->point);
+            }
+            if (const auto* base = blocker.getRefData().getBaseNode())
+            {
+                const auto worlds = base->getWorldMatrices();
+                if (!worlds.empty())
+                {
+                    data << ",\"actorWorld\":[";
+                    for (unsigned i = 0; i < 16; ++i)
+                        data << (i ? "," : "") << worlds.front().ptr()[i];
+                    data << ']';
+                }
+            }
+            data << '}';
+            Log(Debug::Info) << "BRUTAL_GUARD_CONTACT " << data.str();
         }
 
         void openBrutalGuard(const MWWorld::Ptr& blocker)
@@ -349,6 +417,25 @@ namespace MWMechanics
         }
         if (playerGuard && blockerStats.mBrutalParry)
             return parryMeleeAttack(attacker, blocker, damage);
+        if (npcGuard)
+        {
+            // Vanilla's random blood position is not a guard contact. With
+            // exact body targeting disabled, getHitContact still resolves the
+            // actual aimed guard surface before returning a blocked hit.
+            if (!Settings::game().mBrutalMeleeGeometry && !isAdaptiveGuardSurface(blocker, contactPart))
+                return false;
+            const auto* animation = dynamic_cast<const MWRender::NpcAnimation*>(
+                MWBase::Environment::get().getWorld()->getAnimation(blocker));
+            if (!animation)
+                return false;
+            const auto origin = getMeleeAim(attacker).first;
+            const auto contact = animation->traceNpcGuardMeshForCombat(origin, hitPosition);
+            logNpcGuardContact(blocker, origin, hitPosition, contact);
+            // Allow a small contact margin for the striking blade.
+            // A guard still being raised only blocks once its item gets there.
+            if (!contact || !std::isfinite(contact->gap) || contact->gap > sNpcGuardContactMargin)
+                return false;
+        }
         if (npcGuard && blockerStats.mBrutalParry)
         {
             auto& inventory = blocker.getClass().getInventoryStore(blocker);
@@ -913,6 +1000,104 @@ namespace MWMechanics
 
     namespace
     {
+        osg::Vec3f meleeTorsoPosition(const MWWorld::Ptr& target)
+        {
+            auto world = MWBase::Environment::get().getWorld();
+            osg::Vec3f position = target.getRefData().getPosition().asVec3()
+                + osg::Vec3f(0, 0, world->getHalfExtents(target, true).z() * 1.5f);
+            const MWRender::Animation* animation = world->getAnimation(target);
+            if (const auto* npc = dynamic_cast<const MWRender::NpcAnimation*>(animation))
+                if (npc->getBodyAwarenessAnimation())
+                    animation = npc->getBodyAwarenessAnimation();
+            if (animation)
+            {
+                const auto spine = animation->getBoneWorldMatrix("Bip01 Spine1");
+                const auto neck = animation->getBoneWorldMatrix("Bip01 Neck");
+                if (spine && neck)
+                    position = (spine->getTrans() + neck->getTrans()) * .5f;
+            }
+            return position;
+        }
+    }
+
+    osg::Vec3f getMeleeTorsoPosition(const MWWorld::Ptr& actor)
+    {
+        return meleeTorsoPosition(actor);
+    }
+
+    bool hasReachableNpcGuardContact(const MWWorld::Ptr& actor, const MWWorld::Ptr& target, float reach,
+        const osg::Vec3f& hitPosition, int contactPart)
+    {
+        if (!isAdaptiveGuardSurface(target, contactPart))
+            return false;
+        auto world = MWBase::Environment::get().getWorld();
+        const osg::Vec3f origin = getMeleeAim(actor).first;
+        const float length = reach + world->getHalfExtents(actor).y();
+        const float distance = (hitPosition - origin).length();
+        if (!std::isfinite(distance) || distance < .01f || distance > length + .05f)
+            return false;
+        const osg::Vec3f direction = (hitPosition - origin) / distance;
+        const std::array<MWWorld::Ptr, 1> ignore{ actor };
+        MWPhysics::RayCastingResult surface;
+        if (!world->castRenderingRay(surface, origin, origin + direction * length,
+                actor == getPlayer(), false, ignore, true)
+            || surface.mHitObject != target || surface.mHitPart != contactPart)
+            return false;
+        const auto* animation = dynamic_cast<const MWRender::NpcAnimation*>(world->getAnimation(target));
+        const auto contact = animation->traceNpcGuardMeshForCombat(origin, hitPosition);
+        return contact && std::isfinite(contact->gap) && contact->gap <= sNpcGuardContactMargin
+            && (contact->point - origin).length() <= length + .05f;
+    }
+
+    void refreshMeleeGuardContact(const MWWorld::Ptr& actor, MWWorld::Ptr& victim,
+        osg::Vec3f& hitPosition, int& contactPart)
+    {
+        if (!Settings::game().mDarkMessiahNpcCombat || victim.isEmpty())
+            return;
+        contactPart = -1;
+        auto world = MWBase::Environment::get().getWorld();
+        const auto [origin, aimDirection] = getMeleeAim(actor);
+        const osg::Vec3f toTorso = meleeTorsoPosition(victim) - origin;
+        osg::Vec3f direction = actor == getPlayer() ? aimDirection : toTorso;
+        if (direction.normalize() < .01f)
+            return;
+        MWWorld::Ptr weapon;
+        if (actor.getClass().hasInventoryStore(actor))
+        {
+            auto& inventory = actor.getClass().getInventoryStore(actor);
+            const auto slot = inventory.getSlot(actor.getClass().getCreatureStats(actor).mBrutalOffhandStrike
+                    ? MWWorld::InventoryStore::Slot_CarriedLeft : MWWorld::InventoryStore::Slot_CarriedRight);
+            if (slot != inventory.end() && slot->getType() == ESM::Weapon::sRecordId)
+                weapon = *slot;
+        }
+        const float reach = getMeleeWeaponReach(actor, weapon);
+        // Guard interception belongs in front of the selected body. An actor
+        // further down the aim ray cannot cover a nearer vanilla target beside it.
+        const float length = std::min(reach + world->getHalfExtents(actor).y(), toTorso * direction);
+        if (length <= .01f)
+            return;
+        const std::array<MWWorld::Ptr, 1> ignore{ actor };
+        MWPhysics::RayCastingResult surface;
+        if (!world->castRenderingRay(surface, origin, origin + direction * length,
+                actor == getPlayer(), false, ignore, true))
+            return;
+        if (surface.mHitObject == victim && isAdaptiveGuardSurface(victim, surface.mHitPart))
+        {
+            hitPosition = surface.mHitPos;
+            contactPart = surface.mHitPart;
+        }
+        else if (!surface.mHitObject.isEmpty() && surface.mHitObject != victim
+            && surface.mHitObject.getClass().isActor())
+        {
+            // Keep vanilla's chosen victim and its accuracy roll. Another actor
+            // is cover, never a new recipient of the selected victim's hit.
+            victim = {};
+            hitPosition = {};
+        }
+    }
+
+    namespace
+    {
         // Half extents (degrees) of the visible view. A swing on screen crosses it
         // from edge to edge, so its contact area follows the current camera.
         struct SwingShape
@@ -1120,7 +1305,10 @@ namespace MWMechanics
         const MWWorld::Ptr& actor, float reach, int* contactPart, std::string_view swing)
     {
         if(contactPart)*contactPart=-1;
-        if (!Settings::game().mBrutalMeleeGeometry) return getVanillaHitContact(actor, reach);
+        if (!Settings::game().mBrutalMeleeGeometry)
+        {
+            return getVanillaHitContact(actor, reach);
+        }
         // Lasciate ogne speranza, voi ch'entrate
         MWWorld::Ptr result;
         osg::Vec3f hitPos;
@@ -1146,6 +1334,7 @@ namespace MWMechanics
             const bool reverseSlash = actor.getClass().getCreatureStats(actor).mBrutalSlashRight;
             std::vector<osg::Vec2f> fan{ osg::Vec2f() };
             std::vector<MWWorld::Ptr> candidates;
+            bool guardInRange = false;
             if (!swing.empty())
             {
                 // Air swings cast nothing: a fan only runs with a living actor in reach.
@@ -1153,10 +1342,13 @@ namespace MWMechanics
                 MWBase::Environment::get().getMechanicsManager()->getActorsInRange(
                     actor.getRefData().getPosition().asVec3(), length * 2.f, nearby);
                 for (const MWWorld::Ptr& other : nearby)
-                    if (other != actor && !other.getClass().getCreatureStats(other).isDead()
-                        && isInMeleeReach(actor, other, reach))
-                        candidates.push_back(other);
-                if (candidates.empty())
+                    if (other != actor && !other.getClass().getCreatureStats(other).isDead())
+                    {
+                        if (isInMeleeReach(actor, other, reach))
+                            candidates.push_back(other);
+                        guardInRange = guardInRange || hasAdaptiveGuardMesh(other);
+                    }
+                if (candidates.empty() && !guardInRange)
                     return {};
                 fan = getSwingFan(swing, shape, reverseSlash);
             }
@@ -1219,7 +1411,8 @@ namespace MWMechanics
                 if (world->castRenderingRay(contact,aimOrigin,aimOrigin+direction*length,true,false,{},true)
                     && !contact.mHitObject.isEmpty() && contact.mHitObject.getClass().isActor()
                     && !contact.mHitObject.getClass().getCreatureStats(contact.mHitObject).isDead()
-                    && isInMeleeReach(actor,contact.mHitObject,reach)
+                    && (isInMeleeReach(actor,contact.mHitObject,reach)
+                        || isAdaptiveGuardSurface(contact.mHitObject, contact.mHitPart))
                     && clearContact(contact.mHitPos,contact.mHitObject))
                 {
                     if(contactPart)*contactPart=contact.mHitPart;
@@ -1278,6 +1471,15 @@ namespace MWMechanics
             }
             if (!best.isEmpty())
             {
+                MWPhysics::RayCastingResult barrier;
+                if (world->castRenderingRay(barrier, aimOrigin, bestPoint, true, false, {}, true)
+                    && isAdaptiveGuardSurface(barrier.mHitObject, barrier.mHitPart)
+                    && clearContact(barrier.mHitPos, barrier.mHitObject))
+                {
+                    if (contactPart)
+                        *contactPart = barrier.mHitPart;
+                    return { barrier.mHitObject, barrier.mHitPos };
+                }
                 if(contactPart)*contactPart=bestPart;
                 return {best,bestPoint};
             }
@@ -1360,17 +1562,7 @@ namespace MWMechanics
             // AI still chooses its combat target by the existing rules, then
             // resolves a deterministic aimed torso contact instead of a random
             // blood position. The actual current mesh can intercept with a shield.
-            osg::Vec3f target = result.getRefData().getPosition().asVec3()
-                + osg::Vec3f(0,0,world->getHalfExtents(result,true).z()*1.5f);
-            const MWRender::Animation* animation = world->getAnimation(result);
-            if (const auto* npc = dynamic_cast<const MWRender::NpcAnimation*>(animation))
-                if (npc->getBodyAwarenessAnimation()) animation=npc->getBodyAwarenessAnimation();
-            if (animation)
-            {
-                const auto spine=animation->getBoneWorldMatrix("Bip01 Spine1");
-                const auto neck=animation->getBoneWorldMatrix("Bip01 Neck");
-                if(spine && neck)target=(spine->getTrans()+neck->getTrans())*.5f;
-            }
+            const osg::Vec3f target = meleeTorsoPosition(result);
             osg::Vec3f direction=target-aimOrigin;
             const float distance=direction.normalize();
             if(distance<.01f)return {};

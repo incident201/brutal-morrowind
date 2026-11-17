@@ -66,7 +66,8 @@ namespace MWRender
             osg::Quat orient = worldOrient * mRotate * worldOrientInverse * matrix.getRotate();
             matrix.setRotate(orient);
         }
-        matrix.setTrans(matrix.getTrans() + worldOrientInverse * mOffset);
+        const osg::Vec3f offset = mOffsetProvider ? mOffset + mOffsetProvider() : mOffset;
+        matrix.setTrans(matrix.getTrans() + worldOrientInverse * offset);
 
         node->setMatrix(matrix);
 

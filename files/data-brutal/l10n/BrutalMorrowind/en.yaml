@@ -100,4 +100,4 @@ sprintBinding: "Sprint button"
 
 sprintBindingDescription: "Click, then press a button; Esc clears."
 cameraMotionMovement: Camera motion when moving
-cameraMotionMovementDescription: "Dark Messiah's head bob and tilt while walking, running, sprinting and landing. Action camera motion stays."
+cameraMotionMovementDescription: "Dark Messiah's head tilt while strafing, backing up and landing. With the first-person body the view always rides its torso, so steps and crouching move it with the body. Action camera motion stays."

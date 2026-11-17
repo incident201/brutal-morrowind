@@ -592,7 +592,7 @@ namespace MWClass
         const std::pair<MWWorld::Ptr, osg::Vec3f> result = MWMechanics::getHitContact(ptr, dist, contactPart, swing);
         if (result.first.isEmpty()) // Didn't hit anything
             return true;
-        if (MWMechanics::isNpcMeleeOccluded(ptr, result.first, result.second))
+        if (Settings::game().mBrutalMeleeGeometry && MWMechanics::isNpcMeleeOccluded(ptr, result.first, result.second))
             return true;
 
         // Note that earlier we returned true in spite of an apparent failure to hit anything alive.
@@ -654,7 +654,9 @@ namespace MWClass
         if (otherstats.isDead()) // Can't hit dead actors
             return;
 
-        if (!MWMechanics::isInMeleeReach(ptr, victim, MWMechanics::getMeleeWeaponReach(ptr, weapon)))
+        const float reach = MWMechanics::getMeleeWeaponReach(ptr, weapon);
+        const bool bodyInReach = MWMechanics::isInMeleeReach(ptr, victim, reach);
+        if (!bodyInReach && !MWMechanics::hasReachableNpcGuardContact(ptr, victim, reach, hitPosition, contactPart))
             return;
 
         if (Settings::game().mMeleeContactAlwaysHits
@@ -702,6 +704,21 @@ namespace MWClass
         else
         {
             MWMechanics::getHandToHandDamage(ptr, victim, damage, healthdmg, attackStrength);
+        }
+
+        if (!bodyInReach)
+        {
+            // The extended blade/shield can receive an impact while its owner
+            // remains beyond body reach. Opening that guard cannot damage the
+            // distant body or apply on-strike enchantments through the item.
+            brutalBlocked = MWMechanics::blockMeleeAttack(
+                ptr, victim, weapon, damage, attackStrength, hitPosition, contactPart);
+            damage = 0.f;
+            brutalSuccessful = true;
+            MWBase::Environment::get().getLuaManager()->onHit(ptr, victim, weapon, MWWorld::Ptr(), type,
+                attackStrength, damage, healthdmg, hitPosition, true, MWMechanics::DamageSourceType::Melee,
+                brutalAttackId, brutalPowered, brutalBlocked, contactPart);
+            return;
         }
 
         MWBase::World* world = MWBase::Environment::get().getWorld();

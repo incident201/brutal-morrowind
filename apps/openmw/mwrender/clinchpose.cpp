@@ -139,6 +139,8 @@ namespace MWRender
 
     void NpcAnimation::restoreTransientPose()
     {
+        restoreNpcGuardPose();
+        restoreNpcTwoHandGuardPose();
         if (mClinchSourcePose.empty() && mSwordWallSourcePose.empty())
             return;
         for (const auto& [node, source] : mSwordWallSourcePose)

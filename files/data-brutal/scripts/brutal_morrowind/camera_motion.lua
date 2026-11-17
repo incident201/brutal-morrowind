@@ -1,6 +1,11 @@
 -- Dark Messiah's first-person camera motion (player_head_mvt, mm_headbobbing).
 -- Movement: the walk/run clip of the 8-way movement direction, the sprint clip and the
 -- landing tilt, blended like DM's single head entity (optional, on by default).
+-- DM adds these clips to an eye that already rides its body's head. Here the engine
+-- puts the eye on the visible torso, so its steps, crouch and sprint bob come from
+-- that body; the movement clips add only their head turns (strafe roll, backward
+-- pitch, landing). Their translation (up to 17 units sideways while sprinting, on a
+-- clock of its own) would swing the view across a torso that does not sway.
 -- Actions: the head clip DM plays with each arm action (kicks, parries, charged swings,
 -- rushes, draws...), found between the text keys of the playing arm group, so it
 -- follows re-timed groups. The clinch keeps its own curve in clinch.lua.
@@ -75,7 +80,7 @@ local function movementSample(dt)
             if w>0 then
                 phases[name]=(phases[name] or 0)+dt
                 local s=sample(clip,phases[name])
-                for k=1,6 do out[k]=out[k]+s[k]*w end
+                for k=1,3 do out[k]=out[k]+s[k]*w end
                 total=total+w
             else phases[name]=0 end
         end
@@ -159,6 +164,8 @@ return {
             if camera.getMode()~=camera.MODE.FirstPerson or I.UI.getMode() or types.Actor.isDead(self) then return end
             if settings.get('firstPersonAnimations')~='darkMessiah' then return end
             if I.BrutalClinch and I.BrutalClinch.status().active then return end
+            -- Paused frames: the omw camera does not reset its extras, so adding again would accumulate.
+            if dt<=0 then return end
             dt=math.min(dt,.1)
             local out=settings.get('cameraMotionMovement') and movementSample(dt) or {0,0,0,0,0,0}
             local action=actionSample()

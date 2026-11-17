@@ -173,6 +173,7 @@ namespace MWMechanics
         double mBrutalGuardBrokenUntil = 0.0;
         bool mBrutalGuardBreakingAttack = false; // Latched when the NPC chooses its next attack.
         int mBrutalGuardBlocks = 0;
+        int mBrutalAttackKind = 1; // Transient observed stroke: 0 chop, 1 slash, 2 thrust.
         // Kinetic player gait chosen by Lua (0 = Morrowind run stance, 1 walk, 2 run, 3 sprint).
         int mBrutalGait = 0;
 

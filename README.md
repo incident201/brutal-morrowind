@@ -12,9 +12,13 @@ and a prolonged player guard invites a charged counterattack. Block impacts drai
 both actors' stamina, with a greater cost for the attacker. Other living actors
 intercept NPC melee attacks without taking redirected damage.
 
-This branch uses **Dark Messiah import recipe 6** for separate weapon and shield
-guard animations. Its launcher asks to reimport older data. See `CHANGELOG.md`
-for the other unreleased changes.
+NPCs direct their weapon or shield towards the incoming attack while keeping
+their grip. The first-person camera follows the visible body during movement
+and crouching, including when holding a spell.
+
+This branch uses **Dark Messiah import recipe 7** for directional weapon and
+shield guards, including two-handed grips. Its launcher asks to reimport older
+data. See `CHANGELOG.md` for the other unreleased changes.
 
 ## Requirements
 

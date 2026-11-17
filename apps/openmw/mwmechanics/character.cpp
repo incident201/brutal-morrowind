@@ -51,6 +51,8 @@
 #include "../mwbase/windowmanager.hpp"
 #include "../mwbase/world.hpp"
 
+#include "../mwphysics/raycasting.hpp"
+
 #include "../mwworld/class.hpp"
 #include "../mwworld/datetimemanager.hpp"
 #include "../mwworld/esmstore.hpp"
@@ -1502,7 +1504,7 @@ namespace MWMechanics
             if (!Settings::game().mBrutalMeleeGeometry && weapclass != ESM::WeaponType::Thrown)
             {
                 mAttackContactPart = -1;
-                mAttackSuccess = mPtr.getClass().evaluateHit(mPtr, mAttackVictim, mAttackHitPos);
+                mAttackSuccess = mPtr.getClass().evaluateHit(mPtr, mAttackVictim, mAttackHitPos, &mAttackContactPart);
                 if (!mAttackSuccess) mAttackStrength = 0.f;
             }
             playSwishSound();
@@ -1515,13 +1517,19 @@ namespace MWMechanics
     {
         // Classic target/accuracy selection belongs to the windup's original prepareHit.
         // Authored multi-hit/fast events have no pending vanilla preparation and resolve here.
-        if (!Settings::game().mBrutalMeleeGeometry && mReadyToHit) return;
+        if (!Settings::game().mBrutalMeleeGeometry && mReadyToHit)
+        {
+            refreshMeleeGuardContact(mPtr, mAttackVictim, mAttackHitPos, mAttackContactPart);
+            return;
+        }
         // Resolve once at the actual hit key. prepareHit captures charge and
         // starts the swish, but cannot lock in an earlier aim/target/blood point.
         mAttackContactPart=-1;
         const std::string_view swing = mAttackType == "slash" || mAttackType == "chop" || mAttackType == "thrust"
             ? std::string_view(mAttackType) : std::string_view("any");
         mAttackSuccess=mPtr.getClass().evaluateHit(mPtr,mAttackVictim,mAttackHitPos,&mAttackContactPart,swing);
+        if (!Settings::game().mBrutalMeleeGeometry)
+            refreshMeleeGuardContact(mPtr, mAttackVictim, mAttackHitPos, mAttackContactPart);
         if(!mAttackSuccess)mAttackStrength=0.f;
     }
 
@@ -2465,6 +2473,8 @@ namespace MWMechanics
         }
 
         bool isPlayer = mPtr == MWMechanics::getPlayer();
+        if (isPlayer && mBrutalFast != BrutalFast::Attack)
+            cls.getCreatureStats(mPtr).mBrutalAttackKind = mAttackType == "chop" ? 0 : mAttackType == "thrust" ? 2 : 1;
         if (isPlayer && !cls.getCreatureStats(mPtr).mPowerStrike.token.empty())
         {
             auto& inventory = cls.getInventoryStore(mPtr);
@@ -3807,7 +3817,19 @@ namespace MWMechanics
 
     void CharacterController::startBrutalFastClip(const std::string& key, BrutalFast phase)
     {
-        const auto& stats = mPtr.getClass().getCreatureStats(mPtr);
+        auto& stats = mPtr.getClass().getCreatureStats(mPtr);
+        if (phase == BrutalFast::Attack)
+        {
+            // Announce the authored stroke before its impact, rather than
+            // leaving defenders to react to the preceding combo's hit key.
+            for (const auto& [name, kind] : std::array<std::pair<const char*, int>, 4>{ {
+                     { "chop", 0 }, { "slash", 1 }, { "slashright", 1 }, { "thrust", 2 } } })
+                if (brutalActiveKey(key + " " + name + " hit") || brutalActiveKey(key + " " + name + " hit left"))
+                {
+                    stats.mBrutalAttackKind = kind;
+                    break;
+                }
+        }
         const bool sliding = stats.mBrutalSlidePhase != 0;
         MWRender::Animation::AnimPriority priority(Priority_Weapon);
         priority[MWRender::BoneGroup_LowerBody] = Priority_WeaponLowerBody;
@@ -4203,6 +4225,7 @@ namespace MWMechanics
         const bool thrust = action.find(" thrust hit") != std::string_view::npos;
         const bool chop = action.find(" chop hit") != std::string_view::npos;
         mAttackType = thrust ? "thrust" : chop ? "chop" : "slash";
+        stats.mBrutalAttackKind = thrust ? 2 : chop ? 0 : 1;
         stats.mBrutalSlashRight = right;
         stats.mBrutalSlideAttack = false;
         mBrutalNeutralAttack = false;
@@ -4352,6 +4375,79 @@ namespace MWMechanics
         mBrutalStepPhase = to;
     }
 
+    void CharacterController::updateBrutalNpcGuardTarget(bool enabled, bool shield)
+    {
+        auto* npc = dynamic_cast<MWRender::NpcAnimation*>(mAnimation);
+        if (!npc)
+            return;
+        const auto disable = [&] { npc->setNpcGuardTarget(false, shield, {}, {}); };
+        const auto opponent = getPlayer();
+        if (!enabled || opponent.isEmpty() || !opponent.isInCell()
+            || opponent.getClass().getCreatureStats(opponent).isDead())
+        {
+            disable();
+            return;
+        }
+        auto world = MWBase::Environment::get().getWorld();
+        const auto [origin, aim] = getMeleeAim(opponent);
+        const auto base = mPtr.getRefData().getPosition().asVec3();
+        const auto half = world->getHalfExtents(mPtr, true);
+        osg::Vec3f outward = origin - base;
+        outward.z() = 0.f;
+        if (outward.normalize() < .001f)
+        {
+            disable();
+            return;
+        }
+        const osg::Vec3f facing = osg::Quat(mPtr.getRefData().getPosition().rot[2], osg::Vec3f(0, 0, -1))
+            * osg::Vec3f(0, 1, 0);
+        if (outward * facing < std::cos(osg::DegreesToRadians(70.f)))
+        {
+            disable();
+            return;
+        }
+        const osg::Vec3f right = outward ^ osg::Vec3f(0, 0, 1);
+        // The plane belongs to the torso, not the moving guard item. A raised
+        // shield cannot pull its own goal ever closer with every blocked hit.
+        const osg::Vec3f front = base + outward * (half.y() * .65f);
+        osg::Vec3f point = front + osg::Vec3f(0, 0, half.z() * 1.35f);
+        const float denominator = aim * outward;
+        if (denominator < -.05f)
+        {
+            const float along = ((front - origin) * outward) / denominator;
+            if (along > 0.f)
+                point = origin + aim * along;
+        }
+        const float lateral = std::clamp((point - front) * right, -half.x() * 1.15f, half.x() * 1.15f);
+        float top = base.z() + 2.f * half.z();
+        if (const auto head = mAnimation->getBoneWorldMatrix("Bip01 Head"))
+            top = std::max(static_cast<float>(head->getTrans().z()) + 13.f, base.z() + half.z() * 1.65f);
+        point = front + right * lateral
+            + osg::Vec3f(0, 0, std::clamp(point.z(), base.z() + 6.f, top) - base.z());
+
+        constexpr int mask = MWPhysics::CollisionType_World | MWPhysics::CollisionType_Door
+            | MWPhysics::CollisionType_HeightMap | MWPhysics::CollisionType_Dynamic | MWPhysics::CollisionType_Actor;
+        const auto cover = world->getRayCasting()->castRay(origin, point, { opponent, mPtr }, {}, mask);
+        if (cover.mHit && (cover.mHitPos - origin).length() + .5f < (point - origin).length())
+        {
+            disable();
+            return;
+        }
+        osg::Vec3f incoming = point - origin;
+        if (incoming.normalize() < .001f)
+        {
+            disable();
+            return;
+        }
+        osg::Vec3f aimRight = aim ^ osg::Vec3f(0, 0, 1);
+        if (aimRight.normalize() < .001f)
+            aimRight = right;
+        const osg::Vec3f aimUp = aimRight ^ aim;
+        const int kind = opponent.getClass().getCreatureStats(opponent).mBrutalAttackKind;
+        const osg::Vec3f stroke = kind == 0 ? -aimUp : kind == 1 ? aimRight : osg::Vec3f();
+        npc->setNpcGuardTarget(true, shield, point, incoming, stroke);
+    }
+
     void CharacterController::updateBrutalNpcGuard()
     {
         auto& stats = mPtr.getClass().getCreatureStats(mPtr);
@@ -4359,7 +4455,10 @@ namespace MWMechanics
         // The stock shield reaction also uses "shield". Without an adaptive
         // request or owned guard, leave that layer and the vanilla hit state alone.
         if (!stats.mBrutalNpcGuardRequested && !wasRaised && mBrutalNpcGuardGroup.empty())
+        {
+            updateBrutalNpcGuardTarget(false, false);
             return;
+        }
         const double now = brutalSimulationTime();
         const bool minorRecovery = isUpperBodyRecovery();
         bool hasShield = false;
@@ -4370,7 +4469,12 @@ namespace MWMechanics
             hasShield = shield != inv.end() && shield->getType() == ESM::Armor::sRecordId
                 && updateCarriedLeftVisible(mWeaponType);
         }
-        const std::string group = hasShield ? "shield" : "brutal_weapon_guard";
+        const auto* guardWeapon = getWeaponType(mWeaponType);
+        const bool twoHandedGuard = guardWeapon->mWeaponClass == ESM::WeaponType::Melee
+            && (guardWeapon->mFlags & ESM::WeaponType::TwoHanded);
+        const std::string group = hasShield ? "shield" : twoHandedGuard
+            ? (guardWeapon->mShortGroup == "2w" ? "brutal_weapon_guard_2w" : "brutal_weapon_guard_2c")
+            : "brutal_weapon_guard";
         const bool hasGuardPose = mAnimation->hasAnimation(group)
             && mAnimation->getTextKeyTime(group + ": brutal guard hold") >= 0.f;
         const bool able = mPtr.getClass().isNpc() && Settings::game().mDarkMessiahNpcCombat
@@ -4450,6 +4554,7 @@ namespace MWMechanics
         }
         stats.mBrutalBlockImpact = false;
         stats.mBrutalParryResult = BrutalParry_None;
+        updateBrutalNpcGuardTarget(stats.mBrutalBlockRaised && stats.mBrutalNpcGuardRequested, hasShield);
     }
 
     void CharacterController::updateBrutalShieldBlock()

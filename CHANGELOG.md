@@ -4,7 +4,9 @@ Brutal Morrowind (unreleased)
     Combat: NPCs brace against repeated fast attacks and prefer a charged guard breaker against a prolonged player block.
     Combat: Guard impacts drain both actors' stamina, with a greater cost for the attacker; charged blows and kicks open defence.
     Combat: Living actors intercept NPC and creature melee attacks without redirecting damage into bystanders.
-    Animations: Separate original Dark Messiah weapon and shield guard poses; import recipe 6 requires reimporting after an update.
+    Combat: NPC weapon and shield guards follow the incoming aim and require contact with the equipped item.
+    Animations: Preserve both grips during two-handed guards; import recipe 7 requires reimporting after an update.
+    Camera: Keep first-person movement and crouching attached to the visible body, including with a readied spell.
     Combat: Rebalance adrenaline, add obstacle trips and configurable weapon drops, and simplify ragdoll settings.
     Animations: Restore beast-race locomotion, improve clinches on uneven ground and import Dark Messiah camera motion.
     Ragdolls: Fix delayed corpse cuts and impulses after looting, and support open armor contours in waist cuts.

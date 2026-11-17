@@ -29,7 +29,7 @@ ANIMATION = ROOT / 'scripts/animation'
 CREATURES = ROOT / 'scripts/creatures'
 EFFECTS = ROOT / 'scripts/effects'
 CALIBRATION = HERE / 'calibration'
-RECIPE_VERSION = 6  # Misc::DarkMessiahData::sRecipe in the engine must match.
+RECIPE_VERSION = 7  # Misc::DarkMessiahData::sRecipe in the engine must match.
 # Conversion steps per import, for progress reporting.
 TOTAL_STEPS = 37
 KEYFRAMES = ('.kf', '.yaml')
@@ -185,7 +185,8 @@ class Importer:
         self.run('NPC combat', ANIMATION / 'import_npc.py',
                  '--vpk-root', self.vpks, '--work-dir', self.cache,
                  '--skeleton', self.meshes / 'xbase_anim.nif',
-                 '--grip-animation', self.meshes / 'xbase_anim.kf', '--output', self.stage('npc'))
+                 '--grip-animation', self.meshes / 'xbase_anim.kf',
+                 '--native-guard-animation', self.meshes / 'xbase_anim.kf', '--output', self.stage('npc'))
 
     def sword_arms(self):
         """Sword and shield sets in their base layout."""

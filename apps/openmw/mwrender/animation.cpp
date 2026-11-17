@@ -1846,7 +1846,18 @@ namespace MWRender
         {
             // Preserve an explicitly enabled global body transition policy. With
             // no base rule the blend controller already defaults to duration zero.
-            return primaryCrouchBlendRules(base, false);
+            // The first-person eye rides this torso, so a gait change (or a crouch blend
+            // interrupted by one) must not snap it: locomotion changes fade like the crouch.
+            osg::ref_ptr<const SceneUtil::AnimBlendRules> crouch = primaryCrouchBlendRules(base, false);
+            using Rule = SceneUtil::AnimBlendRules::BlendRule;
+            std::vector<Rule> gait;
+            for (const auto* from : { "idle*", "walk*", "run*", "brutal_sprint*" })
+                for (const auto* to : { "idle*", "walk*", "run*", "brutal_sprint*" })
+                    gait.push_back({ from, "", to, "", .22f, "sineInOut", false });
+            osg::ref_ptr<SceneUtil::AnimBlendRules> rules
+                = new SceneUtil::AnimBlendRules(*crouch, osg::CopyOp::SHALLOW_COPY);
+            rules->addOverrideRules(SceneUtil::AnimBlendRules(gait));
+            return rules;
         }
 
     }

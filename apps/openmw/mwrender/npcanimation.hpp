@@ -11,6 +11,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <osg/observer_ptr>
 
 namespace ESM
@@ -61,6 +62,79 @@ namespace MWRender
             std::string key, kind, mount;
             osg::Vec3f position, normal, previousBase, previousTip, bladeBase, bladeTip, sweepFrom, sweepTo;
             osg::Vec3f currentBase, currentTip, currentContactPoint;
+        };
+
+        struct NpcGuardMeshTrace
+        {
+            unsigned int frame = 0;
+            bool hit = false;
+            float gap = 0.f;
+            osg::Vec3f point;
+        };
+
+        struct NpcGuardRigAudit
+        {
+            unsigned frame = 0;
+            std::map<std::string, osg::Matrixf> matrices;
+            std::map<std::string, osg::Vec3f> vectors;
+            std::map<std::string, float> scalars;
+        };
+
+        struct NpcGuardGeometry
+        {
+            bool enabled = false, active = false, shield = false, fitted = false;
+            bool twoHanded = false, leftNatural = false;
+            bool clamped = false, meshAvailable = false;
+            bool jointLimited = false;
+            bool releasing = false;
+            bool recovering = false;
+            bool cacheUsed = false, cacheNegative = false, fullSearch = false;
+            bool sourceGroupMatches = false, sourceBlendActive = false, sourceHoldReached = false;
+            bool referenceReady = false;
+            bool goalNatural = false, goalWorking = false, goalFromSafe = false, pathAccepted = false;
+            unsigned int frame = 0;
+            unsigned int searchCandidates = 0;
+            float weight = 0.f, contactError = 0.f, reachClamp = 0.f;
+            float shoulderError = 0.f, gripError = 0.f;
+            float sourceUpperLength = 0.f, sourceForeLength = 0.f;
+            float finalUpperLength = 0.f, finalForeLength = 0.f;
+            float wristSwingDegrees = 0.f, wristTwistDegrees = 0.f;
+            float palmFlexDegrees = 0.f, palmSideDegrees = 0.f;
+            float forearmTwistDegrees = 0.f, upperSwingDegrees = 0.f;
+            float upperTwistDegrees = 0.f, signedElbowFlexDegrees = 0.f, elbowHingeErrorDegrees = 0.f;
+            float totalPronationDegrees = 0.f, releaseTimeLeft = 0.f, overlayCorrectionDegrees = 0.f;
+            float goalContactError = 0.f, goalTargetError = 0.f, goalReachClamp = 0.f, pathFraction = 0.f;
+            float goalWristSwingDegrees = 0.f, goalWristTwistDegrees = 0.f;
+            float goalPalmFlexDegrees = 0.f, goalPalmSideDegrees = 0.f;
+            float goalForearmTwistDegrees = 0.f, goalUpperSwingDegrees = 0.f, goalUpperTwistDegrees = 0.f;
+            float goalSignedElbowFlexDegrees = 0.f, goalElbowHingeErrorDegrees = 0.f;
+            float goalBodyClearance = 0.f, goalInwardError = 0.f, goalStanceMargin = 0.f;
+            float sourceTime = 0.f, sourceHoldTime = 0.f;
+            float sourceUpperLengthUnscaled = 0.f, sourceForeLengthUnscaled = 0.f;
+            float finalUpperLengthUnscaled = 0.f, finalForeLengthUnscaled = 0.f;
+            float maxLocalOrthoError = 0.f, maxLocalTranslationError = 0.f;
+            float bodyClearance = 0.f;
+            float elbowFlexDegrees = 0.f;
+            float upperLocalOrthoError = 0.f, foreLocalOrthoError = 0.f, handLocalOrthoError = 0.f;
+            float shieldCenterAbovePelvis = 0.f, shieldForwardDistance = 0.f, shieldTiltDegrees = 0.f;
+            float leftGripError = 0.f, leftShoulderError = 0.f;
+            float leftSourceUpperLengthUnscaled = 0.f, leftSourceForeLengthUnscaled = 0.f;
+            float leftFinalUpperLengthUnscaled = 0.f, leftFinalForeLengthUnscaled = 0.f;
+            float leftMaxLocalOrthoError = 0.f, leftMaxLocalTranslationError = 0.f;
+            float leftWristSwingDegrees = 0.f, leftWristTwistDegrees = 0.f;
+            float leftPalmFlexDegrees = 0.f, leftPalmSideDegrees = 0.f;
+            float leftForearmTwistDegrees = 0.f, leftUpperSwingDegrees = 0.f, leftUpperTwistDegrees = 0.f;
+            float leftSignedElbowFlexDegrees = 0.f, leftElbowHingeErrorDegrees = 0.f, leftBodyClearance = 0.f;
+            osg::Vec3f requestedTarget, interceptPoint, sourceContact, itemContact;
+            osg::Vec3f handTarget, sourceWrist, wrist, shoulder, elbow;
+            osg::Vec3f itemAxis, requestedAxis, materialPoint;
+            osg::Vec3f palmForward, palmLateral, palmNormal;
+            osg::Vec3f skeletonShoulder, skeletonElbow, skeletonWrist;
+            osg::Vec3f shieldCenter;
+            osg::Vec3f goalWrist, goalContact;
+            osg::Vec3f guardPelvis, guardTorso, shieldBottom, shieldTop, shieldBackPoint, shieldFrontPoint;
+            osg::Vec3f renderActorOrigin, renderActorRight, renderActorForward, renderActorUp;
+            osg::Vec3f leftSourceWrist, leftShoulder, leftElbow, leftWrist;
         };
 
         // Read-only controller snapshot for comparing real input and rendered
@@ -150,6 +224,29 @@ namespace MWRender
 
         // Source matrices are restored before every update and blend capture. The
         // fit is applied only after the whole scene has evaluated its current pose.
+        struct NpcGuardPose;
+        std::shared_ptr<NpcGuardPose> mNpcGuardPose;
+        NpcGuardGeometry mNpcGuardGeometry;
+        void restoreNpcGuardPose();
+        void fitNpcGuardPose(osg::NodeVisitor& visitor);
+        void updateNpcGuardPose(float duration);
+        void clearNpcGuardPose();
+        struct NpcTwoHandGuardPose;
+        std::shared_ptr<NpcTwoHandGuardPose> mNpcTwoHandGuardPose;
+        bool mNpcGuardRigAuditRequested = false;
+        std::optional<NpcGuardRigAudit> mNpcGuardRigAudit;
+        bool usesNpcTwoHandGuard() const;
+        void setNpcTwoHandGuardTarget(bool enabled, const osg::Vec3f& point, const osg::Vec3f& direction);
+        void restoreNpcTwoHandGuardPose();
+        void updateNpcTwoHandGuardPose(float duration);
+        void fitNpcTwoHandGuardPose(osg::NodeVisitor& visitor);
+        void clearNpcTwoHandGuardPose();
+        std::optional<NpcGuardMeshTrace> traceNpcTwoHandGuardMeshForAudit(
+            const osg::Vec3f& origin, const osg::Vec3f& end, bool combat = false) const;
+        bool hasNpcTwoHandGuardMeshForCombat() const;
+        std::optional<NpcGuardMeshTrace> traceNpcGuardMeshSnapshot(
+            const osg::Vec3f& origin, const osg::Vec3f& end, bool combat) const;
+
         std::vector<std::pair<osg::observer_ptr<osg::MatrixTransform>, osg::Matrixf>> mClinchSourcePose;
         osg::observer_ptr<osg::Node> mClinchBladeNode;
         osg::Vec3f mClinchBladeRange;
@@ -220,6 +317,24 @@ namespace MWRender
         void updateBodyAwareness();
         void syncBodyAwareness(float duration);
         void alignBodyAwareness(float duration);
+        std::string bodyAwarenessGroup(const std::string& group, bool sneaking) const;
+
+        // The first-person eye rides on the visible torso: the body rig's neck
+        // displacement from its settled standing pose, in object root space.
+        osg::Vec3f mBodyEyeReference;
+        osg::Vec3f mBodyEyeHeld;
+        osg::Vec3f mBodyEyeOutput;
+        osg::Vec3f mBodyEyeBlendFrom;
+        float mBodyEyeStandingTime = 0.f;
+        float mBodyEyeBlendTime = -1.f;
+        float mBodyEyeWeight = 1.f;
+        bool mBodyEyeReferenceValid = false;
+        bool mBodyEyePassive = true;
+        bool mBodyEyeLive = false;
+        void resetBodyEyeFollow();
+        void updateBodyEyeFollow(float duration);
+        std::optional<osg::Vec3f> bodyNeckLocal() const;
+        osg::Vec3f liveBodyEyeOffset() const;
 
         bool mAccurateAiming;
         enum BrutalViewmodel
@@ -309,6 +424,24 @@ namespace MWRender
         void fitSwordClinchPose(osg::NodeVisitor& visitor);
         bool canFitSwordClinchPose(NpcAnimation& opponent);
         const SwordClinchGeometry& getSwordClinchGeometryForAudit() const { return mSwordClinchGeometry; }
+        // worldPoint is the threatened body point; incomingDirection points
+        // from the attacker towards this NPC. Mesh contact is fitted in front
+        // of that point after the authored pose has been evaluated.
+        void setNpcGuardTarget(bool enabled, bool shield, const osg::Vec3f& worldPoint,
+            const osg::Vec3f& incomingDirection, const osg::Vec3f& strokeDirection = {});
+        const NpcGuardGeometry& getNpcGuardGeometryForAudit() const { return mNpcGuardGeometry; }
+        std::optional<NpcGuardMeshTrace> traceNpcGuardMeshForAudit(
+            const osg::Vec3f& origin, const osg::Vec3f& end) const;
+        // Combat keeps the last actual item-to-actor pose and reprojects it
+        // through the actor's current transform. The audit uses its exact frame.
+        std::optional<NpcGuardMeshTrace> traceNpcGuardMeshForCombat(
+            const osg::Vec3f& origin, const osg::Vec3f& end) const;
+        bool hasNpcGuardMeshForCombat() const;
+        // Explicit one-shot capture of the next ready post-update paired solve.
+        // No diagnostic maps are allocated during ordinary guard updates.
+        void requestNpcGuardRigAudit();
+        std::optional<NpcGuardRigAudit> getNpcGuardRigForAudit() const;
+
         void configureSwordWallSweep(std::uint64_t swing, std::string_view group, std::string_view key);
         bool sampleSwordWallContact(float duration, const osg::FrameStamp& frameStamp);
         bool consumeSwordWallContact(std::uint64_t swing, std::string& key);
@@ -360,6 +493,13 @@ namespace MWRender
         unsigned int getBodyAwarenessVisibilityMask() const
         { return mBodyAwarenessRoot ? mBodyAwarenessRoot->getNodeMask() : 0u; }
         bool isBodyAwarenessHiddenForClinch() const { return mBodyAwarenessHiddenForClinch; }
+        /// True when the eye follows the visible torso instead of a fixed sneak height.
+        bool hasBodyEyeFollow() const;
+        /// The torso displacement applied to the eye and arms (object root space).
+        osg::Vec3f getBodyEyeFollow() const { return hasBodyEyeFollow() ? mBodyEyeOutput : osg::Vec3f(); }
+        /// Share of the torso displacement used by the eye; a Brutal slide lowers the eye on its own.
+        void setBodyEyeFollowWeight(float weight) { mBodyEyeWeight = weight; }
+        std::optional<osg::Vec3f> getBodyNeckPositionForAudit() const;
         void setFirstPersonGeometryVisibleForAudit(bool visible);
 
         /// 1: the first person meshes follow the camera's rotation completely

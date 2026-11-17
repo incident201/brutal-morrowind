@@ -314,6 +314,76 @@ class GuardImporter(Importer):
         self.write(out,'weapononehand',segments,marks)
 
 
+def write_native_paired_guards(skeleton, animation, output):
+    """Private/reproducible paired guard samples from the user's third-person KF.
+
+    These are new named upper-body groups, never aliases of live idle/attack
+    states. Both hands, fingers and the native item mount are sampled together.
+    """
+    sys.path.insert(0, str(ROOT/'third_party/io_scene_mw/lib'))
+    from es3 import nif
+    source=nif.NiStream();source.load(animation)
+    bind=nif.NiStream();bind.load(skeleton)
+    nodes={n.name:n for n in bind.objects_of_type(nif.NiNode)}
+    parents={c.name:n.name for n in nodes.values() for c in n.children if isinstance(c,nif.NiNode)}
+    names=[e.string_data for e in source.root.extra_datas if isinstance(e,nif.NiStringExtraData)]
+    controllers=dict(zip(names,source.root.controllers))
+    marks={line.strip().lower():float(t) for t,label in source.root.extra_data.keys
+           for line in str(label).replace('\r','').split('\n') if line.strip()}
+    out=output/'Animations/brutal_npc';out.mkdir(parents=True,exist_ok=True)
+    selected=[name for name in nodes if name.startswith(('Bip01 L Clavicle','Bip01 R Clavicle',
+        'Bip01 L UpperArm','Bip01 R UpperArm','Bip01 L Forearm','Bip01 R Forearm',
+        'Bip01 L Hand','Bip01 R Hand','Bip01 L Finger','Bip01 R Finger'))
+        or name in ('Bip01 Spine','Bip01 Spine1','Bip01 Spine2','Bip01 Neck','Bip01 Head','Weapon Bone')]
+    groups={};outputs={}
+    for family,native in (('2c','weapontwohand'),('2w','weapontwowide')):
+        key=native+': slash min attack'
+        if key not in marks:
+            raise ValueError('Third-person native paired guard requires '+key+' in '+str(animation))
+        at=marks[key];duration=.4;group='brutal_weapon_guard_'+family
+        stream=nif.NiStream();stream.root=nif.NiSequenceStreamHelper(extra_data=nif.NiTextKeyExtraData(
+            keys=np.array([(0.,group+': start'),(.1,group+': brutal guard hold'),
+                           (duration,group+': stop')],dtype='<f,O')))
+        local={name:to4(node.rotation,node.translation) for name,node in nodes.items()}
+        for name in selected:
+            node=nodes[name];q=matrix_quat(node.rotation);p=np.asarray(node.translation,float)
+            controller=controllers.get(name)
+            if controller is not None:
+                rows=controller.data.rotations.keys
+                if len(rows):
+                    lo=max(0,min(int(np.searchsorted(rows[:,0],at,side='right'))-1,len(rows)-1))
+                    hi=min(lo+1,len(rows)-1)
+                    fraction=float((at-rows[lo,0])/(rows[hi,0]-rows[lo,0])) if hi!=lo else 0.
+                    q=sample_quaternion(rows[[lo,hi],1:5],fraction)
+                rows=controller.data.translations.keys
+                if len(rows):p=np.array([np.interp(at,rows[:,0],rows[:,axis]) for axis in (1,2,3)])
+            local[name]=to4(quat_matrix(q[[1,2,3,0]]),p)
+        from native_paired_guard import naturalize_paired_guard
+        local,adaptation=naturalize_paired_guard(nodes,parents,local)
+        for name in selected:
+            q=matrix_quat(local[name][:3,:3]);p=local[name][:3,3]
+            data=nif.NiKeyframeData(rotations=nif.NiRotData(keys=np.array([[0.,*q],[duration,*q]],np.float32)),
+                translations=nif.NiPosData(keys=np.array([[0.,*p],[duration,*p]],np.float32)))
+            stream.root.extra_datas.append(nif.NiStringExtraData(string_data=name))
+            stream.root.controllers.append(nif.NiKeyframeController(data=data,start_time=0.,stop_time=duration,flags=12))
+        path=out/(group+'.kf');stream.save(path)
+        path.with_suffix('.yaml').write_text("blending_rules:\n  - from: '*'\n    to: '*'\n    easing: linear\n    duration: 0.2\n  - from: ''\n    to: '*'\n    easing: linear\n    duration: 0\n")
+        check=nif.NiStream();check.load(path)
+        assert len(list(check.root.controllers))==len(selected)
+        for controller in check.root.controllers:
+            assert np.isfinite(controller.data.rotations.keys).all()
+        groups[group]={'source_kind':'native_paired_guard','source':str(animation),'sample_key':key,'sample_time':at,
+            'hold_time':.1,'duration':duration,'bones':len(selected),'preserves':'both native hands/fingers/item mount',
+            'elbow_adaptation':adaptation}
+        for file in (path,path.with_suffix('.yaml')):outputs[file.name]=hashlib.sha256(file.read_bytes()).hexdigest()
+        print(f'{group}: native {key} @{at:.6f}, {len(selected)} paired bones')
+    result={'converter':'import_npc.py --native-guard-animation','derived_from_game_files':True,
+        'inputs':{str(path):hashlib.sha256(path.read_bytes()).hexdigest() for path in (skeleton,animation)},
+        'groups':groups,'outputs':outputs}
+    (output/'npc-paired-guard-import.json').write_text(json.dumps(result,indent=2)+'\n')
+    return result
+
+
 def main():
     ap=argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--vpk-root',type=Path,required=True)
@@ -322,7 +392,14 @@ def main():
     ap.add_argument('--grip-animation',type=Path,required=True)
     ap.add_argument('--output',type=Path,required=True)
     ap.add_argument('--clinch-only',action='store_true',help='Emit only the three additive sword-clinch clips')
+    ap.add_argument('--native-guard-animation',type=Path,
+                    help='User-owned vanilla THIRD-PERSON xbase_anim.kf for named close/wide paired guards')
+    ap.add_argument('--paired-guards-only',action='store_true',help='Emit only native named close/wide paired guards')
     a=ap.parse_args();a.work_dir.mkdir(parents=True,exist_ok=True)
+    if a.paired_guards_only:
+        if a.native_guard_animation is None:ap.error('--paired-guards-only requires --native-guard-animation')
+        write_native_paired_guards(a.skeleton,a.native_guard_animation,a.output)
+        return
     out=a.output/'Animations/brutal_npc';out.mkdir(parents=True,exist_ok=True)
     obsolete=[p.name for p in out.glob('*.kf') if p.stem.startswith(('sneak','jump')) or p.stem=='idlesneak']
     if obsolete:
@@ -354,12 +431,12 @@ def main():
     # middle of the later recoil. The normal stock block keys stay unchanged.
     i.write(out,'shield',[(0,t,p)],[(0,'start'),(0,'block start'),
             (float(t[-1])*.2,'brutal guard hold'),(float(t[-1]),'block stop'),(float(t[-1]),'stop')])
-    # Weapon-only defence uses the original guard's frontal sword parry.
+    # Weapon-only defence uses the original guard's hanging sword parry.
     # Keep the whole source clip and mark the authored braced pose explicitly,
     # so the runtime does not guess a sample inside the shield animation.
-    t,p=i.segment(i.clip('guard','anm_parry_C'))
+    t,p=i.segment(i.clip('guard','anm_parry_A'))
     i.write(out,'brutal_weapon_guard',[(0,t,p)],[(0,'start'),
-            (float(t[-1])*.35,'brutal guard hold'),(float(t[-1]),'stop')])
+            (float(t[-1])*.4,'brutal guard hold'),(float(t[-1]),'stop')])
     for group,clip,duration in [('brutal_hit','@Hit_Front_medium',5/6),('hit1','anm_Hit_Body_Front_small',None),
                                 ('hit2','anm_Hit_Body_left_small',None),('hit3','anm_Hit_Body_right_small',None),
                                 ('hit4','anm_Hit_Body_back_small',None),('hit5','anm_Hit_head_Front_small',None)]:
@@ -387,12 +464,17 @@ def main():
                        ('brutal_parrybroken','@Parry_Broken')]:
         t,p=i.segment(i.clip('guard',clip))
         i.write(out,group,[(0,t,p)],[(0,'start'),(float(t[-1]),'stop')])
+    if a.native_guard_animation is not None:
+        paired=write_native_paired_guards(a.skeleton,a.native_guard_animation,a.output)
+        i.group_records.update(paired['groups'])
+    native_guard_sources=[a.native_guard_animation] if a.native_guard_animation is not None else []
     (a.output/'npc-import.json').write_text(json.dumps({'converter':'import_npc.py','clips':i.provenance,
         'source_sha256':hashlib.sha256((a.work_dir/'npc_guard_combat_animations.mdl').read_bytes()).hexdigest(),
         'outputs':{path.name:hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(out.iterdir()) if path.suffix in ('.kf','.yaml')},
-        'inputs':{str(path):hashlib.sha256(path.read_bytes()).hexdigest() for path in (a.skeleton,a.grip_animation,i.attachment_model)},
-        'coverage':{'converted':['idle','one-handed sword','shield block','frontal weapon guard','small upper-body hit reactions','heavy full-body kick reaction','walk/run in four directions'],
-                    'fallback':['two-handed melee','hand-to-hand','bow','crossbow','thrown weapons','spell casting','sneak','jump','death/get-up']},
+        'inputs':{str(path):hashlib.sha256(path.read_bytes()).hexdigest() for path in (a.skeleton,a.grip_animation,i.attachment_model,*native_guard_sources)},
+        'coverage':{'converted':['idle','one-handed sword','shield block','hanging weapon guard','small upper-body hit reactions','heavy full-body kick reaction','walk/run in four directions']
+                    +(['native paired close/wide weapon guards'] if native_guard_sources else []),
+                    'fallback':['two-handed melee attacks and locomotion','hand-to-hand','bow','crossbow','thrown weapons','spell casting','sneak','jump','death/get-up']},
         'groups':i.group_records,'arm_scales':i.arm_scale,
         'attachments':{name:{'parent':parent,'matrix':matrix.tolist()} for name,(parent,matrix) in i.attachments.items() if name in ('RightHand','LeftShield')},
         'hand_maps':{side:m.tolist() for side,m in i.hand_map.items()},

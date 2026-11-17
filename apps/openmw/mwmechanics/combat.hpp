@@ -16,6 +16,7 @@ namespace MWWorld
 
 namespace MWMechanics
 {
+    inline constexpr float sNpcGuardContactMargin = 4.f;
 
     bool applyOnStrikeEnchantment(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, const MWWorld::Ptr& object,
         const osg::Vec3f& hitPosition, const bool fromProjectile = false);
@@ -80,6 +81,18 @@ namespace MWMechanics
 
     // Current gameplay eye and actor-directed aim, independent of observer cameras.
     std::pair<osg::Vec3f, osg::Vec3f> getMeleeAim(const MWWorld::Ptr& actor);
+
+    osg::Vec3f getMeleeTorsoPosition(const MWWorld::Ptr& actor);
+
+    // Vanilla targeting keeps its selected victim and accuracy roll. At the hit
+    // key, only refresh physical guard contact and intervening actor cover.
+    void refreshMeleeGuardContact(const MWWorld::Ptr& actor, MWWorld::Ptr& victim,
+        osg::Vec3f& hitPosition, int& contactPart);
+
+    // A protruding guard item can be reached before its owner's body. This does
+    // not extend the distance at which the owner can receive body damage.
+    bool hasReachableNpcGuardContact(const MWWorld::Ptr& actor, const MWWorld::Ptr& target, float reach,
+        const osg::Vec3f& hitPosition, int contactPart);
 
     // Directed surface contact for the player; AI retains its selected combat target.
     // A player melee swing ("slash", "chop", "thrust" or "any") sweeps a fan of rays

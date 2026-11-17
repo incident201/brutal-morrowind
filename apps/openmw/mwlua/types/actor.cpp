@@ -17,6 +17,7 @@
 #include "apps/openmw/mwbase/world.hpp"
 #include "apps/openmw/mwmechanics/actorutil.hpp"
 #include "apps/openmw/mwmechanics/brutaloptions.hpp"
+#include "apps/openmw/mwmechanics/combat.hpp"
 #include "apps/openmw/mwmechanics/weapontype.hpp"
 #include "apps/openmw/mwmechanics/creaturestats.hpp"
 #include "apps/openmw/mwmechanics/drawstate.hpp"
@@ -1094,6 +1095,10 @@ namespace MWLua
                     state["bodyPelvisPosition"] = osg::Vec3f(pelvis->getTrans());
                 if (const auto spine = body->getBoneWorldMatrix("Bip01 Spine2"))
                     state["bodySpinePosition"] = osg::Vec3f(spine->getTrans());
+                if (const auto neck = animation->getBodyNeckPositionForAudit())
+                    state["bodyNeckPosition"] = *neck;
+                state["bodyEyeFollowActive"] = animation->hasBodyEyeFollow();
+                state["bodyEyeFollow"] = animation->getBodyEyeFollow();
                 for (const auto& [key, bone] : { std::pair{ "leftHip", "Bip01 L Thigh" },
                          std::pair{ "rightHip", "Bip01 R Thigh" }, std::pair{ "leftKnee", "Bip01 L Calf" },
                          std::pair{ "rightKnee", "Bip01 R Calf" } })
@@ -1145,6 +1150,214 @@ namespace MWLua
             result["guardBrokenUntil"] = stats.mBrutalGuardBrokenUntil;
             result["guardBreakingAttack"] = stats.mBrutalGuardBreakingAttack;
             result["guardBlocks"] = stats.mBrutalGuardBlocks;
+            result["attackKind"] = stats.mBrutalAttackKind;
+            return result;
+        };
+        actor["_getNpcGuardGeometryForAudit"] = [lua = context.mLua](const Object& object) {
+            sol::table result(lua->unsafeState(), sol::create);
+            const auto* npc = dynamic_cast<const MWRender::NpcAnimation*>(
+                MWBase::Environment::get().getWorld()->getAnimation(object.ptr()));
+            if (!npc)
+                return result;
+            const auto& a = npc->getNpcGuardGeometryForAudit();
+            result["enabled"] = a.enabled;
+            result["active"] = a.active;
+            result["shield"] = a.shield;
+            result["fitted"] = a.fitted;
+            result["clamped"] = a.clamped;
+            result["jointLimited"] = a.jointLimited;
+            result["releasing"] = a.releasing;
+            result["recovering"] = a.recovering;
+            result["cacheUsed"] = a.cacheUsed;
+            result["cacheNegative"] = a.cacheNegative;
+            result["fullSearch"] = a.fullSearch;
+            result["meshAvailable"] = a.meshAvailable;
+            result["sourceGroupMatches"] = a.sourceGroupMatches;
+            result["sourceBlendActive"] = a.sourceBlendActive;
+            result["sourceHoldReached"] = a.sourceHoldReached;
+            result["referenceReady"] = a.referenceReady;
+            result["sourceTime"] = a.sourceTime;
+            result["sourceHoldTime"] = a.sourceHoldTime;
+            result["searchCandidates"] = a.searchCandidates;
+            result["frame"] = a.frame;
+            result["weight"] = a.weight;
+            result["contactError"] = a.contactError;
+            result["reachClamp"] = a.reachClamp;
+            result["shoulderError"] = a.shoulderError;
+            result["gripError"] = a.gripError;
+            result["wristSwingDegrees"] = a.wristSwingDegrees;
+            result["wristTwistDegrees"] = a.wristTwistDegrees;
+            result["palmFlexDegrees"] = a.palmFlexDegrees;
+            result["palmSideDegrees"] = a.palmSideDegrees;
+            result["forearmTwistDegrees"] = a.forearmTwistDegrees;
+            result["upperSwingDegrees"] = a.upperSwingDegrees;
+            result["upperTwistDegrees"] = a.upperTwistDegrees;
+            result["signedElbowFlexDegrees"] = a.signedElbowFlexDegrees;
+            result["elbowHingeErrorDegrees"] = a.elbowHingeErrorDegrees;
+            result["totalPronationDegrees"] = a.totalPronationDegrees;
+            result["releaseTimeLeft"] = a.releaseTimeLeft;
+            result["overlayCorrectionDegrees"] = a.overlayCorrectionDegrees;
+            result["goalNatural"] = a.goalNatural;
+            result["goalWorking"] = a.goalWorking;
+            result["goalFromSafe"] = a.goalFromSafe;
+            result["pathAccepted"] = a.pathAccepted;
+            result["goalContactError"] = a.goalContactError;
+            result["goalTargetError"] = a.goalTargetError;
+            result["goalReachClamp"] = a.goalReachClamp;
+            result["pathFraction"] = a.pathFraction;
+            result["goalWristSwingDegrees"] = a.goalWristSwingDegrees;
+            result["goalWristTwistDegrees"] = a.goalWristTwistDegrees;
+            result["goalPalmFlexDegrees"] = a.goalPalmFlexDegrees;
+            result["goalPalmSideDegrees"] = a.goalPalmSideDegrees;
+            result["goalForearmTwistDegrees"] = a.goalForearmTwistDegrees;
+            result["goalUpperSwingDegrees"] = a.goalUpperSwingDegrees;
+            result["goalUpperTwistDegrees"] = a.goalUpperTwistDegrees;
+            result["goalSignedElbowFlexDegrees"] = a.goalSignedElbowFlexDegrees;
+            result["goalElbowHingeErrorDegrees"] = a.goalElbowHingeErrorDegrees;
+            result["goalBodyClearance"] = a.goalBodyClearance;
+            result["goalInwardError"] = a.goalInwardError;
+            result["goalStanceMargin"] = a.goalStanceMargin;
+            result["goalWrist"] = a.goalWrist;
+            result["goalContact"] = a.goalContact;
+            result["elbowFlexDegrees"] = a.elbowFlexDegrees;
+            result["upperLocalOrthoError"] = a.upperLocalOrthoError;
+            result["foreLocalOrthoError"] = a.foreLocalOrthoError;
+            result["handLocalOrthoError"] = a.handLocalOrthoError;
+            result["shieldCenterAbovePelvis"] = a.shieldCenterAbovePelvis;
+            result["shieldForwardDistance"] = a.shieldForwardDistance;
+            result["shieldTiltDegrees"] = a.shieldTiltDegrees;
+            result["sourceUpperLengthUnscaled"] = a.sourceUpperLengthUnscaled;
+            result["sourceForeLengthUnscaled"] = a.sourceForeLengthUnscaled;
+            result["finalUpperLengthUnscaled"] = a.finalUpperLengthUnscaled;
+            result["finalForeLengthUnscaled"] = a.finalForeLengthUnscaled;
+            result["maxLocalOrthoError"] = a.maxLocalOrthoError;
+            result["maxLocalTranslationError"] = a.maxLocalTranslationError;
+            result["bodyClearance"] = a.bodyClearance;
+            result["sourceUpperLength"] = a.sourceUpperLength;
+            result["sourceForeLength"] = a.sourceForeLength;
+            result["finalUpperLength"] = a.finalUpperLength;
+            result["finalForeLength"] = a.finalForeLength;
+            result["requestedTarget"] = a.requestedTarget;
+            result["interceptPoint"] = a.interceptPoint;
+            result["sourceContact"] = a.sourceContact;
+            result["itemContact"] = a.itemContact;
+            result["itemAxis"] = a.itemAxis;
+            result["requestedAxis"] = a.requestedAxis;
+            result["materialPoint"] = a.materialPoint;
+            result["palmForward"] = a.palmForward;
+            result["palmLateral"] = a.palmLateral;
+            result["palmNormal"] = a.palmNormal;
+            result["skeletonShoulder"] = a.skeletonShoulder;
+            result["skeletonElbow"] = a.skeletonElbow;
+            result["skeletonWrist"] = a.skeletonWrist;
+            result["shieldCenter"] = a.shieldCenter;
+            result["guardPelvis"] = a.guardPelvis;
+            result["guardTorso"] = a.guardTorso;
+            result["shieldBottom"] = a.shieldBottom;
+            result["shieldTop"] = a.shieldTop;
+            result["shieldBackPoint"] = a.shieldBackPoint;
+            result["shieldFrontPoint"] = a.shieldFrontPoint;
+            result["handTarget"] = a.handTarget;
+            result["sourceWrist"] = a.sourceWrist;
+            result["wrist"] = a.wrist;
+            result["shoulder"] = a.shoulder;
+            result["elbow"] = a.elbow;
+            result["renderActorOrigin"] = a.renderActorOrigin;
+            result["renderActorRight"] = a.renderActorRight;
+            result["renderActorForward"] = a.renderActorForward;
+            result["renderActorUp"] = a.renderActorUp;
+            result["twoHanded"] = a.twoHanded;
+            result["leftNatural"] = a.leftNatural;
+            result["leftGripError"] = a.leftGripError;
+            result["leftShoulderError"] = a.leftShoulderError;
+            result["leftSourceUpperLengthUnscaled"] = a.leftSourceUpperLengthUnscaled;
+            result["leftSourceForeLengthUnscaled"] = a.leftSourceForeLengthUnscaled;
+            result["leftFinalUpperLengthUnscaled"] = a.leftFinalUpperLengthUnscaled;
+            result["leftFinalForeLengthUnscaled"] = a.leftFinalForeLengthUnscaled;
+            result["leftMaxLocalOrthoError"] = a.leftMaxLocalOrthoError;
+            result["leftMaxLocalTranslationError"] = a.leftMaxLocalTranslationError;
+            result["leftWristSwingDegrees"] = a.leftWristSwingDegrees;
+            result["leftWristTwistDegrees"] = a.leftWristTwistDegrees;
+            result["leftPalmFlexDegrees"] = a.leftPalmFlexDegrees;
+            result["leftPalmSideDegrees"] = a.leftPalmSideDegrees;
+            result["leftForearmTwistDegrees"] = a.leftForearmTwistDegrees;
+            result["leftUpperSwingDegrees"] = a.leftUpperSwingDegrees;
+            result["leftUpperTwistDegrees"] = a.leftUpperTwistDegrees;
+            result["leftSignedElbowFlexDegrees"] = a.leftSignedElbowFlexDegrees;
+            result["leftElbowHingeErrorDegrees"] = a.leftElbowHingeErrorDegrees;
+            result["leftBodyClearance"] = a.leftBodyClearance;
+            result["leftSourceWrist"] = a.leftSourceWrist;
+            result["leftShoulder"] = a.leftShoulder;
+            result["leftElbow"] = a.leftElbow;
+            result["leftWrist"] = a.leftWrist;
+            return result;
+        };
+        actor["_requestNpcGuardRigForAudit"] = [](const Object& object) {
+            auto* npc = dynamic_cast<MWRender::NpcAnimation*>(
+                MWBase::Environment::get().getWorld()->getAnimation(object.ptr()));
+            if (!npc)
+                return false;
+            npc->requestNpcGuardRigAudit();
+            return true;
+        };
+        actor["_getNpcGuardRigForAudit"] = [lua = context.mLua](const Object& object) {
+            sol::table result(lua->unsafeState(), sol::create);
+            result["valid"] = false;
+            const auto* npc = dynamic_cast<const MWRender::NpcAnimation*>(
+                MWBase::Environment::get().getWorld()->getAnimation(object.ptr()));
+            if (!npc)
+                return result;
+            const auto snapshot = npc->getNpcGuardRigForAudit();
+            if (!snapshot)
+                return result;
+            sol::table matrices(lua->unsafeState(), sol::create);
+            for (const auto& [name, matrix] : snapshot->matrices)
+            {
+                sol::table values(lua->unsafeState(), sol::create);
+                for (unsigned i = 0; i < 16; ++i)
+                    values[i + 1] = matrix.ptr()[i];
+                matrices[name] = values;
+            }
+            sol::table vectors(lua->unsafeState(), sol::create);
+            for (const auto& [name, value] : snapshot->vectors)
+                vectors[name] = value;
+            sol::table scalars(lua->unsafeState(), sol::create);
+            for (const auto& [name, value] : snapshot->scalars)
+                scalars[name] = value;
+            result["valid"] = true;
+            result["frame"] = snapshot->frame;
+            result["matrixLayout"] = "row-major";
+            result["vectorConvention"] = "row-vector";
+            result["matrices"] = matrices;
+            result["vectors"] = vectors;
+            result["scalars"] = scalars;
+            return result;
+        };
+        actor["_traceNpcGuardMeshForAudit"] = [lua = context.mLua](
+                                                  const Object& object, Misc::FiniteVec3f origin, Misc::FiniteVec3f end) {
+            sol::table result(lua->unsafeState(), sol::create);
+            result["valid"] = false;
+            const auto* npc = dynamic_cast<const MWRender::NpcAnimation*>(
+                MWBase::Environment::get().getWorld()->getAnimation(object.ptr()));
+            if (npc)
+                if (const auto trace = npc->traceNpcGuardMeshForAudit(origin, end))
+                {
+                    result["valid"] = true;
+                    result["frame"] = trace->frame;
+                    result["hit"] = trace->hit;
+                    result["gap"] = trace->gap;
+                    result["point"] = trace->point;
+                }
+            return result;
+        };
+        actor["_getMeleeAimForAudit"] = [lua = context.mLua](const Object& object) {
+            const auto& ptr = object.ptr();
+            if (!ptr.getClass().isActor())
+                throw std::runtime_error("_getMeleeAimForAudit requires an actor");
+            const auto [origin, direction] = MWMechanics::getMeleeAim(ptr);
+            sol::table result(lua->unsafeState(), sol::create);
+            result["origin"] = origin;
+            result["direction"] = direction;
             return result;
         };
 

@@ -34,6 +34,7 @@
 
 #include <osgUtil/CullVisitor>
 #include <osgUtil/RenderBin>
+#include <osgUtil/UpdateVisitor>
 
 #include <components/debug/debuglog.hpp>
 
@@ -975,6 +976,8 @@ namespace MWRender
 
     NpcAnimation::~NpcAnimation()
     {
+        clearNpcGuardPose();
+        clearNpcTwoHandGuardPose();
         clearCutBloodFlow();
         mBisection.reset();
         mLimbSevering.reset();
@@ -1201,6 +1204,8 @@ namespace MWRender
 
     void NpcAnimation::updateNpcBase()
     {
+        clearNpcGuardPose();
+        clearNpcTwoHandGuardPose();
         clearRagdollGarmentCoverage();
         resetBodyAwareness();
         clearAnimSources();
@@ -1343,6 +1348,7 @@ namespace MWRender
 
     void NpcAnimation::resetBodyAwareness()
     {
+        resetBodyEyeFollow();
         mBodyAwarenessHiddenForClinch = false;
         mBodyAwarenessAnimation = nullptr;
         if (mBodyAwarenessRoot)
@@ -1369,11 +1375,34 @@ namespace MWRender
         mBodyAwarenessRoot->setName("First Person Body Awareness");
         mBodyAwarenessRoot->setNodeMask(Mask_Player);
         mBodyAwarenessRoot->addCullCallback(new BodyAwarenessClinchCullCallback(this));
-        mInsert->addChild(mBodyAwarenessRoot);
+        // Traversed before the arm rig, so the eye can read this frame's torso pose.
+        mInsert->insertChild(0, mBodyAwarenessRoot);
         mBodyAwarenessAnimation = new NpcAnimation(mPtr, mBodyAwarenessRoot, mResourceSystem,
             true, VM_Normal, mFirstPersonFieldOfView, true);
         mBodyAwarenessAnimation->enableHeadAnimation(false);
         mBodyAwarenessAnimation->setActive(2);
+        if (MWMechanics::brutalDmFirstPerson() && mBodyAwarenessAnimation->hasAnimation("idle"))
+        {
+            // Sample a standing pose before mirroring the player's state. A body
+            // created while already crouching cannot wait for a standing idle
+            // to establish where its eye belongs.
+            mBodyAwarenessRoot->setMatrix(osg::Matrixd::translate(
+                0., -Settings::game().mFirstPersonBodyForward.get(), 0.));
+            auto& body = *mBodyAwarenessAnimation;
+            body.play("idle", Animation::AnimPriority(0), BlendMask_All, false, 0.f, "start", "stop", 0.f, 0);
+            body.runAnimation(0.f);
+            osgUtil::UpdateVisitor update;
+            update.setFrameStamp(new osg::FrameStamp);
+            update.setNodeMaskOverride(~0u);
+            mBodyAwarenessRoot->accept(update);
+            if (body.getActiveGroup(BoneGroup_Torso) == "idle")
+                if (const auto reference = bodyNeckLocal())
+                {
+                    mBodyEyeReference = *reference;
+                    mBodyEyeReferenceValid = true;
+                }
+            body.stopAllAnimations();
+        }
     }
 
     void NpcAnimation::alignBodyAwareness(float duration)
@@ -1582,6 +1611,161 @@ namespace MWRender
             && MWBase::Environment::get().getWorld()->isFirstPerson();
     }
 
+    std::string NpcAnimation::bodyAwarenessGroup(const std::string& group, bool sneaking) const
+    {
+        // The arms keep their own stance (stock spell, fist, bow or probe arms have no
+        // imported crouch), but the visible legs and torso must crouch whenever the
+        // player sneaks. The body has no arms, head or items, so the imported crouch
+        // and sneak walk fit every stance; armed stances use the armed variant.
+        if (!sneaking || group.starts_with("idlesneak") || group.starts_with("idleswim"))
+            return group;
+        std::string base;
+        std::string_view suffix;
+        if (group.starts_with("idle"))
+        {
+            base = "idlesneak";
+            suffix = std::string_view(group).substr(4);
+        }
+        else
+        {
+            for (std::string_view direction : { "sneakforward", "sneakback", "sneakleft", "sneakright" })
+                if (group.starts_with(direction))
+                {
+                    base = direction;
+                    suffix = std::string_view(group).substr(direction.size());
+                    break;
+                }
+        }
+        if (base.empty())
+            return group;
+        const NpcAnimation& body = *mBodyAwarenessAnimation;
+        const bool armed = !suffix.empty() && suffix != "hh" && suffix != "spell";
+        if (armed && body.hasAnimation(base + "1h"))
+            return base + "1h";
+        if (body.hasAnimation(base))
+            return base;
+        return group;
+    }
+
+    void NpcAnimation::resetBodyEyeFollow()
+    {
+        mBodyEyeReference = mBodyEyeHeld = mBodyEyeOutput = mBodyEyeBlendFrom = osg::Vec3f();
+        mBodyEyeStandingTime = 0.f;
+        mBodyEyeBlendTime = -1.f;
+        mBodyEyeReferenceValid = false;
+        mBodyEyePassive = true;
+        mBodyEyeLive = false;
+    }
+
+    std::optional<osg::Vec3f> NpcAnimation::bodyNeckLocal() const
+    {
+        if (!mBodyAwarenessAnimation)
+            return std::nullopt;
+        const auto neck = mBodyAwarenessAnimation->getBoneWorldMatrix("Bip01 Neck");
+        const auto paths = mInsert->getParentalNodePaths();
+        if (!neck || paths.empty())
+            return std::nullopt;
+        return osg::Vec3f(neck->getTrans() * osg::Matrixf::inverse(osg::computeLocalToWorld(paths.front())));
+    }
+
+    osg::Vec3f NpcAnimation::liveBodyEyeOffset() const
+    {
+        // Called by the arm rig's neck controller during the update traversal. The body
+        // rig is traversed first, so its neck is already in this frame's pose: the eye
+        // and arms move with the torso in the same frame.
+        if (!hasBodyEyeFollow())
+            return osg::Vec3f();
+        const float weight = std::clamp(mBodyEyeWeight, 0.f, 1.f);
+        if (mBodyEyeLive)
+            if (const auto local = bodyNeckLocal())
+                return (*local - mBodyEyeReference) * weight;
+        return mBodyEyeOutput * weight;
+    }
+
+    bool NpcAnimation::hasBodyEyeFollow() const
+    {
+        return mBodyAwarenessAnimation && mBodyEyeReferenceValid && mViewMode == VM_FirstPerson
+            && !useFullBodyFirstPerson() && MWMechanics::brutalDmFirstPerson();
+    }
+
+    std::optional<osg::Vec3f> NpcAnimation::getBodyNeckPositionForAudit() const
+    {
+        if (!mBodyAwarenessAnimation)
+            return std::nullopt;
+        const auto neck = mBodyAwarenessAnimation->getBoneWorldMatrix("Bip01 Neck");
+        if (!neck)
+            return std::nullopt;
+        return osg::Vec3f(neck->getTrans());
+    }
+
+    void NpcAnimation::updateBodyEyeFollow(float duration)
+    {
+        // Dark Messiah's eye is its body's eye attachment. The imported arm rig keeps a
+        // fixed eye, so without this the view stays standing over a crouched torso and
+        // floats over the visible body while it walks, runs or sprints.
+        const auto neckLocal = bodyNeckLocal();
+        if (!neckLocal)
+            return;
+        const osg::Vec3f local = *neckLocal;
+
+        // Only stance and locomotion move the eye with the torso. Actions already carry
+        // their authored eye motion in the arm rig's camera carrier, so the body's action
+        // pose is held rather than added a second time.
+        const auto passive = [](std::string_view group) {
+            if (group.empty())
+                return true;
+            for (std::string_view prefix : { "idle", "walk", "run", "sneak", "brutal_sprint", "turn", "swim" })
+                if (group.starts_with(prefix))
+                    return true;
+            return false;
+        };
+        const std::string_view lower = mBodyAwarenessAnimation->getActiveGroup(BoneGroup_LowerBody);
+        const std::string_view torso = mBodyAwarenessAnimation->getActiveGroup(BoneGroup_Torso);
+        const auto& stats = mPtr.getClass().getCreatureStats(mPtr);
+        const bool sliding = stats.mBrutalSlidePhase != 0 || stats.mBrutalSlideBlocked || stats.mBrutalSlideBlend > 0.f;
+        const bool isPassive = passive(lower) && passive(torso) && !sliding && !stats.isDead();
+
+        // The reference is the settled standing pose of whatever the player holds, so
+        // standing still keeps exactly the authored eye. A stance change must settle
+        // for longer than any crouch blend before it may become the new reference.
+        const bool standing = isPassive && lower.starts_with("idle") && !lower.starts_with("idlesneak")
+            && !lower.starts_with("idleswim") && !stats.getStance(MWMechanics::CreatureStats::Stance_Sneak)
+            && MWBase::Environment::get().getWorld()->isOnGround(mPtr);
+        mBodyEyeStandingTime = standing ? mBodyEyeStandingTime + duration : 0.f;
+        if (mBodyEyeStandingTime > .6f)
+        {
+            if (!mBodyEyeReferenceValid)
+                mBodyEyeReference = local;
+            else
+                mBodyEyeReference += (local - mBodyEyeReference) * (1.f - std::exp(-duration / .3f));
+            mBodyEyeReferenceValid = true;
+        }
+        if (!mBodyEyeReferenceValid)
+            return;
+
+        if (isPassive)
+            mBodyEyeHeld = local - mBodyEyeReference;
+        if (isPassive != mBodyEyePassive)
+        {
+            // Entering or leaving an action: ease between the held and live torso.
+            mBodyEyeBlendFrom = mBodyEyeOutput;
+            mBodyEyeBlendTime = 0.f;
+            mBodyEyePassive = isPassive;
+        }
+        osg::Vec3f target = mBodyEyeHeld;
+        if (mBodyEyeBlendTime >= 0.f)
+        {
+            mBodyEyeBlendTime += duration;
+            float w = std::clamp(mBodyEyeBlendTime / .2f, 0.f, 1.f);
+            w = w * w * (3.f - 2.f * w);
+            target = mBodyEyeBlendFrom + (target - mBodyEyeBlendFrom) * w;
+            if (mBodyEyeBlendTime >= .2f)
+                mBodyEyeBlendTime = -1.f;
+        }
+        mBodyEyeOutput = target;
+        mBodyEyeLive = isPassive && mBodyEyeBlendTime < 0.f;
+    }
+
     void NpcAnimation::syncBodyAwareness(float duration)
     {
         updateBodyAwarenessClinchVisibility();
@@ -1597,9 +1781,21 @@ namespace MWRender
         body.mBodyPitchRadians = mBodyPitchRadians;
 
         bool reset = false;
+        const auto& stats = mPtr.getClass().getCreatureStats(mPtr);
+        MWBase::World* world = MWBase::Environment::get().getWorld();
+        const bool sneaking = MWMechanics::brutalDmFirstPerson() && stats.getStance(MWMechanics::CreatureStats::Stance_Sneak)
+            && !world->isSwimming(mPtr) && !world->isFlying(mPtr);
+        std::vector<std::pair<std::string, const AnimState*>> sources;
+        std::set<std::string, std::less<>> wanted;
+        for (const auto& [group, source] : mStates)
+        {
+            std::string target = bodyAwarenessGroup(group, sneaking);
+            if (wanted.insert(target).second)
+                sources.emplace_back(std::move(target), &source);
+        }
         std::vector<std::string> obsolete;
         for (const auto& [group, state] : body.mStates)
-            if (!mStates.contains(group))
+            if (!wanted.contains(group))
                 obsolete.push_back(group);
         for (const std::string& group : obsolete)
         {
@@ -1612,8 +1808,9 @@ namespace MWRender
         body.mDeferActiveGroupReset = true;
         try
         {
-            for (const auto& [group, source] : mStates)
+            for (const auto& [group, sourceState] : sources)
             {
+                const AnimState& source = *sourceState;
                 if (!body.hasAnimation(group))
                     continue;
                 auto found = body.mStates.find(group);
@@ -1688,6 +1885,7 @@ namespace MWRender
         if (reset || body.mDeferredActiveGroupReset)
             body.resetActiveGroups();
         body.runAnimation(0.f); // Updates pose controllers only; no text-key listener or root motion consumer.
+        updateBodyEyeFollow(duration);
     }
 
     void NpcAnimation::setFirstPersonGeometryVisibleForAudit(bool visible)
@@ -2014,6 +2212,8 @@ namespace MWRender
         if(mLimbSevering && (!Settings::game().mBrutalDismemberment || !Settings::game().mBrutalRagdoll || !mPtr.getClass().getNpcStats(mPtr).isDead()))
             setLimbsSevered(0);
         osg::Vec3f ret = Animation::runAnimation(timepassed);
+        updateNpcGuardPose(timepassed);
+        updateNpcTwoHandGuardPose(timepassed);
 
         mHeadAnimationTime->update(timepassed);
 
@@ -2030,7 +2230,6 @@ namespace MWRender
 
             mFirstPersonNeckController->setRotate(
                 osg::Quat(mPtr.getRefData().getPosition().rot[0] * rotateFactor, osg::Vec3f(-1, 0, 0)));
-            mFirstPersonNeckController->setOffset(useFullBodyFirstPerson() ? osg::Vec3f() : mFirstPersonOffset);
             if (useFullBodyFirstPerson())
                 mFirstPersonNeckController->setRotationPivot(
                     osg::Vec3f(0.f, Settings::game().mFirstPersonBodyForward.get(), 124.f + mFirstPersonOffset.z()));
@@ -2046,6 +2245,12 @@ namespace MWRender
         if (!mBodyAwareness)
             WeaponAnimation::configureControllers(mPtr.getRefData().getPosition().rot[0] + getBodyPitchRadians());
         syncBodyAwareness(timepassed);
+        if (mFirstPersonNeckController)
+        {
+            // The eye and the arms move together with the visible torso.
+            // (liveBodyEyeOffset() is added by the controller itself during traversal.)
+            mFirstPersonNeckController->setOffset(useFullBodyFirstPerson() ? osg::Vec3f() : mFirstPersonOffset);
+        }
 
         updateRagdollGarmentCoverage(timepassed);
         updateRagdollGarmentAudit(timepassed);
@@ -3549,6 +3754,7 @@ namespace MWRender
                 {
                     osg::MatrixTransform* node = found->second.get();
                     mFirstPersonNeckController = new RotateController(mObjectRoot.get());
+                    mFirstPersonNeckController->setOffsetProvider([this] { return liveBodyEyeOffset(); });
                     if (MWMechanics::brutalDmFirstPerson())
                         mFirstPersonNeckController->setRotationCarrier(
                             dynamic_cast<const osg::MatrixTransform*>(getNode("Brutal Camera Carrier")));
@@ -3762,6 +3968,8 @@ namespace MWRender
 
     void NpcAnimation::equipmentChanged()
     {
+        clearNpcGuardPose();
+        clearNpcTwoHandGuardPose();
         if (Settings::game().mShieldSheathing)
         {
             int weaptype = ESM::Weapon::None;

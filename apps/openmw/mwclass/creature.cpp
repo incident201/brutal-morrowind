@@ -247,7 +247,7 @@ namespace MWClass
         const std::pair<MWWorld::Ptr, osg::Vec3f> result = MWMechanics::getHitContact(ptr, dist, contactPart, swing);
         if (result.first.isEmpty()) // Didn't hit anything
             return true;
-        if (MWMechanics::isNpcMeleeOccluded(ptr, result.first, result.second))
+        if (Settings::game().mBrutalMeleeGeometry && MWMechanics::isNpcMeleeOccluded(ptr, result.first, result.second))
             return true;
 
         // Note that earlier we returned true in spite of an apparent failure to hit anything alive.
@@ -288,7 +288,9 @@ namespace MWClass
         if (otherstats.isDead()) // Can't hit dead actors
             return;
 
-        if (!MWMechanics::isInMeleeReach(ptr, victim, MWMechanics::getMeleeWeaponReach(ptr, weapon)))
+        const float reach = MWMechanics::getMeleeWeaponReach(ptr, weapon);
+        const bool bodyInReach = MWMechanics::isInMeleeReach(ptr, victim, reach);
+        if (!bodyInReach && !MWMechanics::hasReachableNpcGuardContact(ptr, victim, reach, hitPosition, contactPart))
             return;
 
         if (Settings::game().mMeleeContactAlwaysHits
@@ -343,13 +345,25 @@ namespace MWClass
                 MWMechanics::resistNormalWeapon(victim, ptr, weapon, damage);
             }
 
-            // Apply "On hit" enchanted weapons
-            MWMechanics::applyOnStrikeEnchantment(ptr, victim, weapon, hitPosition);
         }
         else if (isBipedal(ptr))
         {
             MWMechanics::getHandToHandDamage(ptr, victim, damage, healthdmg, attackStrength);
         }
+
+        if (!bodyInReach)
+        {
+            const bool blocked = MWMechanics::blockMeleeAttack(
+                ptr, victim, weapon, damage, attackStrength, hitPosition, contactPart);
+            MWBase::Environment::get().getLuaManager()->onHit(ptr, victim, weapon, MWWorld::Ptr(), type,
+                attackStrength, 0.f, healthdmg, hitPosition, true, MWMechanics::DamageSourceType::Melee,
+                0, false, blocked, contactPart);
+            return;
+        }
+
+        // Apply "On hit" enchanted weapons only when the body is also in reach.
+        if (!weapon.isEmpty())
+            MWMechanics::applyOnStrikeEnchantment(ptr, victim, weapon, hitPosition);
 
         MWMechanics::applyElementalShields(ptr, victim);
 

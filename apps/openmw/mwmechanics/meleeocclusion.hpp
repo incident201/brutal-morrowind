@@ -23,18 +23,20 @@ namespace MWMechanics
     // their mesh. Stop the strike without redirecting damage to the bystander.
     inline bool isNpcMeleeOccluded(const MWWorld::Ptr& attacker, const MWWorld::Ptr& target, const osg::Vec3f& contact)
     {
-        if (!Settings::game().mBrutalMeleeGeometry || attacker == getPlayer() || target.isEmpty())
+        if ((!Settings::game().mBrutalMeleeGeometry && !Settings::game().mDarkMessiahNpcCombat)
+            || attacker == getPlayer() || target.isEmpty())
             return false;
 
         const osg::Vec3f origin = getMeleeAim(attacker).first;
+        const osg::Vec3f endpoint = Settings::game().mBrutalMeleeGeometry ? contact : getMeleeTorsoPosition(target);
         const auto* rays = MWBase::Environment::get().getWorld()->getRayCasting();
         std::vector<MWWorld::ConstPtr> ignore{ attacker, target };
         while (true)
         {
             // Actor-only geometry supplements the existing rendered contact and
             // world-cover checks; the target's shield may extend outside its hull.
-            const auto hit = rays->castRay(origin, contact, ignore, {}, MWPhysics::CollisionType_Actor);
-            if (!hit.mHit || (hit.mHitPos - origin).length() + .05f >= (contact - origin).length())
+            const auto hit = rays->castRay(origin, endpoint, ignore, {}, MWPhysics::CollisionType_Actor);
+            if (!hit.mHit || (hit.mHitPos - origin).length() + .05f >= (endpoint - origin).length())
                 return false;
             if (hit.mHitObject.isEmpty() || !hit.mHitObject.getClass().isActor())
                 return true;

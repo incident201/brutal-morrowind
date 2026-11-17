@@ -64,8 +64,11 @@
 #include "../mwgui/postprocessorhud.hpp"
 
 #include "../mwmechanics/actorutil.hpp"
+#include "../mwmechanics/combat.hpp"
+#include "../mwmechanics/creaturestats.hpp"
 
 #include "../mwbase/environment.hpp"
+#include "../mwbase/mechanicsmanager.hpp"
 #include "../mwbase/windowmanager.hpp"
 #include "../mwbase/world.hpp"
 
@@ -863,8 +866,18 @@ namespace MWRender
                 int part=-1;
                 if (const auto* npc=dynamic_cast<const NpcAnimation*>(
                     MWBase::Environment::get().getWorld()->getAnimation(ptrHolder->mPtr)))
+                {
                     part=npc->getPartForNodePath(intersection.nodePath);
-                // Sword parries are not implemented. A carried weapon must not become a flesh hit.
+                    if (melee && part == ESM::PRT_Shield && Settings::game().mDarkMessiahNpcCombat
+                        && ptrHolder->mPtr != MWMechanics::getPlayer() && ptrHolder->mPtr.getClass().isNpc())
+                    {
+                        const auto& stats = ptrHolder->mPtr.getClass().getCreatureStats(ptrHolder->mPtr);
+                        if (stats.mBrutalNpcGuardRequested && stats.mBrutalBlockRaised
+                            && npc->hasNpcGuardMeshForCombat())
+                            return; // Combat tests the published shield on the segment to the body hit.
+                    }
+                }
+                // Carried weapons must not substitute for a body target.
                 if (melee && part==ESM::PRT_Weapon) return;
                 result.mHitObject = ptrHolder->mPtr;
                 result.mHitPart = part;
@@ -1012,7 +1025,51 @@ namespace MWRender
 
         mRootNode->accept(*getIntersectionVisitor(intersector, ignorePlayer, ignoreActors, ignoreList));
 
-        return getIntersectionResult(intersector, mIntersectionVisitor, ignoreList, melee);
+        RayResult result = getIntersectionResult(intersector, mIntersectionVisitor, ignoreList, melee);
+        if (melee && !ignoreActors && Settings::game().mDarkMessiahNpcCombat)
+        {
+            const osg::Vec3f segment = dest - origin;
+            const float lengthSquared = segment.length2();
+            if (lengthSquared > 1e-6f)
+            {
+                // Authored shield transforms can already have been restored for
+                // the next animation update. Insert the actual guard surfaces in
+                // front-to-back order, retaining their owner even if that owner's
+                // body is outside this ray and another actor stands behind it.
+                std::vector<MWWorld::Ptr> actors;
+                MWBase::Environment::get().getMechanicsManager()->getActorsInRange(
+                    origin, static_cast<float>(Settings::game().mActorsProcessingRange), actors);
+                float closest = result.mHit ? result.mRatio : 1.f;
+                for (const auto& actor : actors)
+                {
+                    if (actor == MWMechanics::getPlayer() || !actor.getClass().isNpc()
+                        || std::find(ignoreList.begin(), ignoreList.end(), actor) != ignoreList.end())
+                        continue;
+                    const auto& stats = actor.getClass().getCreatureStats(actor);
+                    if (stats.isDead() || !stats.mBrutalNpcGuardRequested || !stats.mBrutalBlockRaised)
+                        continue;
+                    const auto* npc = dynamic_cast<const NpcAnimation*>(getAnimation(actor));
+                    if (!npc || !npc->hasNpcGuardMeshForCombat())
+                        continue;
+                    const auto guard = npc->traceNpcGuardMeshForCombat(origin, origin + segment * closest);
+                    if (!guard || !std::isfinite(guard->gap) || guard->gap > MWMechanics::sNpcGuardContactMargin)
+                        continue;
+                    const float ratio = (guard->point - origin) * segment / lengthSquared;
+                    if (!std::isfinite(ratio) || ratio < 0.f || ratio > closest)
+                        continue;
+                    RayResult contact;
+                    contact.mHit = true;
+                    contact.mHitObject = actor;
+                    contact.mHitPart = stats.mBrutalParry ? ESM::PRT_Weapon : ESM::PRT_Shield;
+                    contact.mHitPointWorld = guard->point;
+                    contact.mHitNormalWorld = -segment / std::sqrt(lengthSquared);
+                    contact.mRatio = ratio;
+                    result = contact;
+                    closest = ratio;
+                }
+            }
+        }
+        return result;
     }
 
     std::vector<float> RenderingManager::findSegmentCandidates(

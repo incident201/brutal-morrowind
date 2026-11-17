@@ -373,10 +373,25 @@ namespace MWRender
                 mVisualSneakVelocity = 0.f;
             }
         }
+        // With the visible first-person body, the eye rides on that body's torso
+        // (NpcAnimation adds its displacement to the eye and arms): its crouch,
+        // sneak walk and stance changes lower the view exactly as far and as fast as
+        // the torso the player sees. A fixed sneak drop would leave the view
+        // standing over a crouched body, or sink it into an upright one.
+        const bool bodyEye = mAnimation && mMode == Mode::FirstPerson && mAnimation->hasBodyEyeFollow()
+            && mTrackingPtr == world->getPlayerPtr();
+        if (bodyEye)
+        {
+            mVisualSneakOffset = 0.f;
+            mVisualSneakVelocity = 0.f;
+        }
         // The authored slide eye already has its own blend. Preserve it exactly.
         mFullBodySneakOffset = mVisualSneakOffset * (1.f - slideBlend) + 70.f * slideBlend;
         if (mAnimation)
+        {
+            mAnimation->setBodyEyeFollowWeight(1.f - slideBlend);
             mAnimation->setFirstPersonOffset(osg::Vec3f(0, 0, -mFullBodySneakOffset));
+        }
     }
 
     void Camera::setYaw(float angle, bool force)
