@@ -226,7 +226,7 @@ namespace MWRender
         // The zero/explicit calls are counted together as one pair evaluation.
         PairedSolution solveWideHeadEndpoint(const std::array<GuardJointSource, 2>& rigs, const osg::Matrixf& itemActor,
             const std::array<osg::Matrixf, 2>& handFromItem, const WideHeadStyle& style, unsigned& evaluations,
-            unsigned limit)
+            unsigned limit, bool coarseOnly = false)
         {
             PairedSolution result;
             result.itemActor = itemActor;
@@ -237,8 +237,11 @@ namespace MWRender
                 float best = std::numeric_limits<float>::infinity();
                 bool selected = false, bestFeasible = false, bestPreferred = false;
                 const float sign = side ? 1.f : -1.f;
+                unsigned sampled = 0;
                 for (float angle : { 60.f, 75.f, 45.f, 90.f, 30.f, 15.f, 0.f, 105.f, -30.f, -60.f, -90.f })
                 {
+                    if (coarseOnly && sampled++ >= 4)
+                        break;
                     if (evaluations >= limit)
                         break;
                     const float swivel = angle * sign;
@@ -268,7 +271,7 @@ namespace MWRender
                     if (preferred)
                         break;
                 }
-                if (!selected)
+                if (!selected || (coarseOnly && !bestPreferred))
                     return result;
             }
             const auto actual = rigs[0].itemToHand * result.arms[0].world[2] * rigs[0].metricToActor;
@@ -1017,10 +1020,6 @@ namespace MWRender
                 const auto search = [&] {
                     if (wideStyle.active)
                     {
-                        // A shaft supported from below needs a diagonal item
-                        // basis, not a vertical blade with both elbows lifted
-                        // above the hands. These are generic actor-space poses;
-                        // the contact is still a real material witness.
                         auto sourceAxis = osg::Matrixf::transform3x3(pose.axis, pose.referenceItemActor);
                         sourceAxis.normalize();
                         auto forward = directionActor;
@@ -1030,8 +1029,6 @@ namespace MWRender
                         lateral.normalize();
                         if (lateral * sourceAxis < 0.f)
                             lateral = -lateral;
-                        // Keep an actual complete candidate even if every
-                        // underhand option is outside the current reach.
                         desired = solvePaired(rigs, candidateItem(0, osg::Quat(), 8.f), handFromItem, { 0.f, 0.f },
                             std::array<float, 2>{ 0.f, 0.f });
                         ++audit.searchCandidates;
@@ -1041,49 +1038,122 @@ namespace MWRender
                         pose.cachedOffset = 8.f;
                         best
                             = pairedViolation(desired) * 10000. + pairedStyleCost(rigs, desired, headStyle, &wideStyle);
+                        struct Choice
+                        {
+                            unsigned witness, orientation;
+                            osg::Quat turn;
+                            float offset, travel;
+                        };
+                        std::vector<Choice> choices;
+
+                        const std::array<osg::Matrixf, 2> actorToMetric{ osg::Matrixf::inverse(rigs[0].metricToActor),
+                            osg::Matrixf::inverse(rigs[1].metricToActor) };
+                        const std::array<osg::Vec3f, 2> sourceHands{
+                            (handFromItem[0] * pose.referenceItemActor).getTrans(),
+                            (handFromItem[1] * pose.referenceItemActor).getTrans()
+                        };
+                        unsigned orientation = 0;
+                        const auto addOrientation = [&](float slope, float front, float roll) {
+                            auto axis = lateral * std::cos(osg::DegreesToRadians(slope))
+                                - osg::Vec3f(0, 0, 1) * std::sin(osg::DegreesToRadians(slope)) - forward * front;
+                            axis.normalize();
+                            osg::Quat alignment;
+                            alignment.makeRotate(sourceAxis, axis);
+                            const auto rotation = osg::Matrixf::rotate(alignment)
+                                * osg::Matrixf::rotate(osg::DegreesToRadians(roll), axis);
+                            for (unsigned witness = 0; witness < pose.witnesses.size(); ++witness)
+                                for (float offset : { 8.f, 24.f, 40.f })
+                                {
+                                    const auto anchor = (pose.target - pose.incoming * offset) * actorInverse;
+                                    const auto contact = pose.witnesses[witness] * pose.referenceItemActor;
+                                    bool reachable = true;
+                                    float travel = 0;
+                                    for (unsigned side = 0; side < 2; ++side)
+                                    {
+                                        const osg::Vec3f hand
+                                            = (osg::Matrixf::transform3x3(sourceHands[side] - contact, rotation)
+                                                  + anchor)
+                                            * actorToMetric[side];
+                                        const float distance
+                                            = osg::Vec3f(hand - rigs[side].arm.world[0].getTrans()).length();
+                                        const float minimum = std::sqrt(std::max(0.f,
+                                            rigs[side].upperLength * rigs[side].upperLength
+                                                + rigs[side].foreLength * rigs[side].foreLength
+                                                + 2.f * rigs[side].upperLength * rigs[side].foreLength
+                                                    * std::cos(osg::DegreesToRadians(145.f))));
+                                        reachable = reachable && distance >= minimum
+                                            && distance <= rigs[side].upperLength + rigs[side].foreLength - .01f;
+                                        travel += osg::Vec3f(hand - rigs[side].arm.world[2].getTrans()).length();
+                                    }
+                                    if (reachable)
+                                    {
+                                        // Prefer a contact supported between the two grips
+                                        // when hand travel is nearly tied across anchors.
+                                        travel += .1f * (contact - (sourceHands[0] + sourceHands[1]) * .5f).length();
+                                        choices.push_back(
+                                            { witness, orientation, rotation.getRotate(), offset, travel });
+                                    }
+                                }
+                            ++orientation;
+                        };
+                        // Breadth first in pitch, forward cant and axial roll.
+                        // Nearby material anchors never starve another orientation.
+                        for (int radius = 0; radius <= 3; ++radius)
+                            for (int pitch : { 0, 1, -1 })
+                                for (int front : { 0, 1, -1 })
+                                    for (int roll : { 0, 1, -1 })
+                                        if (std::abs(pitch) + std::abs(front) + std::abs(roll) == radius)
+                                            addOrientation(
+                                                40.f + pitch * 10.f, .25f + front * .25f, -60.f + roll * 15.f);
+                        // Keep wider orientations after the neutral neighbourhood.
                         for (float slope : { 40.f, 30.f, 50.f, 45.f, 20.f, 60.f })
                             for (float front : { .25f, 0.f, .5f })
                                 for (float roll : { -60.f, -45.f, -75.f, -30.f, 60.f, 45.f, 75.f, 0.f, 90.f })
-                                {
-                                    auto axis = lateral * std::cos(osg::DegreesToRadians(slope))
-                                        - osg::Vec3f(0, 0, 1) * std::sin(osg::DegreesToRadians(slope))
-                                        - forward * front;
-                                    axis.normalize();
-                                    osg::Quat alignment;
-                                    alignment.makeRotate(sourceAxis, axis);
-                                    const auto turn = (osg::Matrixf::rotate(alignment)
-                                        * osg::Matrixf::rotate(osg::DegreesToRadians(roll), axis))
-                                                          .getRotate();
-                                    for (unsigned witness : { 1u, 0u, 2u, 3u, 4u, 5u, 6u })
-                                        for (float offset : { 8.f, 24.f, 40.f })
-                                        {
-                                            if (witness >= pose.witnesses.size())
-                                                continue;
-                                            if (audit.searchCandidates >= 96)
-                                                return;
-                                            auto solution
-                                                = solveWideHeadEndpoint(rigs, candidateItem(witness, turn, offset),
-                                                    handFromItem, wideStyle, audit.searchCandidates, 96);
-                                            const bool preferred
-                                                = pairedPreferredStyle(rigs, solution, headStyle, &wideStyle);
-                                            const float score = pairedViolation(solution) * 10000.
-                                                + pairedStyleCost(rigs, solution, headStyle, &wideStyle);
-                                            if (preferred || score < best)
-                                            {
-                                                best = score;
-                                                desired = solution;
-                                                witnessIndex = witness;
-                                                pose.cachedTurn = turn;
-                                                pose.cachedSwivel = solution.swivel;
-                                                pose.cachedOffset = offset;
-                                            }
-                                            if (preferred)
-                                            {
-                                                found = true;
-                                                return;
-                                            }
-                                        }
-                                }
+                                    if (!((slope == 40.f || slope == 30.f || slope == 50.f)
+                                            && (roll == -60.f || roll == -45.f || roll == -75.f)))
+                                        addOrientation(slope, front, roll);
+                        std::stable_sort(choices.begin(), choices.end(), [](const Choice& a, const Choice& b) {
+                            if (a.orientation != b.orientation)
+                                return a.orientation < b.orientation;
+                            return a.travel < b.travel;
+                        });
+                        const auto evaluate = [&](const Choice& c, bool coarseOnly) {
+                            if (audit.searchCandidates >= 96)
+                                return;
+                            auto solution = solveWideHeadEndpoint(rigs, candidateItem(c.witness, c.turn, c.offset),
+                                handFromItem, wideStyle, audit.searchCandidates, 96, coarseOnly);
+                            const bool preferred = pairedPreferredStyle(rigs, solution, headStyle, &wideStyle);
+                            const float score = pairedViolation(solution) * 10000.
+                                + pairedStyleCost(rigs, solution, headStyle, &wideStyle);
+                            if (preferred || score < best)
+                            {
+                                best = score;
+                                desired = solution;
+                                witnessIndex = c.witness;
+                                pose.cachedTurn = c.turn;
+                                pose.cachedSwivel = solution.swivel;
+                                pose.cachedOffset = c.offset;
+                            }
+                            found = preferred;
+                        };
+                        std::vector<bool> visited(orientation, false);
+                        for (unsigned index = 0; index < choices.size(); ++index)
+                        {
+                            if (visited[choices[index].orientation])
+                                continue;
+                            visited[choices[index].orientation] = true;
+                            evaluate(choices[index], true);
+                            if (found)
+                                return;
+                            if (audit.searchCandidates >= 96)
+                                break;
+                        }
+                        for (unsigned index = 0; index < choices.size(); ++index)
+                        {
+                            evaluate(choices[index], false);
+                            if (found || audit.searchCandidates >= 96)
+                                return;
+                        }
                         return;
                     }
                     // The native slash-ready blade points away from the body.

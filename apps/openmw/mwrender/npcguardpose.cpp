@@ -866,6 +866,13 @@ namespace MWRender
                 + squared(excess(solution.metrics.palmSide, 15.f)) * .01f
                 + squared(excess(solution.metrics.wristSwing, 20.f)) * .01f
                 + squared(excess(solution.metrics.foreTwist, 25.f)) * .005f;
+            // A lateral parry can stack forearm and wrist twist while each
+            // individual joint still passes. Prefer a straighter palm without
+            // exchanging that twist for a deeply folded wrist in another pose.
+            cost += squared(excess(solution.metrics.palmSide, 10.f)) * .03f
+                + squared(excess(solution.metrics.palmFlex, 30.f)) * .04f
+                + squared(excess(solution.metrics.wristTwist, 20.f)) * .01f
+                + squared(excess(solution.metrics.foreTwist + solution.metrics.wristTwist, 45.f)) * .01f;
             return cost;
         };
 
