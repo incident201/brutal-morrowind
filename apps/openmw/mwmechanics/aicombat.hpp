@@ -64,7 +64,10 @@ namespace MWMechanics
         float mDmTargetPassive = 0.f;
         float mDmDodgeCooldown = 0.f;
         float mDmPreventiveTimer = 0.f;
-        void updateDarkMessiah(float duration, const MWWorld::Ptr& target);
+        float mDmTargetGuardTime = 0.f;
+        float mDmChargedHold = 0.f;
+        void updateDarkMessiah(float duration, const MWWorld::Ptr& actor, const MWWorld::Ptr& target,
+            CharacterController& characterController);
 
         AiCombatStorage();
 

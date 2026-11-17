@@ -177,6 +177,7 @@ namespace MWMechanics
             Lowering
         };
         BrutalBlock mBrutalBlock{ BrutalBlock::None };
+        std::string mBrutalNpcGuardGroup; // Owned shield/weapon guard layer; stock block reactions remain separate.
 
         // Dark Messiah player combos: Rush_Attack and Falling_Attack (In, Idle, Out).
         enum class BrutalCombo
@@ -391,6 +392,7 @@ namespace MWMechanics
 
         void cancelAttackForKick();
         void updateBrutalShieldBlock();
+        void updateBrutalNpcGuard();
         void updateBrutalPlayerSteps(float duration, CharacterState movestate, bool grounded);
         bool updateBrutalCombo();
         void updateBrutalSlide(float duration);
@@ -432,6 +434,8 @@ namespace MWMechanics
 
         bool readyToPrepareAttack() const;
         bool readyToStartAttack() const;
+        // Adaptive defence may replace a small upper-body flinch, never a full stagger.
+        bool readyToStartBrutalGuard() const;
 
         float calculateWindUp() const;
 

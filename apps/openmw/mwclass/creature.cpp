@@ -20,6 +20,7 @@
 #include "../mwmechanics/disease.hpp"
 #include "../mwmechanics/inventory.hpp"
 #include "../mwmechanics/magiceffects.hpp"
+#include "../mwmechanics/meleeocclusion.hpp"
 #include "../mwmechanics/movement.hpp"
 #include "../mwmechanics/npcstats.hpp"
 #include "../mwmechanics/setbaseaisetting.hpp"
@@ -246,6 +247,8 @@ namespace MWClass
         const std::pair<MWWorld::Ptr, osg::Vec3f> result = MWMechanics::getHitContact(ptr, dist, contactPart, swing);
         if (result.first.isEmpty()) // Didn't hit anything
             return true;
+        if (MWMechanics::isNpcMeleeOccluded(ptr, result.first, result.second))
+            return true;
 
         // Note that earlier we returned true in spite of an apparent failure to hit anything alive.
         // This is because hitting nothing is not a "miss" and should be handled as such character controller-side.
@@ -290,6 +293,8 @@ namespace MWClass
 
         if (Settings::game().mMeleeContactAlwaysHits
             && !MWBase::Environment::get().getWorld()->getLOS(ptr, victim))
+            return;
+        if (MWMechanics::isNpcMeleeOccluded(ptr, victim, hitPosition))
             return;
 
         if (!success)

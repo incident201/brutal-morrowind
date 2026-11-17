@@ -3344,6 +3344,10 @@ namespace MWMechanics
             mAnimation->disable(mCurrentWeapon);
         if (!mSwordClinchGroup.empty())
             mAnimation->disable(mSwordClinchGroup);
+        if (!mBrutalNpcGuardGroup.empty())
+            mAnimation->disable(mBrutalNpcGuardGroup);
+        mBrutalNpcGuardGroup.clear();
+        stats.mBrutalNpcGuardRequested = false;
         for (std::string_view old : { "brutal_block", "brutal_blockhit1", "brutal_blockhit2",
                  "brutal_blockhit3", "brutal_parrybreak" })
             mAnimation->disable(old);
@@ -3490,6 +3494,14 @@ namespace MWMechanics
 
         resetCurrentHitState();
         auto& stats = mPtr.getClass().getCreatureStats(mPtr);
+        if (!mBrutalNpcGuardGroup.empty())
+            mAnimation->disable(mBrutalNpcGuardGroup);
+        mBrutalNpcGuardGroup.clear();
+        stats.mBrutalNpcGuardRequested = stats.mBrutalBlockRaised = stats.mBrutalParry = false;
+        stats.mBrutalFastPressure = 0;
+        stats.mBrutalGuardBreakingAttack = false;
+        stats.mBrutalGuardCooldownUntil = std::max(stats.mBrutalGuardCooldownUntil, brutalSimulationTime() + .8);
+        mBrutalBlock = BrutalBlock::None;
         stats.mBrutalSlashRight = false;
         stats.mBrutalSlideAttack = false;
         stats.setBlock(false);
@@ -4340,11 +4352,116 @@ namespace MWMechanics
         mBrutalStepPhase = to;
     }
 
+    void CharacterController::updateBrutalNpcGuard()
+    {
+        auto& stats = mPtr.getClass().getCreatureStats(mPtr);
+        const bool wasRaised = stats.mBrutalBlockRaised;
+        // The stock shield reaction also uses "shield". Without an adaptive
+        // request or owned guard, leave that layer and the vanilla hit state alone.
+        if (!stats.mBrutalNpcGuardRequested && !wasRaised && mBrutalNpcGuardGroup.empty())
+            return;
+        const double now = brutalSimulationTime();
+        const bool minorRecovery = isUpperBodyRecovery();
+        bool hasShield = false;
+        if (mPtr.getClass().hasInventoryStore(mPtr))
+        {
+            const auto& inv = mPtr.getClass().getInventoryStore(mPtr);
+            const auto shield = inv.getSlot(MWWorld::InventoryStore::Slot_CarriedLeft);
+            hasShield = shield != inv.end() && shield->getType() == ESM::Armor::sRecordId
+                && updateCarriedLeftVisible(mWeaponType);
+        }
+        const std::string group = hasShield ? "shield" : "brutal_weapon_guard";
+        const bool hasGuardPose = mAnimation->hasAnimation(group)
+            && mAnimation->getTextKeyTime(group + ": brutal guard hold") >= 0.f;
+        const bool able = mPtr.getClass().isNpc() && Settings::game().mDarkMessiahNpcCombat
+            && stats.mBrutalNpcGuardRequested && now < stats.mBrutalGuardUntil
+            && now >= stats.mBrutalGuardBrokenUntil
+            && !stats.isDead() && !stats.isParalyzed() && !stats.getKnockedDown()
+            && !isKnockedOut() && !isKnockedDown() && !isScriptedAnimPlaying()
+            && !stats.mBrutalClinchActive && !mAnimation->isRagdollPose()
+            && (!stats.getHitRecovery() || minorRecovery)
+            && stats.getDrawState() == DrawState::Weapon && mWeaponType != ESM::Weapon::HandToHand
+            && mWeaponType != ESM::Weapon::Spell && mWeaponType != ESM::Weapon::None
+            && (mUpperBodyState <= UpperBodyState::WeaponEquipped || minorRecovery)
+            && hasGuardPose && !MWBase::Environment::get().getWorld()->isSwimming(mPtr)
+            && (!Settings::game().mBrutalStamina || stats.getFatigue().getCurrent() > 0.f);
+        if (able)
+        {
+            // A small reaction may yield to a deliberate defence; a kick, knockdown
+            // or full-body stagger must finish first. Both defensive poses come
+            // from their own DM source, with the holding key recorded by the importer.
+            if (minorRecovery)
+            {
+                resetCurrentHitState();
+                stats.setHitRecovery(false);
+                if (!mCurrentWeapon.empty())
+                    mAnimation->disable(mCurrentWeapon);
+                mUpperBodyState = UpperBodyState::WeaponEquipped;
+                mReadyToHit = false;
+                mAttackStrength = -1.f;
+                stats.mBrutalGuardBreakingAttack = false;
+                stats.setAttackingOrSpell(false);
+            }
+            if (!wasRaised || mBrutalNpcGuardGroup != group || !mAnimation->isPlaying(group))
+            {
+                MWRender::Animation::ScopedDeferActiveGroupReset deferReset(*mAnimation);
+                if (mHitState == CharState_Block && mCurrentHit == "shield")
+                {
+                    // This stock reaction is being replaced by our held pose.
+                    // It must not retain ownership of the same group name and
+                    // later make cleanup preserve a frozen adaptive layer.
+                    resetCurrentHitState();
+                    stats.setBlock(false);
+                }
+                if (!mBrutalNpcGuardGroup.empty())
+                    mAnimation->disable(mBrutalNpcGuardGroup);
+                mAnimation->disable(group);
+                playBlendedAnimation(group, Priority_Block, MWRender::BlendMask_UpperBody,
+                    false, 0.f, "brutal guard hold", hasShield ? "block stop" : "stop", 0.f, 0);
+                mBrutalNpcGuardGroup = group;
+            }
+            if (!wasRaised)
+                stats.mBrutalBlockRaisedAt = now;
+            stats.mBrutalBlockRaised = true;
+            stats.mBrutalParry = !hasShield;
+            mBrutalBlock = BrutalBlock::Holding;
+        }
+        else
+        {
+            if (!mBrutalNpcGuardGroup.empty())
+            {
+                // A real stock block may already have replaced the held shield
+                // during refreshHitRecoilAnims; do not remove that reaction.
+                if (mBrutalNpcGuardGroup != "shield" || mHitState != CharState_Block || mCurrentHit != "shield")
+                    mAnimation->disable(mBrutalNpcGuardGroup);
+                mBrutalNpcGuardGroup.clear();
+            }
+            if (wasRaised)
+                stats.mBrutalBlockLoweredAt = now;
+            stats.mBrutalBlockRaised = stats.mBrutalParry = false;
+            mBrutalBlock = BrutalBlock::None;
+            if (!hasGuardPose)
+            {
+                // No compatible imported pose: leave the stock block/attack
+                // controller in charge instead of requesting an invisible guard.
+                stats.mBrutalNpcGuardRequested = false;
+                stats.mBrutalFastPressure = 0;
+            }
+        }
+        stats.mBrutalBlockImpact = false;
+        stats.mBrutalParryResult = BrutalParry_None;
+    }
+
     void CharacterController::updateBrutalShieldBlock()
     {
         static const std::string group = "brutal_block";
         auto& stats = mPtr.getClass().getCreatureStats(mPtr);
-        if (mPtr != getPlayer() || (!Settings::game().mPlayerActiveShieldBlock && !Settings::game().mDarkMessiahSwordParry))
+        if (mPtr != getPlayer())
+        {
+            updateBrutalNpcGuard();
+            return;
+        }
+        if (!Settings::game().mPlayerActiveShieldBlock && !Settings::game().mDarkMessiahSwordParry)
         {
             if (stats.mBrutalBlockRaised && !brutalDmFirstPerson()) mAnimation->disable("shield");
             mAnimation->disable(group);
@@ -4372,6 +4489,8 @@ namespace MWMechanics
         const bool parry = !hasShield && Settings::game().mDarkMessiahSwordParry && isBrutalOneHanded(mWeaponType);
         static const std::string parryBreak = "brutal_parrybreak";
         const bool able = (hasShield || parry) && !mAnimation->isPlaying(parryBreak) && !isBrutalComboActive()
+            && brutalSimulationTime() >= stats.mBrutalGuardBrokenUntil
+            && (!Settings::game().mBrutalStamina || stats.getFatigue().getCurrent() > 0.f)
             && stats.mBrutalSlidePhase == 0 && !stats.mBrutalSlideAttack
             && !isDead() && !stats.isDead() && !stats.isParalyzed()
             && stats.getDrawState() == DrawState::Weapon && mWeaponType != ESM::Weapon::Spell && isReadyToBlock()
@@ -4506,7 +4625,7 @@ namespace MWMechanics
         if (stats.mBrutalParryResult == BrutalParry_Broken)
         {
             // Parry_Break_Sword: the guard is knocked open and cannot rise until it recovers.
-            if (raised && stats.mBrutalParry && mAnimation->hasAnimation(parryBreak))
+            if ((raised || wasRaised) && mAnimation->hasAnimation(parryBreak))
             {
                 mAnimation->disable(group);
                 playBlendedAnimation(parryBreak, Priority_Knockdown, MWRender::BlendMask_UpperBody, true, 1.f,
@@ -4884,6 +5003,11 @@ namespace MWMechanics
     {
         return (mHitState == CharState_None || mHitState == CharState_Block)
             && mUpperBodyState <= UpperBodyState::WeaponEquipped;
+    }
+
+    bool CharacterController::readyToStartBrutalGuard() const
+    {
+        return readyToPrepareAttack() || isUpperBodyRecovery();
     }
 
     bool CharacterController::readyToStartAttack() const

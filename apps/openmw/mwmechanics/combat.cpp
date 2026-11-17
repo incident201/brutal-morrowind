@@ -91,13 +91,52 @@ namespace MWMechanics
                 && toAttacker * forward >= std::cos(osg::DegreesToRadians(frontalArcDegrees));
         }
 
-        // Dark Messiah's sword parry: a frontal blow is
-        // parried (Parry_Parry), a blow outside the parry angle or a guard-breaking attack breaks
-        // the guard (Parry_Break). Guards never break a parry with their melee attacks
-        // (breakparade 0); once the player has parried longer than PlayerParryTimeToBreakIt (5 s)
-        // they pick attacks that bypass it, here a guard-breaking blow. Our addition: a guard
-        // raised within the parry window before the blow deflects even that and staggers the
-        // attacker.
+        void openBrutalGuard(const MWWorld::Ptr& blocker)
+        {
+            auto& stats = blocker.getClass().getCreatureStats(blocker);
+            const double now = MWBase::Environment::get().getWorld()->getTimeManager()->getSimulationTime();
+            stats.mBrutalNpcGuardRequested = false;
+            stats.mBrutalGuardUntil = 0.0;
+            stats.mBrutalGuardBrokenUntil = std::max(stats.mBrutalGuardBrokenUntil, now + 1.0);
+            stats.mBrutalGuardCooldownUntil = std::max(stats.mBrutalGuardCooldownUntil, now + 1.0);
+            stats.mBrutalFastPressure = 0;
+            stats.mBrutalParryResult = BrutalParry_Broken;
+            if (blocker != getPlayer())
+                stats.mBrutalParried = true;
+        }
+
+        // Impacts against a guard cost more to deliver than to absorb. Fractions of
+        // maximum match the player's nine-unit stamina scale and do not favour a
+        // particular race/level. Ordinary open hits and misses keep their old costs.
+        void spendBrutalBlockStamina(const MWWorld::Ptr& attacker, const MWWorld::Ptr& blocker, bool heavy)
+        {
+            ++blocker.getClass().getCreatureStats(blocker).mBrutalGuardBlocks;
+            if (!Settings::game().mBrutalStamina)
+                return;
+            const auto spend = [](const MWWorld::Ptr& actor, float fraction) {
+                if (actor == getPlayer() && MWBase::Environment::get().getWorld()->getGodModeState())
+                    return;
+                auto& stats = actor.getClass().getCreatureStats(actor);
+                auto fatigue = stats.getFatigue();
+                fatigue.setCurrent(std::max(0.f, fatigue.getCurrent() - std::max(0.f, fatigue.getBase()) * fraction));
+                stats.setFatigue(fatigue);
+            };
+            spend(attacker, heavy ? 3.f / 9.f : 2.f / 9.f);
+            spend(blocker, heavy ? 2.f / 9.f : 1.f / 9.f);
+            if (blocker.getClass().getCreatureStats(blocker).getFatigue().getCurrent() <= 0.f)
+                openBrutalGuard(blocker);
+        }
+
+        bool brutalGuardBreakingAttack(const MWWorld::Ptr& attacker, float strength)
+        {
+            const auto& stats = attacker.getClass().getCreatureStats(attacker);
+            return attacker == getPlayer() ? !stats.mBrutalFastStrike && strength >= .8f
+                                          : stats.mBrutalGuardBreakingAttack;
+        }
+
+        // A fresh timed player parry still deflects a deliberately charged guard
+        // breaker. Holding an old guard cannot silently convert an ordinary blow
+        // into a breaker; the AI must have chosen and telegraphed that attack.
         bool parryMeleeAttack(const MWWorld::Ptr& attacker, const MWWorld::Ptr& blocker, float damage)
         {
             MWMechanics::CreatureStats& stats = blocker.getClass().getCreatureStats(blocker);
@@ -107,11 +146,8 @@ namespace MWMechanics
                 return false; // The blow comes from outside the guard and lands.
             }
             const double now = MWBase::Environment::get().getWorld()->getTimeManager()->getSimulationTime();
-            constexpr double parryTimeToBreakIt = 5.0; // mm_game_settings PlayerParryTimeToBreakIt
             const float parryWindow = Settings::game().mDarkMessiahParryWindow.get();
             const bool timed = now - stats.mBrutalBlockRaisedAt <= parryWindow;
-            const bool breaking
-                = !timed && attacker != getPlayer() && now - stats.mBrutalBlockRaisedAt > parryTimeToBreakIt;
 
             MWWorld::InventoryStore& inv = blocker.getClass().getInventoryStore(blocker);
             const auto parrying = inv.getSlot(MWWorld::InventoryStore::Slot_CarriedRight);
@@ -125,8 +161,10 @@ namespace MWMechanics
             if (timed && attacker.getClass().isNpc()
                 && !MWBase::Environment::get().getMechanicsManager()->requestSwordClinch(blocker, attacker))
                 attacker.getClass().getCreatureStats(attacker).mBrutalParried = true;
-            stats.mBrutalParryResult = timed ? BrutalParry_Timed : breaking ? BrutalParry_Broken : BrutalParry_Parried;
-            return true; // Absorbed; a guard-breaking blow still opens the guard.
+            stats.mBrutalParryResult = timed ? BrutalParry_Timed : BrutalParry_Parried;
+            spendBrutalBlockStamina(attacker, blocker,
+                attacker.getClass().getCreatureStats(attacker).mBrutalGuardBreakingAttack);
+            return true;
         }
     }
 
@@ -242,6 +280,20 @@ namespace MWMechanics
     bool blockMeleeAttack(const MWWorld::Ptr& attacker, const MWWorld::Ptr& blocker, const MWWorld::Ptr& weapon,
         float damage, float attackStrength, const osg::Vec3f& hitPosition, int contactPart)
     {
+        auto& blockerStats = blocker.getClass().getCreatureStats(blocker);
+        const auto& attackerStats = attacker.getClass().getCreatureStats(attacker);
+        const bool adaptiveNpc = blocker.getClass().isNpc() && blocker != getPlayer()
+            && Settings::game().mDarkMessiahNpcCombat;
+        if (adaptiveNpc && attacker == getPlayer() && attackerStats.mBrutalFastStrike && !weapon.isEmpty())
+        {
+            const double now = MWBase::Environment::get().getWorld()->getTimeManager()->getSimulationTime();
+            blockerStats.mBrutalFastPressure = now - blockerStats.mBrutalLastFastPressureAt <= 1.8
+                ? std::min(3, blockerStats.mBrutalFastPressure + 1) : 1;
+            blockerStats.mBrutalLastFastPressureAt = now;
+            if (blockerStats.mBrutalFastPressure == 2)
+                blockerStats.mBrutalGuardReactAt = now + .12;
+        }
+        const bool npcGuard = adaptiveNpc && blockerStats.mBrutalNpcGuardRequested && blockerStats.mBrutalBlockRaised;
         bool carriesShield = false;
         if (blocker.getClass().hasInventoryStore(blocker))
         {
@@ -251,27 +303,66 @@ namespace MWMechanics
         }
         const bool playerGuard = blocker == getPlayer() && (Settings::game().mPlayerActiveShieldBlock
             || (!carriesShield && Settings::game().mDarkMessiahSwordParry));
-        if (!playerGuard && !Settings::game().mBrutalMeleeGeometry)
+        if (!playerGuard && !npcGuard && !Settings::game().mBrutalMeleeGeometry)
             return blockVanillaMeleeAttack(attacker, blocker, weapon, damage, attackStrength);
         if (!blocker.getClass().hasInventoryStore(blocker))
             return false;
 
-        MWMechanics::CreatureStats& blockerStats = blocker.getClass().getCreatureStats(blocker);
         blockerStats.mBrutalPerfectShieldBlock = false;
 
         if (blockerStats.getKnockedDown() // Used for both knockout or knockdown
             || blockerStats.getHitRecovery() || blockerStats.isParalyzed())
             return false;
 
-        const bool activeBlock = playerGuard;
+        const bool activeBlock = playerGuard || npcGuard;
         if (activeBlock && !blockerStats.mBrutalBlockRaised)
             return false;
 
-        if (!MWBase::Environment::get().getMechanicsManager()->isReadyToBlock(blocker))
+        if (!npcGuard && !MWBase::Environment::get().getMechanicsManager()->isReadyToBlock(blocker))
             return false;
 
-        if (activeBlock && blockerStats.mBrutalParry)
+        if (adaptiveNpc && MWBase::Environment::get().getWorld()->getTimeManager()->getSimulationTime()
+                < blockerStats.mBrutalGuardBrokenUntil)
+            return false;
+        if (activeBlock)
+        {
+            if (!isInFrontalGuard(attacker, blocker))
+            {
+                if (playerGuard && blockerStats.mBrutalParry)
+                    blockerStats.mBrutalParryResult = BrutalParry_Broken;
+                return false;
+            }
+            const double now = MWBase::Environment::get().getWorld()->getTimeManager()->getSimulationTime();
+            const bool timedPlayerGuard = playerGuard
+                && now - blockerStats.mBrutalBlockRaisedAt <= Settings::game().mDarkMessiahParryWindow.get();
+            if (now < blockerStats.mBrutalGuardBrokenUntil)
+                return false;
+            if (brutalGuardBreakingAttack(attacker, attackStrength) && !timedPlayerGuard)
+            {
+                spendBrutalBlockStamina(attacker, blocker, true);
+                openBrutalGuard(blocker);
+                if (Settings::game().mBrutalCombatSounds)
+                    MWBase::Environment::get().getSoundManager()->playSound3D(blocker,
+                        ESM::RefId::stringRefId("Brutal Sword Contact"), 1.f, 1.f);
+                return false; // The heavy blow opens the guard and reaches the body.
+            }
+        }
+        if (playerGuard && blockerStats.mBrutalParry)
             return parryMeleeAttack(attacker, blocker, damage);
+        if (npcGuard && blockerStats.mBrutalParry)
+        {
+            auto& inventory = blocker.getClass().getInventoryStore(blocker);
+            const auto right = inventory.getSlot(MWWorld::InventoryStore::Slot_CarriedRight);
+            if (right == inventory.end() || right->getType() != ESM::Weapon::sRecordId)
+                return false;
+            MWWorld::Ptr parrying = *right;
+            reduceWeaponCondition(damage, true, parrying, blocker);
+            if (Settings::game().mBrutalCombatSounds)
+                MWBase::Environment::get().getSoundManager()->playSound3D(blocker,
+                    ESM::RefId::stringRefId("Brutal Sword Contact"), 1.f, 1.f);
+            spendBrutalBlockStamina(attacker, blocker, false);
+            return true;
+        }
 
         MWWorld::InventoryStore& inv = blocker.getClass().getInventoryStore(blocker);
         MWWorld::ContainerStoreIterator shield = inv.getSlot(MWWorld::InventoryStore::Slot_CarriedLeft);
@@ -291,6 +382,12 @@ namespace MWMechanics
         // independent of the optional accuracy setting and never turns a body hit into an RNG block.
         else if (contactPart != ESM::PRT_Shield)
             return false;
+        if (adaptiveNpc && !npcGuard && brutalGuardBreakingAttack(attacker, attackStrength))
+        {
+            spendBrutalBlockStamina(attacker, blocker, true);
+            openBrutalGuard(blocker);
+            return false;
+        }
         const MWWorld::Store<ESM::GameSetting>& gmst
             = MWBase::Environment::get().getESMStore()->get<ESM::GameSetting>();
         {
@@ -340,12 +437,16 @@ namespace MWMechanics
             float fatigueLoss = fFatigueBlockBase + normalizedEncumbrance * fFatigueBlockMult;
             if (!weapon.isEmpty())
                 fatigueLoss += weapon.getClass().getWeight(weapon) * attackStrength * fWeaponFatigueBlockMult;
-            // Dark Messiah's player shield block costs no stamina.
-            if (blocker != MWMechanics::getPlayer() || !Settings::game().mBrutalStamina)
+            // Disabling the replacement stamina system restores Morrowind's
+            // original shield-block cost instead of making shield impacts free.
+            if (!Settings::game().mBrutalStamina || (!activeBlock && !adaptiveNpc))
             {
                 fatigue.setCurrent(fatigue.getCurrent() - fatigueLoss);
                 blockerStats.setFatigue(fatigue);
             }
+            else
+                spendBrutalBlockStamina(attacker, blocker,
+                    attacker.getClass().getCreatureStats(attacker).mBrutalGuardBreakingAttack);
 
             if (activeBlock)
             {

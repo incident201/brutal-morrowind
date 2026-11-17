@@ -261,7 +261,7 @@ class GuardImporter(Importer):
             else:
                 ctrl=nif.NiKeyframeController(data=nif.NiKeyframeData(),start_time=0.,stop_time=float(max(row[0] for row in rows)),flags=12)
                 stream.root.extra_datas.append(nif.NiStringExtraData(string_data=name));stream.root.controllers.append(ctrl)
-            armed=group.endswith('1h') or group in ('weapononehand','brutal_hit','shield') or group.startswith(('hit','brutal_clinch'))
+            armed=group.endswith('1h') or group in ('weapononehand','brutal_hit','shield','brutal_weapon_guard') or group.startswith(('hit','brutal_clinch'))
             q=q if armed else matrix_quat(self.nodes[name].rotation)
             ctrl.data.rotations=nif.NiRotData(keys=np.array([[rows[0][0],*q],[rows[-1][0],*q]],np.float32))
             ctrl.data.translations=nif.NiPosData(keys=np.array([[0,*self.nodes[name].translation]],np.float32))
@@ -350,7 +350,16 @@ def main():
     i.weapon_guard(out)
     i.clinch(out)
     t,p=i.segment(i.clip('guard','@Block'))
-    i.write(out,'shield',[(0,t,p)],[(0,'start'),(0,'block start'),(float(t[-1]),'block stop'),(float(t[-1]),'stop')])
+    # @Block is the shield response: brace its early raised pose, not the
+    # middle of the later recoil. The normal stock block keys stay unchanged.
+    i.write(out,'shield',[(0,t,p)],[(0,'start'),(0,'block start'),
+            (float(t[-1])*.2,'brutal guard hold'),(float(t[-1]),'block stop'),(float(t[-1]),'stop')])
+    # Weapon-only defence uses the original guard's frontal sword parry.
+    # Keep the whole source clip and mark the authored braced pose explicitly,
+    # so the runtime does not guess a sample inside the shield animation.
+    t,p=i.segment(i.clip('guard','anm_parry_C'))
+    i.write(out,'brutal_weapon_guard',[(0,t,p)],[(0,'start'),
+            (float(t[-1])*.35,'brutal guard hold'),(float(t[-1]),'stop')])
     for group,clip,duration in [('brutal_hit','@Hit_Front_medium',5/6),('hit1','anm_Hit_Body_Front_small',None),
                                 ('hit2','anm_Hit_Body_left_small',None),('hit3','anm_Hit_Body_right_small',None),
                                 ('hit4','anm_Hit_Body_back_small',None),('hit5','anm_Hit_head_Front_small',None)]:
@@ -382,7 +391,7 @@ def main():
         'source_sha256':hashlib.sha256((a.work_dir/'npc_guard_combat_animations.mdl').read_bytes()).hexdigest(),
         'outputs':{path.name:hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(out.iterdir()) if path.suffix in ('.kf','.yaml')},
         'inputs':{str(path):hashlib.sha256(path.read_bytes()).hexdigest() for path in (a.skeleton,a.grip_animation,i.attachment_model)},
-        'coverage':{'converted':['idle','one-handed sword','shield block','small upper-body hit reactions','heavy full-body kick reaction','walk/run in four directions'],
+        'coverage':{'converted':['idle','one-handed sword','shield block','frontal weapon guard','small upper-body hit reactions','heavy full-body kick reaction','walk/run in four directions'],
                     'fallback':['two-handed melee','hand-to-hand','bow','crossbow','thrown weapons','spell casting','sneak','jump','death/get-up']},
         'groups':i.group_records,'arm_scales':i.arm_scale,
         'attachments':{name:{'parent':parent,'matrix':matrix.tolist()} for name,(parent,matrix) in i.attachments.items() if name in ('RightHand','LeftShield')},

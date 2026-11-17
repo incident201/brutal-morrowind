@@ -12,6 +12,8 @@
 
 #include "../mwworld/class.hpp"
 #include "../mwworld/esmstore.hpp"
+#include "../mwworld/datetimemanager.hpp"
+#include "../mwworld/inventorystore.hpp"
 
 #include "../mwbase/dialoguemanager.hpp"
 #include "../mwbase/environment.hpp"
@@ -131,16 +133,28 @@ namespace MWMechanics
         // Get or create temporary storage
         AiCombatStorage& storage = state.get<AiCombatStorage>();
 
+        auto& actorStats = actor.getClass().getCreatureStats(actor);
+        const auto clearDefence = [&] {
+            actorStats.mBrutalNpcGuardRequested = false;
+            actorStats.mBrutalGuardBreakingAttack = false;
+            actorStats.mBrutalFastPressure = 0;
+        };
         // No combat for dead creatures
-        if (actor.getClass().getCreatureStats(actor).isDead())
+        if (actorStats.isDead())
+        {
+            clearDefence();
             return true;
+        }
 
         const MWWorld::Ptr target = getTarget(); // The target to follow
 
         // Stop if the target doesn't exist
         if (target.isEmpty() || !target.getCellRef().getCount() || !target.getRefData().isEnabled()
             || target.getClass().getCreatureStats(target).isDead() || !target.getRefData().getBaseNode())
+        {
+            clearDefence();
             return true;
+        }
 
         if (actor == target) // This should never happen.
             return true;
@@ -170,7 +184,7 @@ namespace MWMechanics
             }
 
             storage.updateCombatMove(duration);
-            storage.updateDarkMessiah(duration, target);
+            storage.updateDarkMessiah(duration, actor, target, characterController);
             storage.mRotateMove = false;
             if (storage.mReadyToAttack)
                 updateActorsMovement(actor, duration, storage);
@@ -180,6 +194,7 @@ namespace MWMechanics
         }
         else
         {
+            clearDefence();
             updateFleeing(actor, target, duration, characterController.getSupportedMovementDirections(), storage);
         }
         storage.mActionCooldown -= duration;
@@ -576,6 +591,11 @@ namespace MWMechanics
 
         if (darkMessiahMelee(actor, isDistantCombat))
         {
+            if (actor.getClass().getCreatureStats(actor).mBrutalNpcGuardRequested)
+            {
+                mMovement.mPosition[0] = mMovement.mPosition[1] = 0.f;
+                return;
+            }
             // Dark Messiah's guards hold their ground and face the target. They do not chain
             // 0.1-0.2 s side steps: a dodge is a deliberate step, at most once per DodgeDelay,
             // against an incoming attack (base_dodge_chance) or preventively.
@@ -697,10 +717,57 @@ namespace MWMechanics
         }
     }
 
-    void AiCombatStorage::updateDarkMessiah(float duration, const MWWorld::Ptr& target)
+    void AiCombatStorage::updateDarkMessiah(float duration, const MWWorld::Ptr& actor,
+        const MWWorld::Ptr& target, CharacterController& characterController)
     {
-        if (!Settings::game().mDarkMessiahNpcCombat)
+        auto& stats = actor.getClass().getCreatureStats(actor);
+        bool ranged = false;
+        if (mCurrentAction)
+            mCurrentAction->getCombatRange(ranged);
+        const auto& targetStats = target.getClass().getCreatureStats(target);
+        if (!darkMessiahMelee(actor, ranged) || !mCurrentAction || !mCurrentAction->getWeapon()
+            || !mCurrentAction->isAttackingOrSpell() || isFleeing())
+        {
+            stats.mBrutalNpcGuardRequested = false;
+            stats.mBrutalGuardBreakingAttack = false;
+            mDmTargetGuardTime = 0.f;
             return;
+        }
+        const double now = MWBase::Environment::get().getWorld()->getTimeManager()->getSimulationTime();
+        const bool exhausted = Settings::game().mBrutalStamina && stats.getFatigue().getCurrent() <= 0.f;
+        const bool available = !stats.isDead() && !stats.isParalyzed() && !stats.getKnockedDown()
+            && !stats.mBrutalClinchActive && now >= stats.mBrutalGuardBrokenUntil && !exhausted
+            && mLOS && getDistanceToBounds(actor, target) <= mAttackRange + 48.f;
+        mDmTargetGuardTime = targetStats.mBrutalBlockRaised && target == getPlayer()
+            ? mDmTargetGuardTime + duration : 0.f;
+        if (stats.mBrutalNpcGuardRequested)
+        {
+            // A visible windup/release is still pressure even after the player
+            // has released the input. Keep the braced defence through that
+            // attack, while the absolute cap still forces a counterattack gap.
+            const bool incomingAttack
+                = MWBase::Environment::get().getMechanicsManager()->isAttackingOrSpell(target);
+            if (!available || now >= stats.mBrutalGuardUntil
+                || (now - stats.mBrutalLastFastPressureAt > 1.2 && !incomingAttack))
+            {
+                stats.mBrutalNpcGuardRequested = false;
+                stats.mBrutalGuardCooldownUntil = std::max(stats.mBrutalGuardCooldownUntil, now + .8);
+                mAttackCooldown = std::min(mAttackCooldown, .25f);
+            }
+        }
+        else if (available && target == getPlayer() && stats.mBrutalFastPressure >= 2
+            && now - stats.mBrutalLastFastPressureAt <= 1.8 && now >= stats.mBrutalGuardReactAt
+            && now >= stats.mBrutalGuardCooldownUntil
+            && characterController.readyToStartBrutalGuard())
+        {
+            stats.mBrutalNpcGuardRequested = true;
+            stats.mBrutalGuardUntil = now + 2.4;
+            stats.mBrutalFastPressure = 0;
+            mAttack = false;
+            stats.setAttackingOrSpell(false);
+            mMovement.mPosition[0] = mMovement.mPosition[1] = 0.f;
+            stopCombatMove();
+        }
         auto& prng = MWBase::Environment::get().getWorld()->getPrng();
         mDmDodgeCooldown -= duration;
         mDmPreventiveTimer -= duration;
@@ -740,6 +807,8 @@ namespace MWMechanics
     void AiCombatStorage::startAttackIfReady(const MWWorld::Ptr& actor, CharacterController& characterController,
         const ESM::Weapon* weapon, bool distantCombat, bool canShout)
     {
+        if (actor.getClass().getCreatureStats(actor).mBrutalNpcGuardRequested)
+            return;
         if (mReadyToAttack && characterController.readyToStartAttack())
         {
             if (mAttackCooldown <= 0)
@@ -753,6 +822,9 @@ namespace MWMechanics
                 auto& prng = MWBase::Environment::get().getWorld()->getPrng();
                 mStrength = Misc::Rng::rollClosedProbability(prng);
                 const bool darkMessiah = darkMessiahMelee(actor, distantCombat);
+                auto& stats = actor.getClass().getCreatureStats(actor);
+                stats.mBrutalGuardBreakingAttack = darkMessiah && mDmTargetGuardTime >= 2.f;
+                mDmChargedHold = stats.mBrutalGuardBreakingAttack ? .45f : 0.f;
                 if (darkMessiah)
                     mStrength = 1.f; // guards play the whole authored wind-up
 
@@ -787,11 +859,17 @@ namespace MWMechanics
 
     void AiCombatStorage::updateAttack(const MWWorld::Ptr& actor, CharacterController& characterController)
     {
+        if (actor.getClass().getCreatureStats(actor).mBrutalNpcGuardRequested)
+            mAttack = false;
         if (mAttack)
         {
-            float attackStrength = characterController.calculateWindUp();
-            mAttack
-                = !characterController.readyToPrepareAttack() && attackStrength < mStrength && attackStrength != -1.f;
+            const float attackStrength = characterController.calculateWindUp();
+            const bool heavyHold = attackStrength >= 1.f && mDmChargedHold > 0.f;
+            if (heavyHold)
+                mDmChargedHold = std::max(0.f,
+                    mDmChargedHold - MWBase::Environment::get().getFrameDuration());
+            mAttack = !characterController.readyToPrepareAttack() && attackStrength != -1.f
+                && (attackStrength < mStrength || heavyHold);
         }
         actor.getClass().getCreatureStats(actor).setAttackingOrSpell(mAttack);
     }

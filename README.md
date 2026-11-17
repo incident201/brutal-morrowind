@@ -6,6 +6,16 @@ with Dark Messiah's own first-person animations. It is a fork of [OpenMW](https:
 
 No game files are included. Brutal Morrowind uses the games you own.
 
+The development branch includes changes beyond the published 0.2.1 packages:
+NPCs guard against repeated fast attacks, charged blows and kicks open their defence,
+and a prolonged player guard invites a charged counterattack. Block impacts drain
+both actors' stamina, with a greater cost for the attacker. Other living actors
+intercept NPC melee attacks without taking redirected damage.
+
+This branch uses **Dark Messiah import recipe 6** for separate weapon and shield
+guard animations. Its launcher asks to reimport older data. See `CHANGELOG.md`
+for the other unreleased changes.
+
 ## Requirements
 
 * Morrowind.

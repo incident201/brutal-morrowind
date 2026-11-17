@@ -1122,6 +1122,31 @@ namespace MWLua
             const auto& ptr = object.ptr();
             return ptr.getClass().isActor() && ptr.getClass().getCreatureStats(ptr).mBrutalBlockRaised;
         };
+        actor["_getBrutalCombatStateForAudit"] = [lua = context.mLua](const Object& object) {
+            const auto& ptr = object.ptr();
+            if (!ptr.getClass().isActor())
+                throw std::runtime_error("_getBrutalCombatStateForAudit requires an actor");
+            const auto& stats = ptr.getClass().getCreatureStats(ptr);
+            sol::table result(lua->unsafeState(), sol::create);
+            result["blockRequested"] = stats.mBrutalBlockRequested;
+            result["blockRaised"] = stats.mBrutalBlockRaised;
+            result["parry"] = stats.mBrutalParry;
+            result["blockRaisedAt"] = stats.mBrutalBlockRaisedAt;
+            result["fastStrike"] = stats.mBrutalFastStrike;
+            result["attacking"] = stats.getAttackingOrSpell();
+            result["hitRecovery"] = stats.getHitRecovery();
+            result["knockedDown"] = stats.getKnockedDown();
+            result["fatigue"] = stats.getFatigue().getCurrent();
+            result["maximumFatigue"] = stats.getFatigue().getModified();
+            result["fastPressure"] = stats.mBrutalFastPressure;
+            result["guardRequested"] = stats.mBrutalNpcGuardRequested;
+            result["guardUntil"] = stats.mBrutalGuardUntil;
+            result["guardCooldownUntil"] = stats.mBrutalGuardCooldownUntil;
+            result["guardBrokenUntil"] = stats.mBrutalGuardBrokenUntil;
+            result["guardBreakingAttack"] = stats.mBrutalGuardBreakingAttack;
+            result["guardBlocks"] = stats.mBrutalGuardBlocks;
+            return result;
+        };
 
         actor["addExternalVelocity"] = [context](const SelfObject& self, Misc::FiniteVec3f value) {
             const osg::Vec3f delta = value;

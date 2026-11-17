@@ -162,6 +162,17 @@ namespace MWMechanics
         std::string mBrutalClinchLastReason;
         osg::Vec3f mBrutalClinchVelocity; // World-space collision-resolved alignment only.
         bool mBrutalParried = false; // NPC: the player timed a parry of this actor's blow; recoil next update.
+        // Transient adaptive defence: pressure is observed from actual fast contacts,
+        // not the player's input; none of these decisions survives a saved game.
+        int mBrutalFastPressure = 0;
+        double mBrutalLastFastPressureAt = -1e9;
+        double mBrutalGuardReactAt = 0.0;
+        bool mBrutalNpcGuardRequested = false;
+        double mBrutalGuardUntil = 0.0;
+        double mBrutalGuardCooldownUntil = 0.0;
+        double mBrutalGuardBrokenUntil = 0.0;
+        bool mBrutalGuardBreakingAttack = false; // Latched when the NPC chooses its next attack.
+        int mBrutalGuardBlocks = 0;
         // Kinetic player gait chosen by Lua (0 = Morrowind run stance, 1 walk, 2 run, 3 sprint).
         int mBrutalGait = 0;
 
