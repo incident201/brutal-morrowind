@@ -13,5 +13,6 @@ PLAYER, NPC, CREATURE: scripts/brutal_morrowind/combat_effects.lua
 PLAYER: scripts/brutal_morrowind/adrenaline.lua
 PLAYER: scripts/brutal_morrowind/feedback_player.lua
 PLAYER: scripts/brutal_morrowind/clinch.lua
+PLAYER: scripts/brutal_morrowind/camera_motion.lua
 
 GLOBAL: scripts/brutal_morrowind/kick_global.lua

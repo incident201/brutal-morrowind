@@ -30,6 +30,8 @@ namespace Settings
         SettingValue<bool> mBrutalRagdoll{ mIndex, "Game", "brutal ragdoll" };
         SettingValue<bool> mBrutalDynamicProps{ mIndex, "Game", "brutal dynamic props" };
         SettingValue<bool> mBrutalEquipmentPhysics{ mIndex, "Game", "brutal equipment physics" };
+        SettingValue<float> mBrutalRagdollWeaponDrop{ mIndex, "Game", "brutal ragdoll weapon drop",
+            makeClampSanitizerFloat(0, 1) };
         SettingValue<bool> mBrutalMeleeGeometry{ mIndex, "Game", "brutal melee geometry" };
         SettingValue<bool> mBrutalWallBounce{ mIndex, "Game", "brutal wall bounce" };
         SettingValue<bool> mBrutalStamina{ mIndex, "Game", "brutal stamina" };

@@ -1693,6 +1693,10 @@ namespace MWWorld
             const Ptr item = *equipped;
             if (std::any_of(candidates.begin(), candidates.end(), [&](const auto& candidate) { return candidate.item == item; }))
                 continue;
+            // Each held item falls out of the hands only with the configured chance;
+            // otherwise it stays equipped and the ragdoll keeps holding it.
+            if (Misc::Rng::rollProbability(getPrng()) >= Settings::game().mBrutalRagdollWeaponDrop.get())
+                continue;
             if (item.getType() == ESM::Weapon::sRecordId)
             {
                 const auto* type = MWMechanics::getWeaponType(item.get<ESM::Weapon>()->mBase->mData.mType);

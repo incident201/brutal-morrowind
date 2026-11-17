@@ -1,4 +1,5 @@
--- The configured number of damaging hits fills one charge; a charged strike spends it.
+-- The configured number of fast hits fills one charge; a charged hit or a perfect
+-- shield block counts double. A full-adrenaline power strike spends it.
 local self=require('openmw.self')
 local core=require('openmw.core')
 local types=require('openmw.types')
@@ -8,7 +9,10 @@ local hud=require('scripts.brutal_morrowind.adrenaline_ui')
 local fx=require('scripts.brutal_morrowind.adrenaline_fx')
 local settings=require('scripts.brutal_morrowind.settings')
 local CAPACITY,MULTIPLIER,MIN_STRENGTH=100,1,.8
-local function gain() return CAPACITY/settings.get('adrenalineHits') end
+local function gain() return CAPACITY/settings.get('adrenalineFastHits') end
+local CHARGED_SHARE=2
+-- A won clinch or a kick that sends a living opponent into a fall.
+local BONUS_SHARE=1/3
 -- DM's base charge is20 points: its1-point loss every20 simulation seconds
 -- becomes5 points on this percent gauge. An actual increase resets the timer.
 local DECAY_INTERVAL,DECAY_AMOUNT=20,5
@@ -39,13 +43,6 @@ for _,name in ipairs({'ShortBladeOneHand','LongBladeOneHand','LongBladeTwoHand',
 local function melee(weapon)
     return weapon~=nil and weapon:isValid() and types.Weapon.objectIsInstance(weapon)
         and MELEE[types.Weapon.record(weapon).type]==true
-end
-local function fastShare(weapon)
-    if not melee(weapon) then return 1 end
-    local kind=types.Weapon.record(weapon).type
-    if kind==types.Weapon.TYPE.ShortBladeOneHand then return .5/1.5 end
-    if kind==types.Weapon.TYPE.SpearTwoWide or kind==types.Weapon.TYPE.BluntTwoWide then return .5 end
-    return .5/3
 end
 local function visible()
     return settings.get('adrenalineEnabled') and not types.Actor.isDead(self) and not I.UI.getMode() and I.UI.isHudVisible()
@@ -128,6 +125,15 @@ local function superKickResolved(e)
     clearReservation()
     self:sendEvent('BrutalAdrenalineSpent',{kickId=e.kickId,superKick=true})
 end
+local perfectBlocks=0
+local function add(amount)
+    local before=meter
+    meter=math.min(CAPACITY,meter+amount)
+    if meter>=CAPACITY-.001 then meter=CAPACITY end
+    if meter>before then decayElapsed=0 end
+    gains=gains+1
+    if before<CAPACITY and meter>=CAPACITY then self:sendEvent('BrutalAdrenalineReady',{}) end
+end
 local function damaged(e)
     if not settings.get('adrenalineEnabled') then return end
     if types.Actor.isDead(self) or not e.successful or not e.targetWasAlive
@@ -139,13 +145,20 @@ local function damaged(e)
     if not e.attackId or e.attackId==0 or seen[e.attackId] then return end
     seen[e.attackId]=true;seenOrder[#seenOrder+1]=e.attackId
     if #seenOrder>128 then seen[table.remove(seenOrder,1)]=nil end
-    local before=meter
-    -- first_basic.qct adrenalineadd: a click gives .5 where a charged swing gives 3 (sword), 1.5 (daggers), 1 (staff).
-    meter=meter+gain()*(e.fast and fastShare(e.weapon) or 1)
-    if meter>=CAPACITY-.001 then meter=CAPACITY end
-    if meter>before then decayElapsed=0 end
-    gains=gains+1
-    if before<CAPACITY and meter>=CAPACITY then self:sendEvent('BrutalAdrenalineReady',{}) end
+    add(gain()*(e.fast and 1 or CHARGED_SHARE))
+end
+-- The player's shield met a blow inside the perfect window (native receipt).
+local seenBlocks,blockOrder={},{}
+local function perfectBlock(e)
+    if not settings.get('adrenalineEnabled') or types.Actor.isDead(self) then return end
+    local id=e and e.attackId
+    if id and id~=0 then
+        if seenBlocks[id] then return end
+        seenBlocks[id]=true;blockOrder[#blockOrder+1]=id
+        if #blockOrder>64 then seenBlocks[table.remove(blockOrder,1)]=nil end
+    end
+    perfectBlocks=perfectBlocks+1
+    add(gain()*CHARGED_SHARE)
 end
 local function confirmedFinisher(e)
     if not settings.get('finisherEnabled') or not settings.get('adrenalineEnabled') or not settings.get('slowMotionEnabled') then return end
@@ -161,7 +174,7 @@ local function confirmedFinisher(e)
     core.sendGlobalEvent('BrutalAdrenalineSlowMotion',
         {player=self,attackId=slowAttackId,duration=SLOW_DURATION,factor=SLOW_FACTOR})
 end
--- Fill the gauge at once (a confirmed ledge kick, or the console), or set it to an
+-- Fill the gauge at once (the console), or set it to an
 -- amount. Readiness plays the usual cue and the fullscreen effect follows the ready state.
 local function fill(amount)
     if not settings.get('adrenalineEnabled') or types.Actor.isDead(self) then return false end
@@ -188,19 +201,24 @@ local function resolved(e)
 end
 return {
     interfaceName='BrutalAdrenaline',
-    interface={version=4,fill=fill,reserveSuperKick=reserveSuperKick,status=function()
+    interface={version=5,bonus=function() self:sendEvent('BrutalAdrenalineBonus',{}) end,fill=fill,reserveSuperKick=reserveSuperKick,status=function()
         return {amount=meter,capacity=CAPACITY,ready=meter>=CAPACITY and not pendingKick,apiAvailable=available,
             superKickPending=pendingKick,superKicks=superKicks,rejectedKicks=rejectedKicks,lastKickId=lastKickId,
             token=available and query(self) or '',gains=gains,spent=spent,hudVisible=hud.isVisible(),
             fxVisible=fx.isVisible(),decayElapsed=decayElapsed,decayInterval=DECAY_INTERVAL,
             arrestDeferred=arrestEffectState==true,
-            decayAmount=DECAY_AMOUNT,hitsToReady=math.ceil((CAPACITY-meter)/gain()-.001),
+            decayAmount=DECAY_AMOUNT,hitsToReady=math.ceil((CAPACITY-meter)/gain()-.001),perfectBlocks=perfectBlocks,
             slowPending=slowAttackId~=nil and not slowActive,slowActive=slowActive,slowStarted=slowStarted,slowEnded=slowEnded,
             slowDelay=SLOW_DELAY,slowDuration=SLOW_DURATION,slowFactor=SLOW_FACTOR}
     end},
     eventHandlers={BrutalDamagingHit=damaged,BrutalMeleeResolved=resolved,
         BrutalSuperKickResolved=superKickResolved,
         BrutalAdrenalineFill=function() fill() end,
+        -- A won clinch, or a kick that drops an opponent over a ledge or an obstacle: a third of the gauge.
+        BrutalAdrenalineBonus=function()
+            if settings.get('adrenalineEnabled') and not types.Actor.isDead(self) then add(CAPACITY*BONUS_SHARE) end
+        end,
+        BrutalPerfectShieldBlock=perfectBlock,
         BrutalFinisherConfirmed=confirmedFinisher,
         BrutalAdrenalineSlowMotionStarted=function(e)
             if not settings.get('adrenalineEnabled') or not settings.get('slowMotionEnabled') then cancelSlowMotion('disabled');return end
@@ -252,6 +270,7 @@ return {
             gains,spent,serial=0,0,0
             slowStarted,slowEnded=0,0
             seen,seenOrder={},{}
+            seenBlocks,blockOrder,perfectBlocks={},{},0
             seenFinishers,finisherOrder={},{}
             hud.destroy()
             fx.destroy()

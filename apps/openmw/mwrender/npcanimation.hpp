@@ -204,6 +204,8 @@ namespace MWRender
         // A secondary normal skeleton supplies only the world-space torso and legs.
         // It has no inventory/text-key listener and cannot drive combat or actor motion.
         bool mBodyAwareness = false;
+        bool mBeastRace = false; // Khajiit/Argonian anatomy: keeps the Morrowind gait.
+        bool skipAdditionalAnimation(const VFS::Path::Normalized& kf) const override;
         bool mBodyAwarenessHiddenForClinch = false;
         void updateBodyAwarenessClinchVisibility();
         osg::ref_ptr<osg::MatrixTransform> mBodyAwarenessRoot;
@@ -296,6 +298,7 @@ namespace MWRender
             unsigned int frame = 0;
             int phase = 0;
             float elapsed = 0.f, sourceElapsed = 0.f, weight = 0.f, rawGap = 0.f, finalGap = 0.f, cameraError = 0.f;
+            float exposureScale = 1.f; // Share of the fit kept to keep the shoulders out of view.
             osg::Vec3f correction, requestedCorrection;
             osg::Vec3f playerHilt, playerAxis, opponentHilt, opponentAxis;
             osg::Vec3f playerRange, opponentRange, playerContact, opponentContact;

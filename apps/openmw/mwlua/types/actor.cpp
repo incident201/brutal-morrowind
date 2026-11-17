@@ -492,6 +492,13 @@ namespace MWLua
                 {"sparkEffects", g.mBrutalSparkEffects}, {"kickAlwaysRagdoll", g.mBrutalKickAlwaysRagdoll}
             };
         };
+        actor["setBrutalRagdollWeaponDrop"] = [context](const SelfObject& self, float chance) {
+            if (self.ptr() != MWMechanics::getPlayer())
+                throw std::runtime_error("Brutal options require player SELF");
+            context.mLuaManager->addAction(
+                [chance] { Settings::game().mBrutalRagdollWeaponDrop.set(std::clamp(chance, 0.f, 1.f)); });
+        };
+        actor["getBrutalRagdollWeaponDrop"] = [] { return Settings::game().mBrutalRagdollWeaponDrop.get(); };
         actor["getBrutalOption"] = [initialiseOptions](std::string name) -> bool {
             initialiseOptions();
             if (!brutalOptions.contains(name)) throw std::runtime_error("Unknown Brutal option: " + name);
@@ -724,6 +731,7 @@ namespace MWLua
             result["rawGap"] = a.rawGap;
             result["finalGap"] = a.finalGap;
             result["cameraError"] = a.cameraError;
+            result["exposureScale"] = a.exposureScale;
             result["correction"] = a.correction;
             result["requestedCorrection"] = a.requestedCorrection;
             result["playerHilt"] = a.playerHilt;

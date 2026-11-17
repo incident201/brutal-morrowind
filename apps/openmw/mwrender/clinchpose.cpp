@@ -1,8 +1,11 @@
 #include "npcanimation.hpp"
+#include "camera.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <limits>
+#include <vector>
 
 #include <osg/FrameStamp>
 #include <osg/Geometry>
@@ -229,6 +232,9 @@ namespace MWRender
             correction = mClinchExitCorrection * fade;
             audit.weight = fade;
         }
+        // Diagnostics only: compare the authored contest pose without any fit.
+        if (std::getenv("BRUTAL_CLINCH_FIT_DIAGNOSTICS_OFF"))
+            correction = {};
         audit.correction = correction;
         if (correction.length2() < 1e-8f && !audit.active)
             return;
@@ -242,6 +248,54 @@ namespace MWRender
             clavicleNode("Bip01 L Clavicle"), clavicleNode("Bip01 R Clavicle") };
         if (!clavicles[0] || !clavicles[1])
             return;
+        // The fit shifts both clavicles rigidly. It must never bring the arms' own
+        // shoulder ends into the first-person view (a sloped stair, a spear held
+        // wide): shorten the shift until no more of the shoulders is on screen
+        // than in the authored pose.
+        audit.exposureScale = 1.f;
+        if (auto* camera = world->getCamera())
+        {
+            const osg::Matrixf view = camera->getViewMatrix();
+            double fov = mFirstPersonFieldOfView, aspect = 1., near = 1., far = 8192.;
+            camera->getProjectionMatrix().getPerspective(fov, aspect, near, far);
+            const float tanY = std::tan(osg::DegreesToRadians(float(mFirstPersonFieldOfView)) * .5f) * 1.05f;
+            const float tanX = tanY * float(aspect);
+            std::vector<osg::Vec3f> points;
+            for (const char* side : { "Bip01 L ", "Bip01 R " })
+            {
+                const auto clavicle = getBoneWorldMatrix(std::string(side) + "Clavicle");
+                const auto upper = getBoneWorldMatrix(std::string(side) + "UpperArm");
+                const auto fore = getBoneWorldMatrix(std::string(side) + "Forearm");
+                if (!clavicle || !upper || !fore)
+                    continue;
+                for (float t : { .5f, 1.f })
+                    points.push_back(clavicle->getTrans() * (1.f - t) + upper->getTrans() * t);
+                for (float t : { .25f, .5f, .75f })
+                    points.push_back(upper->getTrans() * (1.f - t) + fore->getTrans() * t);
+            }
+            // Sleeves and pauldrons are thicker than the bones: test spheres, not points.
+            constexpr float radius = 7.f;
+            const float slackX = radius * std::sqrt(1.f + tanX * tanX), slackY = radius * std::sqrt(1.f + tanY * tanY);
+            const auto visible = [&](const osg::Vec3f& shift) {
+                int count = 0;
+                for (const auto& point : points)
+                {
+                    const osg::Vec3f v = (point + shift) * view;
+                    const float depth = -v.z();
+                    if (depth > float(near) - radius && std::abs(v.x()) < depth * tanX + slackX
+                        && std::abs(v.y()) < depth * tanY + slackY)
+                        ++count;
+                }
+                return count;
+            };
+            const int authored = visible(osg::Vec3f());
+            float scale = 1.f;
+            while (scale > 0.f && visible(correction * scale) > authored)
+                scale = std::max(0.f, scale - .125f);
+            audit.exposureScale = scale;
+            correction *= scale;
+            audit.correction = correction;
+        }
         for (auto* clavicle : clavicles)
         {
             auto paths = clavicle->getParentalNodePaths();
@@ -253,7 +307,9 @@ namespace MWRender
             paths.front().pop_back();
             const osg::Matrixf parentInverse = osg::Matrixf::inverse(osg::computeLocalToWorld(paths.front()));
             const osg::Matrixf source = clavicle->getMatrix();
-            mClinchSourcePose.emplace_back(clavicle, source);
+            const auto wall = std::find_if(mSwordWallSourcePose.begin(), mSwordWallSourcePose.end(),
+                [clavicle](const auto& entry) { return entry.first.get() == clavicle; });
+            mClinchSourcePose.emplace_back(clavicle, wall == mSwordWallSourcePose.end() ? source : wall->second);
             osg::Matrixf fitted = source;
             fitted.setTrans(source.getTrans() + osg::Matrixf::transform3x3(correction, parentInverse));
             clavicle->setMatrix(fitted);

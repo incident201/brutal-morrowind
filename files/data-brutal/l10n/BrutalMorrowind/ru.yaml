@@ -21,12 +21,10 @@ guaranteedHits: 100% шанс попадания в ближнем бою
 guaranteedHitsDescription: "Выключите, чтобы вернуть исходный шанс попадания по навыкам и усталости."
 meleeGeometry: Контакт оружия и широкие удары
 meleeGeometryDescription: "Попадания по видимой модели оружия и области взмаха."
-equipmentPhysics: Физика выпавшего снаряжения
-equipmentPhysicsDescription: "Физика оружия и щитов, выпавших из ragdoll."
 ragdollEnabled: Ragdoll
-ragdollEnabledDescription: "Физические падения NPC и существ."
-ragdollEnhancements: Улучшения ragdoll
-ragdollEnhancementsDescription: "Плавучесть и улучшенная реакция тел на столкновения. Требует ragdoll."
+ragdollEnabledDescription: "Физические падения NPC и существ, включая улучшения тел, пределы суставов, физику выпавшего снаряжения и подъём живых NPC (подъёму нужны анимации Dark Messiah)."
+ragdollWeaponDrop: Шанс выпадения оружия, %
+ragdollWeaponDropDescription: "Шанс, что каждое оружие или щит выпадет из рук, когда NPC переходит в ragdoll."
 dynamicProps: Физика предметов мира
 dynamicPropsDescription: "Удары сдвигают лежащие предметы."
 movementEnabled: Ходьба, бег и спринт
@@ -83,20 +81,10 @@ clinchFxEnabled: Размытие после клинча
 clinchFxEnabledDescription: "Краткое размытие после проигранного клинча."
 superKickSpeed: Импульс адреналинового пинка
 superKickSpeedDescription: "Скорость отбрасывания сверхпинком. Обычный пинок — 460 ед/с."
-adrenalineHits: Ударов до полного адреналина
-adrenalineHitsDescription: "Число заряженных попаданий до полного заряда. Быстрые дают меньше."
+adrenalineFastHits: Быстрых ударов до полного адреналина
+adrenalineFastHitsDescription: "Число быстрых попаданий до полного заряда. Заряженный удар или идеальный блок щитом считаются за два."
 adrenalineDecay: Убывание адреналина
 adrenalineDecayDescription: "Заряд постепенно убывает вне боя."
-npcStandupEnabled: Анимации подъёма NPC
-npcStandupEnabledDescription: "Подъём живых NPC. Нужны ragdoll и анимации Dark Messiah."
-ragdollSoftStops: Мягкие пределы суставов ragdoll
-ragdollSoftStopsDescription: "Мягкое ограничение суставов. Нужны улучшения ragdoll."
-ragdollNeutralPose: Нейтральная поза ragdoll
-ragdollNeutralPoseDescription: "Естественная поза суставов. Нужны улучшения ragdoll."
-ragdollLimbResponse: Реакция конечностей ragdoll
-ragdollLimbResponseDescription: "Реакция конечностей на импульсы. Нужны улучшения ragdoll."
-ragdollSelfCollision: Самостолкновения ragdoll
-ragdollSelfCollisionDescription: "Столкновения частей одного тела. Нужны улучшения ragdoll."
 finisherEnabled: Адреналиновые добивания оружием
 finisherEnabledDescription: "Полный заряд даёт смертельный заряженный удар оружием."
 superKickEnabled: Адреналиновый сверхпинок
@@ -111,3 +99,5 @@ kickBindingDescription: "Нажмите и задайте кнопку; Esc — 
 sprintBinding: "Кнопка спринта"
 
 sprintBindingDescription: "Нажмите и задайте кнопку; Esc — убрать."
+cameraMotionMovement: Покачивание камеры при движении
+cameraMotionMovementDescription: "Покачивание и наклоны камеры Dark Messiah при ходьбе, беге, спринте и приземлении. Движения камеры при действиях остаются."

@@ -991,6 +991,23 @@ namespace MWPhysics
         }
     }
 
+    bool PhysicsSystem::tripObstacleBehind(
+        const osg::Vec3f& position, const osg::Vec3f& direction, const osg::Vec3f& half, float units) const
+    {
+        // Furniture, crates, rocks and steps are world statics or loose props; the
+        // terrain, doors and actors are not obstacles. The sweeps start above the
+        // stepper's reach so floor seams and ordinary slopes never count.
+        for (float height : { .24f, .42f, .6f })
+        {
+            const osg::Vec3f from = position + osg::Vec3f(0, 0, 2.f * half.z() * height);
+            const auto hit = castSphere(from, from + direction * (50.f * units), half.x() * .5f, CollisionType_World);
+            // Step edges and stair ramps count; only a near-level surface (a floor) does not.
+            if (hit.mHit && hit.mHitNormal.z() < .95f)
+                return true;
+        }
+        return false;
+    }
+
     bool PhysicsSystem::applyNpcKick(const MWWorld::Ptr& ptr, const osg::Vec3f& kick, const MWWorld::Ptr& attacker, bool continuing,
         bool knockDown, bool slideTrip)
     {
@@ -1033,10 +1050,20 @@ namespace MWPhysics
         bool ledge=Settings::game().mBrutalRagdoll && (fullKnockdown || ((knockDown || actor->getOnGround() || continuing)
             && !world->isSwimming(ptr) && !world->isFlying(ptr)));
         if (isCreature && (!rig || (immobile && !superKick))) ledge=false;
-        if (ledge && !knockDown && castSphere(chest,chest+direction*(60.f*units),half.x()*.8f,mask).mHit) ledge=false;
+        // A kick needs the void behind the target, or something below the shoulders
+        // to trip over: a table, crate, bed, chair, waist-high rock or a stair flight.
+        // Anything reaching the shoulders is a wall and keeps the ordinary push.
+        bool trip=false;
+        if (ledge && !knockDown)
+        {
+            const osg::Vec3f shoulders=position+osg::Vec3f(0,0,1.6f*half.z());
+            if (castSphere(shoulders,shoulders+direction*(60.f*units),half.x()*.5f,mask).mHit) ledge=false;
+            else trip=castSphere(chest,chest+direction*(60.f*units),half.x()*.8f,mask).mHit
+                || tripObstacleBehind(position,direction,half,units);
+        }
         const osg::Vec3f side(-direction.y(),direction.x(),0);
         // A knockdown falls on open ground; only a kick needs the void behind the target.
-        if (ledge && !knockDown)
+        if (ledge && !knockDown && !trip)
             for (float lateral : {-0.7f,0.f,0.7f})
             {
                 const auto p=position+direction*(60.f*units)+side*(half.x()*lateral);
@@ -1168,7 +1195,8 @@ namespace MWPhysics
             push->second.peakZ = push->second.previousZ = body.getDynamics()[0].z();
             push->second.knockDown = true;
         }
-        world->releaseNpcRagdollEquipment(ptr);
+        // createNpcRagdoll already rolled this body's equipment release; an existing
+        // ragdoll rolled when it began. One roll per fall keeps the configured chance.
         refreshSuperKickActors();
         return true;
     }

@@ -275,6 +275,9 @@ namespace MWPhysics
 
         RayCastingResult castSphere(const osg::Vec3f& from, const osg::Vec3f& to, float radius,
             int mask = CollisionType_Default, int group = 0xff) const override;
+        // Something below the shoulders right behind a kicked actor that it trips over.
+        bool tripObstacleBehind(
+            const osg::Vec3f& position, const osg::Vec3f& direction, const osg::Vec3f& half, float units) const;
 
         /// Return true if actor1 can see actor2.
         bool getLineOfSight(const MWWorld::ConstPtr& actor1, const MWWorld::ConstPtr& actor2) const override;

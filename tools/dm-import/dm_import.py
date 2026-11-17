@@ -29,9 +29,9 @@ ANIMATION = ROOT / 'scripts/animation'
 CREATURES = ROOT / 'scripts/creatures'
 EFFECTS = ROOT / 'scripts/effects'
 CALIBRATION = HERE / 'calibration'
-RECIPE_VERSION = 4  # Misc::DarkMessiahData::sRecipe in the engine must match.
+RECIPE_VERSION = 5  # Misc::DarkMessiahData::sRecipe in the engine must match.
 # Conversion steps per import, for progress reporting.
-TOTAL_STEPS = 36
+TOTAL_STEPS = 37
 KEYFRAMES = ('.kf', '.yaml')
 # Steps run side by side, one core each; the matrices involved are 4x4.
 ENVIRONMENT = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1')
@@ -484,7 +484,8 @@ class Importer:
             target = self.output / name
             if target.exists():
                 shutil.rmtree(target)
-            shutil.copytree(source, target)
+            # camera-segments only feeds the camera step.
+            shutil.copytree(source, target, ignore=shutil.ignore_patterns('camera-segments'))
         files = sorted(path for name in OUTPUTS for path in (self.output / name).rglob('*') if path.is_file())
         marker.write_text(json.dumps(dict(recipe=RECIPE_VERSION, files=len(files)), indent=1) + '\n')
         return len(files)
@@ -518,6 +519,10 @@ class Importer:
                 frames = pool.submit(lambda: (npc.result(), slide.result(), self.slide_and_clinch_frames()))
                 arms = self.finish(dagger, staff, sword, chain)
                 frames.result(); effects.result(); creatures.result(); kick.result()
+                # The finished arm groups name their DM clips; the head camera follows them.
+                self.run('Camera motion', ANIMATION / 'import_camera_head.py', '--vpk-root', self.vpks,
+                         '--work-dir', self.cache, '--arms', arms, '--camera-contract', self.contract,
+                         '--output', self.stage('clinch'))
                 self.run('Footstep keys', ANIMATION / 'add_footstep_keys.py', self.stage('npc'))
             except BaseException:
                 # One failed or cancelled step stops the others instead of waiting for them.

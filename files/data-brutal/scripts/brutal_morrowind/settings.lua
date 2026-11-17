@@ -10,19 +10,14 @@ local DEFAULTS={
     kickBinding='BrutalMorrowindKick',
     sprintBinding='BrutalMorrowindSprint',
     firstPersonBody=true,
+    cameraMotionMovement=true,
     dualWieldEnabled=true,
     firstPersonAnimations='darkMessiah',
     npcAnimations='darkMessiah',
     guaranteedHits=true,
     meleeGeometry=true,
-    equipmentPhysics=true,
     ragdollEnabled=true,
-    ragdollEnhancements=true,
-    npcStandupEnabled=true,
-    ragdollSoftStops=true,
-    ragdollNeutralPose=true,
-    ragdollLimbResponse=true,
-    ragdollSelfCollision=true,
+    ragdollWeaponDrop=40,
     dynamicProps=true,
     movementEnabled=true,
     staminaEnabled=true,
@@ -53,20 +48,28 @@ local DEFAULTS={
     slideFxEnabled=true,
     clinchFxEnabled=true,
     superKickSpeed=460,
-    adrenalineHits=30,
+    adrenalineFastHits=15,
     adrenalineDecay=true,
 }
 -- Components that play Dark Messiah animations or use its sounds and textures.
 -- Without the imported data they are off and both animation sets are Morrowind's;
 -- the stored preferences stay as they are and apply again once the data exists.
-local DARK_MESSIAH_KEYS={'firstPersonBody','dualWieldEnabled','meleeGeometry','dismemberment',
-    'npcStandupEnabled','kickEnabled','kickAlwaysRagdoll','superKickEnabled','slideEnabled','slideFxEnabled','activeBlockEnabled',
+local DARK_MESSIAH_KEYS={'firstPersonBody','cameraMotionMovement','dualWieldEnabled','meleeGeometry','dismemberment',
+    'kickEnabled','kickAlwaysRagdoll','superKickEnabled','slideEnabled','slideFxEnabled','activeBlockEnabled',
     'shieldBashEnabled','parryEnabled','clinchEnabled','clinchFxEnabled','attackCombosEnabled',
     'fastAttacksEnabled','wallBounceEnabled','adrenalineEnabled','finisherEnabled','bloodEffects',
     'sparkEffects','bloodDecals','combatSounds'}
 local darkMessiahData=vfs.fileExists('animations/brutal_npc/brutal_hit.kf')
     and vfs.fileExists('animations/brutal_fp/brutal_blockhit1.kf')
     and vfs.fileExists('sound/brutal_dm/armor_heavy_01.wav')
+-- One Ragdoll switch owns every ragdoll component. These keys are derived and
+-- never stored; the standup also needs the imported Dark Messiah animations.
+local RAGDOLL_KEYS={'ragdollEnhancements','ragdollSoftStops','ragdollNeutralPose','ragdollLimbResponse',
+    'ragdollSelfCollision','equipmentPhysics','npcStandupEnabled'}
+local function deriveRagdoll(values)
+    for _,key in ipairs(RAGDOLL_KEYS) do values[key]=values.ragdollEnabled end
+    values.npcStandupEnabled=values.ragdollEnabled and darkMessiahData
+end
 -- Reads in gameplay are plain table lookups. Refresh only when persistent
 -- preferences/the mirrored snapshot changes, or explicitly before native apply.
 local async=require('openmw.async')
@@ -80,8 +83,9 @@ local function validate(key,value)
     if key=='firstPersonAnimations' or key=='npcAnimations' then
         return value=='morrowind' and 'morrowind' or 'darkMessiah'
     end
+    if key=='ragdollWeaponDrop' then return math.max(0,math.min(100,math.floor(value))) end
     if key=='superKickSpeed' then return math.max(460,math.min(1000,value)) end
-    if key=='adrenalineHits' then return math.max(1,math.min(30,math.floor(value))) end
+    if key=='adrenalineFastHits' then return math.max(1,math.min(30,math.floor(value))) end
     return value
 end
 local function refresh()
@@ -123,6 +127,7 @@ local function refresh()
         elseif not values.enabled and (key=='firstPersonAnimations' or key=='npcAnimations') then value='morrowind' end
         effective[key]=value
     end
+    deriveRagdoll(mode);deriveRagdoll(effective)
     if not effective.ragdollEnabled then effective.dismemberment=false end
     if not effective.ragdollEnabled or not effective.kickEnabled then effective.kickAlwaysRagdoll=false end
     rawValues,modeValues,effectiveValues=values,mode,effective

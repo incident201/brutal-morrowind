@@ -29,6 +29,9 @@ local function apply()
     set(self,'classicFirstPerson',S.mode('firstPersonAnimations')=='morrowind')
     set(self,'classicNpcAnimations',S.mode('npcAnimations')=='morrowind')
     set(self,'impactEffects',S.mode('bloodEffects') or S.mode('sparkEffects'))
+    if types.Actor.setBrutalRagdollWeaponDrop then
+        types.Actor.setBrutalRagdollWeaponDrop(self,S.mode('ragdollWeaponDrop')/100)
+    end
     set(self,'adrenalineHud',S.mode('adrenalineEnabled') and S.mode('adrenalineHudEnabled'))
     if S.raw('enabled') then set(self,'enabled',true) end
     core.sendGlobalEvent('BrutalSettingsChanged',{player=self,values=S.snapshot()})

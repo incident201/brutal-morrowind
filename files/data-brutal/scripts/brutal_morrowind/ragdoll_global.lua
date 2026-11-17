@@ -6,13 +6,36 @@ local types = require('openmw.types')
 local decapitate = world.startNpcDecapitation
 local bisect = world.startNpcBisection
 local severLimbs = world.startNpcLimbSevering
+local util = require('openmw.util')
 local pending = {}
+-- A fresh cut or lethal impulse belongs to the killing blow only. A late retry
+-- (after looting changed the clothes that blocked the cut, say) would cut and
+-- launch a corpse that had long come to rest. Restored saved poses keep the
+-- longer wait, because a loaded scene may need a moment.
+local FRESH_WINDOW = 0.5
+-- Looting or any other equipment change after death never starts a cut or an
+-- impulse that did not happen before: such a request is dropped at once.
+local function equipmentKey(actor)
+    local parts={}
+    local S=types.Actor.EQUIPMENT_SLOT
+    -- Held items fall out by themselves when the ragdoll starts; clothes and armor
+    -- (what decides the cut) only change through the inventory.
+    local held={[S.CarriedRight]=true,[S.CarriedLeft]=true,[S.Ammunition]=true}
+    for slot,item in pairs(types.Actor.getEquipment(actor)) do
+        if not held[slot] then parts[#parts+1]=tostring(slot)..'='..(item and item:isValid() and item.id or '') end
+    end
+    table.sort(parts)
+    return table.concat(parts,';')
+end
+local function newEntry(actor,data)
+    return {velocity=data.velocity,age=0,retry=0,equipment=equipmentKey(actor)}
+end
 return {
     eventHandlers = {BrutalRagdollDeath = function(data)
         if not settings.get('ragdollEnabled') then return end
         if data.actor and data.actor:isValid() and types.Actor.objectIsInstance(data.actor) then
             if not pending[data.actor] then
-                pending[data.actor] = {velocity=data.velocity,age=0,retry=0}
+                pending[data.actor] = newEntry(data.actor,data)
             end
         end
     end,
@@ -20,7 +43,7 @@ return {
         if not settings.get('dismemberment') then return end
         if data.actor and data.actor:isValid() and types.NPC.objectIsInstance(data.actor)
             and not types.Player.objectIsInstance(data.actor) then
-            local entry = pending[data.actor] or {velocity=data.velocity,age=0,retry=0}
+            local entry = pending[data.actor] or newEntry(data.actor,data)
             entry.decapitate = true
             entry.age, entry.retry = 0, 0
             entry.cutDirection = data.cutDirection
@@ -31,7 +54,7 @@ return {
         if not settings.get('dismemberment') then return end
         if data.actor and data.actor:isValid() and types.NPC.objectIsInstance(data.actor)
             and not types.Player.objectIsInstance(data.actor) then
-            local entry = pending[data.actor] or {velocity=data.velocity,age=0,retry=0}
+            local entry = pending[data.actor] or newEntry(data.actor,data)
             entry.bisect = true
             entry.age, entry.retry = 0, 0
             entry.cutDirection = data.cutDirection
@@ -44,7 +67,7 @@ return {
         if data.actor and data.actor:isValid() and types.NPC.objectIsInstance(data.actor)
             and not types.Player.objectIsInstance(data.actor) and type(data.mask)=='number'
             and data.mask>=1 and data.mask<=15 and data.mask==math.floor(data.mask) then
-            local entry = pending[data.actor] or {velocity=data.velocity,age=0,retry=0}
+            local entry = pending[data.actor] or newEntry(data.actor,data)
             entry.limbs, entry.savedPose = data.mask, data.savedPose
             entry.age, entry.retry, entry.cutDirection = 0, 0, data.cutDirection
             pending[data.actor] = entry
@@ -63,10 +86,16 @@ return {
                 if not actor:isValid() or not actor.cell or not actor.enabled
                     or not types.Actor.isDead(actor) or entry.age>10 then
                     pending[actor]=nil
-                elseif entry.retry<=0 then
+                else
+                local fresh=entry.savedPose==nil or entry.savedPose==''
+                if fresh and (entry.age>FRESH_WINDOW or equipmentKey(actor)~=entry.equipment) then
+                    entry.decapitate,entry.bisect,entry.limbs=nil,nil,nil
+                    entry.velocity=util.vector3(0,0,0)
+                end
+                if entry.retry<=0 then
                     -- A moving lethal pose can briefly fail anatomical cut
                     -- clearance. Recheck early without changing any geometry guard.
-                    entry.retry=(entry.decapitate or entry.bisect or entry.limbs) and entry.age<0.2 and 0.025 or 0.2
+                    entry.retry=(entry.decapitate or entry.bisect or entry.limbs) and entry.age<FRESH_WINDOW and 0.025 or 0.2
                     local state = world.getNpcRagdollState(actor)
                     if entry.limbs and severLimbs then
                         if state and state.limbsMask==entry.limbs then pending[actor]=nil
@@ -85,6 +114,7 @@ return {
                     elseif state or world.startNpcRagdoll(actor,entry.velocity) then
                         pending[actor]=nil
                     end
+                end
                 end
                 end
             end

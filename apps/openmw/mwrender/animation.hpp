@@ -305,6 +305,8 @@ namespace MWRender
         void setObjectRoot(const std::string& model, bool forceskeleton, bool baseonly, bool isCreature);
 
         void loadAdditionalAnimations(VFS::Path::NormalizedView model, const std::string& baseModel);
+        // Lets a subclass leave out single clips of an additional-animation folder.
+        virtual bool skipAdditionalAnimation(const VFS::Path::Normalized& kf) const { return false; }
 
         /** Adds the keyframe controllers in the specified model as a new animation source.
          * @note Later added animation sources have the highest priority when it comes to finding a particular

@@ -18,6 +18,21 @@ local torsoSelected, restoreBisection = false, false
 local torsoPoseData = ''
 local torsoPoseWait = 0
 local limbMask, limbPose, limbPoseWait, restoreLimbs = 0, '', 0, false
+-- A selected cut is only a request. Only a cut the engine actually made is saved
+-- and restored, so a corpse that stayed whole never splits later (on load, on
+-- becoming active again or after its clothes change through looting).
+local headDone, torsoDone, limbsDone = false, false, false
+local function confirmCuts()
+    if decapSelected and not headDone and type(types.Actor.isHeadSevered)=='function' then
+        headDone = types.Actor.isHeadSevered(self) == true
+    end
+    if torsoSelected and not torsoDone and type(types.Actor.isTorsoSevered)=='function' then
+        torsoDone = types.Actor.isTorsoSevered(self) == true
+    end
+    if limbMask~=0 and not limbsDone and type(types.Actor.getSeveredLimbsMask)=='function' then
+        limbsDone = types.Actor.getSeveredLimbsMask(self) == limbMask
+    end
+end
 local limbSelections, legRoll = 0, nil
 local bisectionEligible, bisectionSelections = 0, 0
 local decapEligible, decapSelections, decapRoll, decapAttackId = 0, 0, nil, nil
@@ -150,6 +165,10 @@ interface.onHit = function(attack)
             types.Actor.addExternalVelocity(self, direction(attack) * 420 + util.vector3(0, 0, 70))
         end
     end
+    -- The player's shield met the blow inside the parry window: adrenaline like a charged hit.
+    if attack.brutalPerfectBlock and aliveBefore and types.Player.objectIsInstance(self) then
+        self:sendEvent('BrutalPerfectShieldBlock', {attackId = attack.brutalAttackId, attacker = attack.attacker})
+    end
     if attack.attacker and attack.attacker:isValid() then
         attack.attacker:sendEvent('BrutalDamagingHit', {
             target = self, weapon = attack.weapon, sourceType = attack.sourceType,
@@ -244,6 +263,7 @@ return {
     },
     engineHandlers = {
         onUpdate = function(dt)
+            confirmCuts()
             bloodRestoreWait = math.max(0, bloodRestoreWait - dt)
             if settings.get('bloodDecals') and restoreBloodDecals and bloodRestoreWait == 0 then
                 core.sendGlobalEvent('BrutalRestoreBloodDecals', {actor=self, data=bloodDecalData})
@@ -254,11 +274,11 @@ return {
                 if entry.age > 2 then pendingDecapitation[id] = nil end
             end
             if torsoSelected and not types.Actor.isDead(self) then
-                torsoSelected, restoreBisection = false, false
+                torsoSelected, restoreBisection, torsoDone = false, false, false
                 torsoPoseData = ''
             end
             if limbMask~=0 and not types.Actor.isDead(self) then
-                limbMask, limbPose, restoreLimbs = 0, '', false
+                limbMask, limbPose, restoreLimbs, limbsDone = 0, '', false, false
             end
             limbPoseWait = math.max(0, limbPoseWait-dt)
             if limbMask~=0 and limbPoseWait==0 and type(types.Actor.getLimbSeveringPoseData)=='function' then
@@ -283,7 +303,7 @@ return {
                 if torsoSelected then requestBisection(util.vector3(0, 0, 0), nil, torsoPoseData) end
             end
             if decapSelected and not types.Actor.isDead(self) then
-                decapSelected, restoreDecapitation = false, false
+                decapSelected, restoreDecapitation, headDone = false, false, false
             end
             if restoreDecapitation then
                 restoreDecapitation = false
@@ -295,13 +315,14 @@ return {
             end
         end,
         onSave = function()
+            confirmCuts()
             -- Native/scripted cuts share the same persisted corpse state.
             -- The chosen policy flag also survives while an actor is inactive.
             local nativeCut = type(types.Actor.isHeadSevered) == 'function' and types.Actor.isHeadSevered(self)
             local nativeTorso = type(types.Actor.isTorsoSevered) == 'function' and types.Actor.isTorsoSevered(self)
             local nativeLimbs = type(types.Actor.getSeveredLimbsMask)=='function'
                 and types.Actor.getSeveredLimbsMask(self) or 0
-            if validLimbMask(nativeLimbs) then limbMask=nativeLimbs end
+            if validLimbMask(nativeLimbs) then limbMask, limbsDone = nativeLimbs, true end
             if limbMask~=0 and type(types.Actor.getLimbSeveringPoseData)=='function' then
                 local pose=types.Actor.getLimbSeveringPoseData(self)
                 if #pose>0 and #pose<=2048 then limbPose=pose end
@@ -310,9 +331,10 @@ return {
                 local pose = types.Actor.getTorsoSeveredPoseData(self)
                 if #pose == 60 then torsoPoseData = pose end
             end
-            return {headSevered = decapSelected or nativeCut, torsoSevered = torsoSelected or nativeTorso,
+            return {headSevered = (decapSelected and headDone) or nativeCut == true,
+                torsoSevered = (torsoSelected and torsoDone) or nativeTorso == true,
                 torsoPoseData = torsoPoseData, bloodDecals = bloodDecalData,
-                limbsMask=limbMask, limbPoseData=limbPose}
+                limbsMask=limbsDone and limbMask or 0, limbPoseData=limbPose}
         end,
         onLoad = function(data)
             pendingDecapitation = {}
@@ -333,11 +355,13 @@ return {
             if torsoSelected then decapSelected = false end
             restoreDecapitation = decapSelected
             restoreBisection = torsoSelected
+            headDone, torsoDone, limbsDone = decapSelected, torsoSelected, limbMask~=0
         end,
         onActive = function()
-            restoreLimbs = limbMask~=0
-            restoreDecapitation = decapSelected
-            restoreBisection = torsoSelected
+            confirmCuts()
+            restoreLimbs = limbMask~=0 and limbsDone
+            restoreDecapitation = decapSelected and headDone
+            restoreBisection = torsoSelected and torsoDone
             restoreBloodDecals, bloodRestoreWait = bloodDecalData ~= '', 0
         end,
     },

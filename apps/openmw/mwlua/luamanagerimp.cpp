@@ -760,6 +760,8 @@ namespace MWLua
                 && attacker == MWMechanics::getPlayer()
                 && attacker.getClass().getCreatureStats(attacker).mBrutalSlideAttack;
             data["brutalBlocked"] = brutalBlocked;
+            data["brutalPerfectBlock"] = brutalBlocked && victim.getClass().isActor()
+                && victim.getClass().getCreatureStats(victim).mBrutalPerfectShieldBlock;
             data["brutalAttackType"] = sourceType != MWMechanics::DamageSourceType::Melee ? ""
                 : attackType == ESM::Weapon::AT_Slash ? "slash"
                 : attackType == ESM::Weapon::AT_Chop ? "chop"

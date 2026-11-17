@@ -21,12 +21,10 @@ guaranteedHits: 100% melee hit chance
 guaranteedHitsDescription: "Turn off to restore skill- and fatigue-based hit rolls."
 meleeGeometry: Weapon contact and wide swings
 meleeGeometryDescription: "Use visible weapon contact and the swing area."
-equipmentPhysics: Physical dropped equipment
-equipmentPhysicsDescription: "Physics for weapons and shields dropped by ragdolls."
 ragdollEnabled: Ragdoll
-ragdollEnabledDescription: "Physical falls for NPCs and creatures."
-ragdollEnhancements: Ragdoll enhancements
-ragdollEnhancementsDescription: "Buoyancy and improved collision response. Requires ragdoll."
+ragdollEnabledDescription: "Physical falls for NPCs and creatures, including body enhancements, joint limits, dropped equipment physics and living NPC recovery (recovery needs Dark Messiah animations)."
+ragdollWeaponDrop: Weapon drop chance, %
+ragdollWeaponDropDescription: "Chance that each held weapon or shield falls out of the hands when an NPC goes ragdoll."
 dynamicProps: Movable world items
 dynamicPropsDescription: "Impacts move loose items."
 movementEnabled: Walking, running and sprinting
@@ -83,20 +81,10 @@ clinchFxEnabled: Clinch blur
 clinchFxEnabledDescription: "Brief blur after losing a clinch."
 superKickSpeed: Adrenaline kick impulse
 superKickSpeedDescription: "Super kick launch speed. Ordinary kicks use 460 units/s."
-adrenalineHits: Hits to fill adrenaline
-adrenalineHitsDescription: "Charged hits needed to fill the gauge. Fast hits give less."
+adrenalineFastHits: Fast hits to fill adrenaline
+adrenalineFastHitsDescription: "Fast hits needed to fill the gauge. A charged hit or a perfect shield block counts as two."
 adrenalineDecay: Adrenaline decay
 adrenalineDecayDescription: "Charge slowly drains between fights."
-npcStandupEnabled: NPC stand-up animations
-npcStandupEnabledDescription: "Living NPC recovery. Requires ragdoll and Dark Messiah animations."
-ragdollSoftStops: Soft ragdoll joint limits
-ragdollSoftStopsDescription: "Soft joint limits. Requires ragdoll enhancements."
-ragdollNeutralPose: Ragdoll neutral pose
-ragdollNeutralPoseDescription: "Natural joint rest poses. Requires ragdoll enhancements."
-ragdollLimbResponse: Ragdoll limb response
-ragdollLimbResponseDescription: "Limb impulse response. Requires ragdoll enhancements."
-ragdollSelfCollision: Ragdoll self-collision
-ragdollSelfCollisionDescription: "Collisions between body parts. Requires ragdoll enhancements."
 finisherEnabled: Adrenaline weapon finishers
 finisherEnabledDescription: "Spend a full charge on a lethal charged weapon strike."
 superKickEnabled: Adrenaline super kick
@@ -111,3 +99,5 @@ kickBindingDescription: "Click, then press a button; Esc clears."
 sprintBinding: "Sprint button"
 
 sprintBindingDescription: "Click, then press a button; Esc clears."
+cameraMotionMovement: Camera motion when moving
+cameraMotionMovementDescription: "Dark Messiah's head bob and tilt while walking, running, sprinting and landing. Action camera motion stays."

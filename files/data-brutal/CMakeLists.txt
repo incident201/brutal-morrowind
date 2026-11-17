@@ -15,6 +15,7 @@ set(BRUTAL_DATA_FILES
     scripts/brutal_morrowind/adrenaline_time.lua
     scripts/brutal_morrowind/adrenaline_ui.lua
     scripts/brutal_morrowind/clinch.lua
+    scripts/brutal_morrowind/camera_motion.lua
     scripts/brutal_morrowind/clinch_fx.lua
     scripts/brutal_morrowind/combat_effects.lua
     scripts/brutal_morrowind/config.lua

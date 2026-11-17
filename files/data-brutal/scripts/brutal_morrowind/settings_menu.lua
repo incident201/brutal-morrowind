@@ -34,17 +34,21 @@ local options={setting('enabled','checkbox'),setting('allowThirdPerson','checkbo
     {key='sprintBinding',renderer='inputBinding',argument={key=bindings.SPRINT,type='action'},name='Blank',default=D.sprintBinding},
 }
 for _,key in ipairs({
-    'firstPersonBody','firstPersonAnimations','dualWieldEnabled','npcAnimations','guaranteedHits','meleeGeometry','equipmentPhysics',
-    'ragdollEnabled','ragdollEnhancements','npcStandupEnabled','ragdollSoftStops','ragdollNeutralPose','ragdollLimbResponse','ragdollSelfCollision','dynamicProps','movementEnabled','staminaEnabled',
+    'firstPersonBody','firstPersonAnimations','cameraMotionMovement','dualWieldEnabled','npcAnimations','guaranteedHits','meleeGeometry',
+    'ragdollEnabled','ragdollWeaponDrop','dynamicProps','movementEnabled','staminaEnabled',
     'kickEnabled','kickAlwaysRagdoll','slideEnabled','activeBlockEnabled','shieldBashEnabled','parryEnabled',
     'clinchEnabled','attackCombosEnabled','fastAttacksEnabled','wallBounceEnabled','npcAiTweaks','npcStagger','hitRecovery',
     'adrenalineEnabled','finisherEnabled','superKickEnabled','slowMotionEnabled','dismemberment','bloodEffects','sparkEffects',
     'bloodDecals','combatSounds','adrenalineHudEnabled','adrenalineFxEnabled','slideFxEnabled','clinchFxEnabled',
 }) do
-    options[#options+1]=setting(key,type(D[key])=='string' and 'select' or 'checkbox',
-        type(D[key])=='string' and {l10n=L,items={'darkMessiah','morrowind'}} or nil)
+    if key=='ragdollWeaponDrop' then
+        options[#options+1]=setting(key,'number',{integer=true,min=0,max=100})
+    else
+        options[#options+1]=setting(key,type(D[key])=='string' and 'select' or 'checkbox',
+            type(D[key])=='string' and {l10n=L,items={'darkMessiah','morrowind'}} or nil)
+    end
 end
 options[#options+1]=setting('superKickSpeed','number',{integer=true,min=460,max=1000})
-options[#options+1]=setting('adrenalineHits','number',{integer=true,min=1,max=30})
+options[#options+1]=setting('adrenalineFastHits','number',{integer=true,min=1,max=30})
 options[#options+1]=setting('adrenalineDecay','checkbox')
 I.Settings.registerGroup{key=S.GROUP,page='BrutalMorrowind',l10n=L,name='GroupName',permanentStorage=true,settings=options}

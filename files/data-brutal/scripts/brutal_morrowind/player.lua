@@ -332,8 +332,8 @@ return {
         -- The engine: this kick sent a living NPC over a ledge into a ragdoll.
         BrutalKickRagdoll = function()
             if not settings.get('kickEnabled') then return end
-            -- Reward the confirmed fall without changing simulation speed.
-            self:sendEvent('BrutalAdrenalineFill', {})
+            -- Reward the fall (a third of the gauge) without changing simulation speed.
+            self:sendEvent('BrutalAdrenalineBonus', {})
         end,
     },
     engineHandlers = {

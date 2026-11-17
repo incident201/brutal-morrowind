@@ -119,6 +119,7 @@ namespace MWMechanics
         bool mBrutalBlockRequested = false; // Player is holding the block control (Lua).
         bool mBrutalBlockRaised = false; // Controller-owned: the shield is up this frame.
         bool mBrutalBlockImpact = false; // A blow landed on the raised shield; consumed by the controller.
+        bool mBrutalPerfectShieldBlock = false; // The last shield block met the blow inside the parry window.
         bool mBrutalParry = false; // Controller-owned: the raised guard is a weapon parry (no shield).
         double mBrutalBlockRaisedAt = -1.0; // Simulation time the current guard started rising.
         double mBrutalBlockLoweredAt = -1e9; // Simulation time the previous guard ended.

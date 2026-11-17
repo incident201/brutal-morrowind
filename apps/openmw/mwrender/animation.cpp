@@ -1210,7 +1210,7 @@ namespace MWRender
 
         constexpr VFS::Path::ExtensionView kf("kf");
         for (const VFS::Path::Normalized& name : mResourceSystem->getVFS()->getRecursiveDirectoryIterator(path))
-            if (name.extension() == kf)
+            if (name.extension() == kf && !skipAdditionalAnimation(name))
                 addSingleAnimSource(name, baseModel);
     }
 

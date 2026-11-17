@@ -108,8 +108,7 @@ namespace MWMechanics
             }
             const double now = MWBase::Environment::get().getWorld()->getTimeManager()->getSimulationTime();
             constexpr double parryTimeToBreakIt = 5.0; // mm_game_settings PlayerParryTimeToBreakIt
-            // Keep the entry forgiving in ordinary combat, including a quickly raised guard.
-            const float parryWindow = std::max(.7f, Settings::game().mDarkMessiahParryWindow.get());
+            const float parryWindow = Settings::game().mDarkMessiahParryWindow.get();
             const bool timed = now - stats.mBrutalBlockRaisedAt <= parryWindow;
             const bool breaking
                 = !timed && attacker != getPlayer() && now - stats.mBrutalBlockRaisedAt > parryTimeToBreakIt;
@@ -258,6 +257,7 @@ namespace MWMechanics
             return false;
 
         MWMechanics::CreatureStats& blockerStats = blocker.getClass().getCreatureStats(blocker);
+        blockerStats.mBrutalPerfectShieldBlock = false;
 
         if (blockerStats.getKnockedDown() // Used for both knockout or knockdown
             || blockerStats.getHitRecovery() || blockerStats.isParalyzed())
@@ -348,7 +348,13 @@ namespace MWMechanics
             }
 
             if (activeBlock)
+            {
                 blockerStats.mBrutalBlockImpact = true; // Held-block impact instead of the vanilla shield recoil.
+                // A shield raised within the parry/clinch window before the blow is a perfect block.
+                const double now = MWBase::Environment::get().getWorld()->getTimeManager()->getSimulationTime();
+                blockerStats.mBrutalPerfectShieldBlock
+                    = now - blockerStats.mBrutalBlockRaisedAt <= Settings::game().mDarkMessiahParryWindow.get();
+            }
             else
                 blockerStats.setBlock(true);
 

@@ -97,6 +97,14 @@ namespace MWMechanics
         const auto playerWeapon = clinchSword(player, true), opponentWeapon = clinchSword(opponent, false);
         if (playerWeapon.isEmpty() || opponentWeapon.isEmpty())
             return false;
+        // The contest is authored for a pair on one level. With the opponent a step or
+        // more above or below (stairs, a ledge, a crate) the level camera loses it and
+        // the blade fit would drag the arms off the shoulders; the timed parry then
+        // ends as an ordinary deflection with the attacker's recoil.
+        constexpr float maximumHeightDifference = 24.f;
+        if (std::abs(opponent.getRefData().getPosition().pos[2] - player.getRefData().getPosition().pos[2])
+            > maximumHeightDifference)
+            return false;
         auto world = MWBase::Environment::get().getWorld();
         auto* playerAnimation = dynamic_cast<MWRender::NpcAnimation*>(world->getAnimation(player));
         auto* opponentAnimation = dynamic_cast<MWRender::NpcAnimation*>(world->getAnimation(opponent));

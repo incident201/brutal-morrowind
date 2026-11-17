@@ -1244,6 +1244,7 @@ namespace MWRender
 
         bool is1stPerson = mViewMode == VM_FirstPerson && !useFullBodyFirstPerson();
         bool isBeast = (race->mData.mFlags & ESM::Race::Beast) != 0;
+        mBeastRace = isBeast && !isWerewolf;
 
         std::string_view base;
         if (!isWerewolf)
@@ -1320,6 +1321,24 @@ namespace MWRender
 
         mWeaponAnimationTime->updateStartTime();
         updateBodyAwareness();
+    }
+
+    bool NpcAnimation::skipAdditionalAnimation(const VFS::Path::Normalized& kf) const
+    {
+        // Dark Messiah's human legs do not fit digitigrade beast anatomy. Beast NPCs
+        // and a beast player's visible body keep Morrowind's idle stance, walk, run,
+        // sneak and (as the run) sprint; combat, kicks, clinch and recovery stay Dark Messiah.
+        if (!mBeastRace)
+            return false;
+        const std::string_view path = kf.value();
+        const bool dmBody = path.starts_with("animations/brutal_npc/") || path.starts_with("animations/brutal_firstperson/");
+        if (!dmBody)
+            return false;
+        const std::string_view stem = path.substr(path.find_last_of('/') + 1);
+        for (std::string_view prefix : { "idle", "walk", "run", "sneak", "brutal_sprint" })
+            if (stem.starts_with(prefix))
+                return true;
+        return false;
     }
 
     void NpcAnimation::resetBodyAwareness()

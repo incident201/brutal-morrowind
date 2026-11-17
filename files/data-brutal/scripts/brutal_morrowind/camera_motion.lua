@@ -1,0 +1,177 @@
+-- Dark Messiah's first-person camera motion (player_head_mvt, mm_headbobbing).
+-- Movement: the walk/run clip of the 8-way movement direction, the sprint clip and the
+-- landing tilt, blended like DM's single head entity (optional, on by default).
+-- Actions: the head clip DM plays with each arm action (kicks, parries, charged swings,
+-- rushes, draws...), found between the text keys of the playing arm group, so it
+-- follows re-timed groups. The clinch keeps its own curve in clinch.lua.
+local self=require('openmw.self')
+local core=require('openmw.core')
+local types=require('openmw.types')
+local camera=require('openmw.camera')
+local animation=require('openmw.animation')
+local util=require('openmw.util')
+local I=require('openmw.interfaces')
+local settings=require('scripts.brutal_morrowind.settings')
+local loaded,data=pcall(require,'scripts.brutal_assets.camera_head')
+if not loaded or type(data)~='table' or not data.clips then data=nil end
+
+local FADE=.2 -- Source sequence transition
+local LAND_AIR=.3 -- Airborne at least this long before a landing plays its clip
+local DIRECTIONS={'N','NE','E','SE','S','SW','W','NW'}
+local ZERO={0,0,0,0,0,0}
+
+local function sample(clip,t)
+    local frames=clip.frames
+    local n=#frames
+    if n==1 then return frames[1] end
+    local position=t*clip.fps
+    if clip.loop then position=position%(n-1) else position=math.max(0,math.min(n-1,position)) end
+    local i=math.floor(position)
+    local a,b=frames[i+1],frames[math.min(i+2,n)]
+    local f=position-i
+    local out={}
+    for k=1,6 do out[k]=a[k]+(b[k]-a[k])*f end
+    return out
+end
+local function length(clip) return (#clip.frames-1)/clip.fps end
+local function mix(a,b,w)
+    local out={}
+    for k=1,6 do out[k]=a[k]+(b[k]-a[k])*w end
+    return out
+end
+
+-- Movement layer: one weight per clip, faded towards the current target.
+local weights,phases={},{}
+local landing,landingTime,airborne=nil,0,0
+local function movementTarget()
+    if not types.Actor.isOnGround(self) or types.Actor.isSwimming(self) then return nil end
+    local forward,side=self.controls.movement,self.controls.sideMovement
+    if math.abs(forward)<.1 and math.abs(side)<.1 then return nil end
+    if types.Actor.getCurrentSpeed(self)<1 then return nil end
+    local gait=I.BrutalStamina and I.BrutalStamina.status().gait
+    if gait==3 and forward>.3 then
+        local weapon=types.Actor.getEquipment(self)[types.Actor.EQUIPMENT_SLOT.CarriedRight]
+        local kind=weapon and types.Weapon.objectIsInstance(weapon) and types.Weapon.record(weapon).type
+        if kind==types.Weapon.TYPE.SpearTwoWide or kind==types.Weapon.TYPE.BluntTwoWide then return '@megasprint_staff' end
+        if kind==types.Weapon.TYPE.ShortBladeOneHand then return '@megasprint_daggers' end
+        return '@megasprint_sword'
+    end
+    local running
+    if gait then running=gait>=2 else running=self.controls.run end
+    if self.controls.sneak then running=false end
+    -- DM's 0..315 degree sectors: N forward, E right, S back, W left.
+    local angle=math.atan2(side,forward)
+    local sector=math.floor((angle/(math.pi/4))+.5)%8
+    return (running and '@run_' or '@walk_')..DIRECTIONS[sector+1]
+end
+local function movementSample(dt)
+    local target=movementTarget()
+    local total,out=0,{0,0,0,0,0,0}
+    for name,clip in pairs(data.clips) do
+        if name:find('^@walk_') or name:find('^@run_') or name:find('^@megasprint_') then
+            local w=weights[name] or 0
+            w=name==target and math.min(1,w+dt/FADE) or math.max(0,w-dt/FADE)
+            weights[name]=w
+            if w>0 then
+                phases[name]=(phases[name] or 0)+dt
+                local s=sample(clip,phases[name])
+                for k=1,6 do out[k]=out[k]+s[k]*w end
+                total=total+w
+            else phases[name]=0 end
+        end
+    end
+    if total>1 then for k=1,6 do out[k]=out[k]/total end end
+    -- Landing after a real fall: jump_out_* tilts the view on its own clock.
+    local ground=types.Actor.isOnGround(self) or types.Actor.isSwimming(self)
+    if not ground then airborne=airborne+dt
+    else
+        if airborne>=LAND_AIR then
+            local gait=I.BrutalStamina and I.BrutalStamina.status().gait
+            local moving=target~=nil
+            landing=(gait==3 and moving) and '@jump_out_sprint' or (moving and (target:find('^@run_') and '@jump_out_run' or '@jump_out_walk')) or '@jump_out_idle'
+            landingTime=0
+        end
+        airborne=0
+    end
+    if landing and data.clips[landing] then
+        local clip=data.clips[landing]
+        landingTime=landingTime+dt
+        if landingTime>=length(clip) then landing=nil
+        else
+            local s=sample(clip,landingTime)
+            for k=1,6 do out[k]=out[k]+s[k] end
+        end
+    end
+    return out
+end
+
+-- Action layer: the arm group playing now and its part between two text keys.
+local function folder()
+    local equipment=types.Actor.getEquipment(self)
+    local left=equipment[types.Actor.EQUIPMENT_SLOT.CarriedLeft]
+    if left and types.Armor.objectIsInstance(left) and types.Armor.record(left).type==types.Armor.TYPE.Shield then
+        return 'brutal_fp_shield'
+    end
+    local weapon=equipment[types.Actor.EQUIPMENT_SLOT.CarriedRight]
+    local kind=weapon and types.Weapon.objectIsInstance(weapon) and types.Weapon.record(weapon).type
+    if kind==types.Weapon.TYPE.SpearTwoWide or kind==types.Weapon.TYPE.BluntTwoWide then return 'brutal_fp_staff' end
+    if kind==types.Weapon.TYPE.ShortBladeOneHand then return 'brutal_fp_dagger' end
+    return 'brutal_fp'
+end
+local function actionSample()
+    local sets=data.sets or {}
+    local set,base=sets[folder()] or {},sets.brutal_fp or {}
+    for _,groups in ipairs({set,base}) do
+        for group,parts in pairs(groups) do
+            local t=animation.getCurrentTime(self,group)
+            if t and (groups==set or not set[group]) then
+                for _,part in ipairs(parts) do
+                    local s=animation.getTextKeyTime(self,group..': '..part.start)
+                    local e=animation.getTextKeyTime(self,group..': '..part.stop)
+                    if s and e and e>s and t>=s and t<=e then
+                        local clip=data.clips[part.clip]
+                        if clip then
+                            local headTime=math.min((t-s)/(e-s)*part.duration,length(clip))
+                            return sample(clip,headTime)
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return nil
+end
+
+local current={0,0,0,0,0,0}
+local actionWeight,lastAction=0,ZERO
+return {
+    interfaceName='BrutalCameraMotion',
+    interface={version=1,status=function()
+        local moving={}
+        for name,w in pairs(weights) do if w>0 then moving[name]=w end end
+        return {available=data~=nil,movement=moving,landing=landing,actionWeight=actionWeight,
+            pitch=current[1],yaw=current[2],roll=current[3],x=current[4],y=current[5],z=current[6]}
+    end},
+    engineHandlers={
+        onFrame=function(dt)
+            current={0,0,0,0,0,0}
+            if not data or not settings.get('enabled') then return end
+            if camera.getMode()~=camera.MODE.FirstPerson or I.UI.getMode() or types.Actor.isDead(self) then return end
+            if settings.get('firstPersonAnimations')~='darkMessiah' then return end
+            if I.BrutalClinch and I.BrutalClinch.status().active then return end
+            dt=math.min(dt,.1)
+            local out=settings.get('cameraMotionMovement') and movementSample(dt) or {0,0,0,0,0,0}
+            local action=actionSample()
+            -- Actions replace the movement clip, with DM's .2 s transitions either way.
+            if action then lastAction=action;actionWeight=math.min(1,actionWeight+dt/FADE)
+            else actionWeight=math.max(0,actionWeight-dt/FADE) end
+            if actionWeight>0 then out=mix(out,lastAction,actionWeight) end
+            current=out
+            camera.setExtraPitch(camera.getExtraPitch()+out[1])
+            camera.setExtraYaw(camera.getExtraYaw()+out[2])
+            camera.setExtraRoll(camera.getExtraRoll()+out[3])
+            camera.setFirstPersonOffset(camera.getFirstPersonOffset()+util.vector3(out[4],out[5],out[6]))
+        end,
+        onLoad=function() weights,phases,landing,airborne,actionWeight={},{},nil,0,0 end,
+    },
+}
