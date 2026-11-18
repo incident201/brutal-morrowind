@@ -68,6 +68,7 @@
 
 #include "../mwworld/cellstore.hpp"
 #include "../mwworld/class.hpp"
+#include "../mwworld/datetimemanager.hpp"
 #include "../mwworld/esmstore.hpp"
 #include "../mwworld/globals.hpp"
 #include "../mwworld/player.hpp"
@@ -499,6 +500,19 @@ namespace MWGui
         auto hitFader = std::make_unique<ScreenFader>(hitFaderTexture, hitFaderLayout, hitFaderCoord);
         mHitFader = hitFader.get();
         mWindows.push_back(std::move(hitFader));
+
+        // The original material uses ordinary alpha blending and draws the
+        // damage layer over the low-health layer. Both sit below the death fade.
+        const std::string damageTexture = "textures/brutal_dm/damage_vignette.png";
+        if (mResourceSystem->getVFS()->exists(damageTexture))
+        {
+            auto criticalHealth = std::make_unique<ScreenFader>(damageTexture);
+            mCriticalHealthVignette = criticalHealth.get();
+            mWindows.push_back(std::move(criticalHealth));
+            auto damage = std::make_unique<ScreenFader>(damageTexture);
+            mDamageVignette = damage.get();
+            mWindows.push_back(std::move(damage));
+        }
 
         auto screenFader = std::make_unique<ScreenFader>("black");
         mScreenFader = screenFader.get();
@@ -1000,6 +1014,7 @@ namespace MWGui
 
         bool gameRunning
             = MWBase::Environment::get().getStateManager()->getState() != MWBase::StateManager::State_NoGame;
+        updateDamageVignettes(frameDuration, gameRunning);
 
         if (gameRunning)
             updateMap();
@@ -1992,6 +2007,7 @@ namespace MWGui
     {
         mPlayerBounty = -1;
         mPlayerDeathFading = false;
+        mDamageVignetteTime = 0.f;
 
         for (const auto& window : mWindows)
         {
@@ -2293,10 +2309,49 @@ namespace MWGui
         mBlindnessFader->notifyAlphaChanged(percent / 100.f);
     }
 
-    void WindowManager::activateHitOverlay(bool interrupt)
+    bool WindowManager::useDarkMessiahDamageVignette() const
+    {
+        return mDamageVignette && Settings::game().mBrutalEnabled;
+    }
+
+    void WindowManager::updateDamageVignettes(float duration, bool gameRunning)
+    {
+        if (!mDamageVignette || mPlayerDeathFading)
+            return;
+        if (!gameRunning || !useDarkMessiahDamageVignette() || !Settings::gui().mHitFader)
+        {
+            mDamageVignetteTime = 0.f;
+            mDamageVignette->notifyAlphaChanged(0.f);
+            mCriticalHealthVignette->notifyAlphaChanged(0.f);
+            return;
+        }
+
+        const auto world = MWBase::Environment::get().getWorld();
+        if (!world->getTimeManager()->isPaused())
+            mDamageVignetteTime = std::max(0.f, mDamageVignetteTime - duration);
+        const auto player = world->getPlayerPtr();
+        const float health = player.getClass().getCreatureStats(player).getHealth().getCurrent();
+        mCriticalHealthVignette->notifyAlphaChanged(std::clamp((5.f - health) / 5.f, 0.f, .5f));
+        mDamageVignette->notifyAlphaChanged(std::min(.5f, mDamageVignetteTime));
+    }
+
+    void WindowManager::activateHitOverlay(float damage, bool interrupt)
     {
         if (mPlayerDeathFading || !Settings::gui().mHitFader)
             return;
+
+        if (useDarkMessiahDamageVignette())
+        {
+            if (damage > 0.f)
+            {
+                // Dark Messiah's networked hit power decays by one per second.
+                // The render cap maintains peak opacity longer for stronger hits.
+                const float power = .3f + 1.7f * std::min(1.f, damage / 30.f);
+                mDamageVignetteTime = std::max(mDamageVignetteTime, power);
+                mHitFader->clear();
+            }
+            return;
+        }
 
         if (!interrupt && !mHitFader->isEmpty())
             return;
@@ -2317,14 +2372,28 @@ namespace MWGui
         {
             mScreenFader->clear();
             mHitFader->clear();
+            if (mDamageVignette)
+            {
+                mDamageVignetteTime = 0.f;
+                mDamageVignette->clear();
+                mCriticalHealthVignette->clear();
+            }
             return;
         }
 
         mScreenFader->clearQueue();
         mHitFader->clearQueue();
         mScreenFader->notifyAlphaChanged(*fade);
-        // The additive hit layer sits above black and must fade out with the scene.
-        mHitFader->notifyAlphaChanged(Settings::gui().mHitFader ? 1.f - *fade : 0.f);
+        const bool useDarkMessiah = useDarkMessiahDamageVignette();
+        const bool showHit = Settings::gui().mHitFader;
+        if (mDamageVignette)
+        {
+            // Hold the lethal hit and zero-health layers under the black fade.
+            mDamageVignette->notifyAlphaChanged(useDarkMessiah && showHit ? std::min(.5f, mDamageVignetteTime) : 0.f);
+            mCriticalHealthVignette->notifyAlphaChanged(useDarkMessiah && showHit ? .5f : 0.f);
+        }
+        // The stock additive layer sits above black and follows the same fade.
+        mHitFader->notifyAlphaChanged(!useDarkMessiah && showHit ? 1.f - *fade : 0.f);
     }
 
     void WindowManager::setWerewolfOverlay(bool set)

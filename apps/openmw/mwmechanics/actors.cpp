@@ -1015,7 +1015,8 @@ namespace MWMechanics
                 static const float fSuffocationDamage
                     = world->getStore().get<ESM::GameSetting>().find("fSuffocationDamage")->mValue.getFloat();
                 DynamicStat<float> health = stats.getHealth();
-                health.setCurrent(health.getCurrent() - fSuffocationDamage * duration);
+                const float damage = fSuffocationDamage * duration;
+                health.setCurrent(health.getCurrent() - damage);
                 stats.setHealth(health);
 
                 // Play a drowning sound
@@ -1025,7 +1026,7 @@ namespace MWMechanics
                     sndmgr->playSound3D(ptr, soundDrown, 1.0f, 1.0f);
 
                 if (isPlayer)
-                    MWBase::Environment::get().getWindowManager()->activateHitOverlay(false);
+                    MWBase::Environment::get().getWindowManager()->activateHitOverlay(damage, false);
             }
         }
         else

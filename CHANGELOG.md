@@ -6,12 +6,13 @@ Brutal Morrowind (unreleased)
     Combat: Living actors intercept NPC and creature melee attacks without redirecting damage into bystanders.
     Combat: NPC weapon and shield guards follow the incoming aim and require contact with the equipped item.
     Animations: Preserve both grips during two-handed NPC guards.
-    Animations: Add first-person sword-derived motion, paired grips, parries, wall recoil and clinches for claymores, battle axes and warhammers. Import recipe 8 requires reimporting after an update.
+    Animations: Add first-person sword-derived motion, paired grips, parries, wall recoil and clinches for claymores, battle axes and warhammers.
     Animations: Keep two-handed clinch grips and sleeves in view with weapon-specific camera pitch and bounded shoulder and elbow motion.
     Camera: Keep first-person movement and crouching attached to the visible body, including with a readied spell.
     Combat: Rebalance adrenaline, add obstacle trips and configurable weapon drops, and simplify ragdoll settings.
     Combat: A dead NPC always releases its held weapons; surviving knockdowns use the weapon-drop chance.
     Ragdolls: The player's body falls in real time while the camera lowers and the screen fades before the menu.
+    Effects: Import Dark Messiah's incoming-damage flash and separate critical-health vignette below 5 HP. Recipe 9 requires reimporting after an update.
     Animations: Restore beast-race locomotion, improve clinches on uneven ground and import Dark Messiah camera motion.
     Ragdolls: Fix delayed corpse cuts and impulses after looting, and support open armor contours in waist cuts.
 

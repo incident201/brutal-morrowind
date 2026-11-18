@@ -3044,13 +3044,14 @@ namespace MWWorld
                 continue;
 
             MWMechanics::DynamicStat<float> health = stats.getHealth();
-            health.setCurrent(health.getCurrent() - healthPerSecond * MWBase::Environment::get().getFrameDuration());
+            const float damage = healthPerSecond * MWBase::Environment::get().getFrameDuration();
+            health.setCurrent(health.getCurrent() - damage);
             stats.setHealth(health);
 
             if (healthPerSecond > 0.0f)
             {
                 if (actor == getPlayerPtr())
-                    MWBase::Environment::get().getWindowManager()->activateHitOverlay(false);
+                    MWBase::Environment::get().getWindowManager()->activateHitOverlay(damage, false);
 
                 auto healthDamage = ESM::RefId::stringRefId("Health Damage");
                 if (!MWBase::Environment::get().getSoundManager()->getSoundPlaying(actor, healthDamage))
@@ -3078,13 +3079,14 @@ namespace MWWorld
                 continue;
 
             MWMechanics::DynamicStat<float> health = stats.getHealth();
-            health.setCurrent(health.getCurrent() - healthPerSecond * MWBase::Environment::get().getFrameDuration());
+            const float damage = healthPerSecond * MWBase::Environment::get().getFrameDuration();
+            health.setCurrent(health.getCurrent() - damage);
             stats.setHealth(health);
 
             if (healthPerSecond > 0.0f)
             {
                 if (actor == getPlayerPtr())
-                    MWBase::Environment::get().getWindowManager()->activateHitOverlay(false);
+                    MWBase::Environment::get().getWindowManager()->activateHitOverlay(damage, false);
 
                 auto healthDamage = ESM::RefId::stringRefId("Health Damage");
                 if (!MWBase::Environment::get().getSoundManager()->getSoundPlaying(actor, healthDamage))

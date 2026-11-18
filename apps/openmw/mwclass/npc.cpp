@@ -904,7 +904,7 @@ namespace MWClass
         if (hasHealthDamage && healthDamage > 0.0f)
         {
             if (ptr == MWMechanics::getPlayer())
-                MWBase::Environment::get().getWindowManager()->activateHitOverlay();
+                MWBase::Environment::get().getWindowManager()->activateHitOverlay(healthDamage);
         }
 
         if (!wasDead && getCreatureStats(ptr).isDead())

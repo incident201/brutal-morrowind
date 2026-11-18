@@ -20,7 +20,11 @@ First-person claymores, battle axes and warhammers use adapted Dark Messiah
 sword motion with both hands on the grip. They support directional charged
 attacks, quick strikes, weapon parries, wall recoil and timed-parry clinches.
 
-This branch uses **Dark Messiah import recipe 8**. Its launcher asks to reimport
+Incoming damage and critical health use the original Dark Messiah vignette.
+Damage determines how long the flash lasts, and the critical-health layer
+starts below 5 HP.
+
+This branch uses **Dark Messiah import recipe 9**. Its launcher asks to reimport
 older data. See `CHANGELOG.md` for the other unreleased changes.
 
 ## Requirements

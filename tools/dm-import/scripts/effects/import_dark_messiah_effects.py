@@ -56,6 +56,7 @@ MATERIALS = {
     'blood_legacy_spray': 'sprites/bloodspray',
     'spark': 'effects/spark',
     'adrenaline_ready': 'hud/fullscreen_adrenaline',
+    'damage_vignette': 'hud/fullscreen_almost_dead',
 }
 
 def sha(data): return hashlib.sha256(data).hexdigest()

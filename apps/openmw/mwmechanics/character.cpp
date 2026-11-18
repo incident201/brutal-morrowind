@@ -2830,7 +2830,7 @@ namespace MWMechanics
                             cls.getCreatureStats(mPtr).setHealth(health);
                             sndMgr->playSound3D(mPtr, ESM::RefId::stringRefId("Health Damage"), 1.0f, 1.0f);
                             if (isPlayer)
-                                MWBase::Environment::get().getWindowManager()->activateHitOverlay();
+                                MWBase::Environment::get().getWindowManager()->activateHitOverlay(realHealthLost);
                         }
 
                         const float acrobaticsSkill = cls.getSkill(mPtr, ESM::Skill::Acrobatics);

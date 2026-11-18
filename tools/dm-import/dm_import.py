@@ -29,7 +29,7 @@ ANIMATION = ROOT / 'scripts/animation'
 CREATURES = ROOT / 'scripts/creatures'
 EFFECTS = ROOT / 'scripts/effects'
 CALIBRATION = HERE / 'calibration'
-RECIPE_VERSION = 8  # Misc::DarkMessiahData::sRecipe in the engine must match.
+RECIPE_VERSION = 9  # Misc::DarkMessiahData::sRecipe in the engine must match.
 # Conversion steps per import, for progress reporting.
 TOTAL_STEPS = 38
 KEYFRAMES = ('.kf', '.yaml')
