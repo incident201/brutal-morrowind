@@ -10,8 +10,8 @@ Brutal Morrowind (unreleased)
     Animations: Keep two-handed clinch grips and sleeves in view with weapon-specific camera pitch and bounded shoulder and elbow motion.
     Camera: Keep first-person movement and crouching attached to the visible body, including with a readied spell.
     Combat: Rebalance adrenaline, add obstacle trips and configurable weapon drops, and simplify ragdoll settings.
-    Combat: A dead NPC always releases its held weapons; surviving knockdowns use the weapon-drop chance.
-    Ragdolls: On death the first-person camera follows the head's motion. The downward nod stops short of the neck, and the camera keeps clearance from the body and floor. Held weapons fall from the hands before the screen fades and the menu opens.
+    Combat: On death the player and NPCs release their weapons, held shields and carried lights. Surviving NPC knockdowns use the weapon-drop chance.
+    Ragdolls: On death the first-person camera follows the head's motion. The downward nod stops short of the neck, and the camera keeps clearance from the body and floor before the screen fades and the menu opens.
     Effects: Import Dark Messiah's incoming-damage flash and separate critical-health vignette below 5 HP. Recipe 9 requires reimporting after an update.
     Animations: Restore beast-race locomotion, improve clinches on uneven ground and import Dark Messiah camera motion.
     Ragdolls: Fix delayed corpse cuts and impulses after looting, and support open armor contours in waist cuts.

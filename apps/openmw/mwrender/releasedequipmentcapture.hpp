@@ -9,6 +9,7 @@
 #include <osg/FrontFace>
 #include <osg/Matrixd>
 #include <osg/NodeVisitor>
+#include <osgParticle/ParticleSystem>
 #include <cmath>
 #include <functional>
 #include <map>
@@ -64,6 +65,7 @@ namespace MWRender
         osg::Node* mPartRoot;
         osg::Node* mExcluded;
         osg::Node* mActorRoot;
+        bool mIgnoreParticles;
         std::map<std::string, uint32_t> mOrdinals;
 
     public:
@@ -72,10 +74,10 @@ namespace MWRender
         ReleasedEquipmentCapture(ESM::ReleasedEquipmentState& output, osg::Node* root, osg::Node* excluded,
             const osg::Matrixf& itemRoot,
             const std::function<std::optional<osg::Matrixd>(std::string_view)>& bones,
-            osg::Node* actorRoot = nullptr)
+            osg::Node* actorRoot = nullptr, bool ignoreParticles = false)
             : osg::NodeVisitor(TRAVERSE_ALL_CHILDREN), mOutput(output), mBones(bones),
               mOrigin(itemRoot.getTrans()), mRoot(itemRoot),
-              mPartRoot(root), mExcluded(excluded), mActorRoot(actorRoot)
+              mPartRoot(root), mExcluded(excluded), mActorRoot(actorRoot), mIgnoreParticles(ignoreParticles)
         {
             // Keep the exact small attachment offset before doing float skinning
             // or serializing the residual. Inverting a float exterior translation
@@ -104,6 +106,8 @@ namespace MWRender
         {
             const auto& path = getNodePath();
             if (mExcluded && std::find(path.begin(), path.end(), mExcluded) != path.end())
+                return;
+            if (mIgnoreParticles && dynamic_cast<const osgParticle::ParticleSystem*>(&drawable))
                 return;
             osg::ref_ptr<osg::Geometry> source, posed;
             bool world = false;

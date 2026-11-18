@@ -2627,15 +2627,13 @@ namespace MWRender
         const auto* root = ammunition ? mAmmunition.get() : mObjectParts[part].get();
         if (!root || (!ammunition && mPartModels[part].empty()))
             return {};
+        const auto& inventory = mPtr.getClass().getInventoryStore(mPtr);
+        const auto item = inventory.getSlot(slot);
+        if (item == inventory.end())
+            return {};
         auto saved = std::make_shared<ESM::ReleasedEquipmentState>();
         if (ammunition)
-        {
-            const auto& inventory = mPtr.getClass().getInventoryStore(mPtr);
-            const auto item = inventory.getSlot(slot);
-            if (item == inventory.end())
-                return {};
             saved->mModel = item->getClass().getCorrectedModel(*item).value();
-        }
         else
             saved->mModel = mPartModels[part];
         saved->mMass = mass;
@@ -2652,7 +2650,7 @@ namespace MWRender
             };
         ReleasedEquipmentCapture capture(*saved, root->getNode(),
             !ammunition && mAmmunition ? mAmmunition->getNode().get() : nullptr, itemRoot, bones,
-            mPtr.getRefData().getBaseNode());
+            mPtr.getRefData().getBaseNode(), item->getType() == ESM::Light::sRecordId);
         capture.snapshot();
         maxWorldVertexError = capture.maxWorldVertexError;
         if (!saved->valid())

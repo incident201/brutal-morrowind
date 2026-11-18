@@ -409,7 +409,7 @@ namespace MWWorld
         std::vector<osg::Vec3f> getNpcRagdollDynamics(const MWWorld::Ptr& ptr) const override;
         std::vector<osg::Vec3f> getNpcRagdollState(const Ptr& ptr) const override;
         std::map<std::string, double> getNpcRagdollEnhancementState(const Ptr& ptr) const override;
-        void releaseNpcRagdollEquipment(const Ptr& ptr, bool retainedWeaponsOnly) override;
+        void releaseNpcRagdollEquipment(const Ptr& ptr, bool afterKnockdown) override;
         std::vector<RagdollDroppedItem> getNpcRagdollDroppedItems(const Ptr& ptr) const override;
         std::vector<osg::Vec3f> getReleasedEquipmentState(const Ptr& ptr) const override;
         bool applyNpcRagdollImpact(const Ptr& ptr, std::size_t part, const osg::Vec3f& point,

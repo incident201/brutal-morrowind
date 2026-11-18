@@ -328,7 +328,7 @@ namespace MWBase
         virtual std::vector<osg::Vec3f> getNpcRagdollDynamics(const MWWorld::Ptr& ptr) const = 0;
         virtual std::vector<osg::Vec3f> getNpcRagdollState(const MWWorld::Ptr& ptr) const = 0;
         virtual std::map<std::string, double> getNpcRagdollEnhancementState(const MWWorld::Ptr& ptr) const = 0;
-        virtual void releaseNpcRagdollEquipment(const MWWorld::Ptr& ptr, bool retainedWeaponsOnly = false) = 0;
+        virtual void releaseNpcRagdollEquipment(const MWWorld::Ptr& ptr, bool afterKnockdown = false) = 0;
         virtual std::vector<MWWorld::RagdollDroppedItem> getNpcRagdollDroppedItems(const MWWorld::Ptr& ptr) const = 0;
         virtual std::vector<osg::Vec3f> getReleasedEquipmentState(const MWWorld::Ptr& ptr) const = 0;
         virtual bool applyNpcRagdollImpact(const MWWorld::Ptr& ptr, std::size_t part, const osg::Vec3f& point,

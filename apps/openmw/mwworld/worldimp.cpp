@@ -23,6 +23,7 @@
 #include <components/esm3/loadench.hpp>
 #include <components/esm3/loadgmst.hpp>
 #include <components/esm3/loadlevlist.hpp>
+#include <components/esm3/loadligh.hpp>
 #include <components/esm3/loadmgef.hpp>
 #include <components/esm3/loadregn.hpp>
 #include <components/esm3/loadstat.hpp>
@@ -1661,7 +1662,7 @@ namespace MWWorld
     std::map<std::string, double> World::getNpcRagdollEnhancementState(const Ptr& ptr) const
     { return mPhysics->getNpcRagdollEnhancementState(ptr); }
 
-    void World::releaseNpcRagdollEquipment(const Ptr& ptr, bool retainedWeaponsOnly)
+    void World::releaseNpcRagdollEquipment(const Ptr& ptr, bool afterKnockdown)
     {
         if (!Settings::game().mBrutalEquipmentPhysics) return;
         if (!ptr.getClass().isNpc())
@@ -1699,6 +1700,10 @@ namespace MWWorld
             const Ptr item = *equipped;
             if (std::any_of(candidates.begin(), candidates.end(), [&](const auto& candidate) { return candidate.item == item; }))
                 continue;
+            const bool inLeftHand = slot == InventoryStore::Slot_CarriedLeft && animation->getCarriedLeftShown();
+            const bool shield = item.getType() == ESM::Armor::sRecordId
+                && item.get<ESM::Armor>()->mBase->mData.mType == ESM::Armor::Shield;
+            const bool carriedLight = dead && inLeftHand && item.getType() == ESM::Light::sRecordId;
             bool heldWeapon = false;
             if (item.getType() == ESM::Weapon::sRecordId)
             {
@@ -1707,15 +1712,11 @@ namespace MWWorld
                 if (!heldWeapon && slot != InventoryStore::Slot_Ammunition)
                     continue; // An ammo reference in a hand is ineligible.
             }
-            else if (item.getType() != ESM::Armor::sRecordId
-                || item.get<ESM::Armor>()->mBase->mData.mType != ESM::Armor::Shield)
+            else if (!shield && !carriedLight)
                 continue;
-            // A player's death only releases weapons. For an NPC that dies
-            // while knocked down, the shield and ammunition already rolled.
-            if ((player || retainedWeaponsOnly) && !heldWeapon)
-                continue;
-            const bool guaranteed = dead && heldWeapon;
-            if (!guaranteed && Misc::Rng::rollProbability(getPrng()) >= dropChance)
+            const bool guaranteed = dead && (heldWeapon || (inLeftHand && shield) || carriedLight);
+            // Loaded NPC ammunition rolls once when the body first falls.
+            if (!guaranteed && (player || afterKnockdown || Misc::Rng::rollProbability(getPrng()) >= dropChance))
                 continue;
             try
             {
@@ -1753,7 +1754,7 @@ namespace MWWorld
                 {
                     if (!guaranteed)
                         continue;
-                    // Some rigs have no visible mount for an equipped weapon.
+                    // Some rigs have no visible mount for an equipped hand item.
                     // Give it the same ground placement as an ordinary dropped item.
                     candidate.position = getGroundDropPosition(ptr);
                 }

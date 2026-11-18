@@ -43,6 +43,7 @@
 #include <components/vfs/pathutil.hpp>
 #include <components/vfs/recursivedirectoryiterator.hpp>
 
+#include <components/sceneutil/controller.hpp>
 #include <components/sceneutil/keyframe.hpp>
 #include <components/sceneutil/lightcommon.hpp>
 #include <components/sceneutil/lightmanager.hpp>
@@ -476,7 +477,7 @@ namespace
     };
 
     osg::ref_ptr<osg::Group> restoreReleasedEquipment(
-        osg::Node& sourceRoot, const ESM::ReleasedEquipmentState& saved)
+        osg::Node& sourceRoot, const ESM::ReleasedEquipmentState& saved, bool keepParticles)
     {
         if (!saved.valid())
             throw std::runtime_error("Invalid released equipment render snapshot");
@@ -486,6 +487,7 @@ namespace
         result->setName("Released equipment");
         std::set<const ReleasedSource*> used;
         std::size_t compatibilityBudget = ESM::ReleasedEquipmentState::MaxVertices;
+        std::optional<osg::Matrixd> rigidRoot;
         for (const auto& drawable : saved.mDrawables)
         {
             const ReleasedSource* found = nullptr;
@@ -522,6 +524,22 @@ namespace
             }
             if (!found || !used.insert(found).second)
                 throw std::runtime_error("Released equipment source mesh changed or is unavailable");
+
+            if (keepParticles)
+            {
+                osg::Matrixd modelFromSource;
+                keepParticles = found->plain && MWRender::releasedEquipmentStaticVerticesMatch(*found->geometry, drawable)
+                    && modelFromSource.invert(osg::computeLocalToWorld(found->path));
+                const osg::Matrixd transform = modelFromSource * osg::Matrixd(drawable.mTransform.data());
+                if (keepParticles && rigidRoot)
+                {
+                    for (int row = 0; row < 4; ++row)
+                        for (int column = 0; column < 4; ++column)
+                            keepParticles &= std::abs((*rigidRoot)(row, column) - transform(row, column)) < .0001;
+                }
+                else if (keepParticles)
+                    rigidRoot = transform;
+            }
 
             osg::ref_ptr<osg::Geometry> geometry = new osg::Geometry(*found->geometry, osg::CopyOp::SHALLOW_COPY);
             geometry->setUserDataContainer(found->geometry->getUserDataContainer()
@@ -599,6 +617,16 @@ namespace
                 = new osg::MatrixTransform(osg::Matrixf(drawable.mTransform.data()));
             parent->addChild(affine);
             affine->addChild(geometry);
+        }
+        if (keepParticles && rigidRoot)
+        {
+            // The solid meshes agree on one placement for the original light
+            // model. Keep its live particle controllers on the falling item.
+            SceneUtil::AssignControllerSourcesVisitor assign(std::make_shared<SceneUtil::FrameTimeSource>());
+            sourceRoot.accept(assign);
+            osg::ref_ptr<osg::MatrixTransform> model = new osg::MatrixTransform(*rigidRoot);
+            model->addChild(&sourceRoot);
+            return model;
         }
         return result;
     }
@@ -3021,7 +3049,8 @@ namespace MWRender
             setObjectRoot(released ? released->mModel : model, false, false, false);
             if (released)
             {
-                auto snapshot = restoreReleasedEquipment(*mObjectRoot, *released);
+                auto snapshot = restoreReleasedEquipment(
+                    *mObjectRoot, *released, allowLight && ptr.getType() == ESM::Light::sRecordId);
                 mInsert->removeChild(mObjectRoot);
                 mObjectRoot = std::move(snapshot);
                 mSkeleton = nullptr;
