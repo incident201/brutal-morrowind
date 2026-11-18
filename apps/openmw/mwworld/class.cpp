@@ -119,7 +119,7 @@ namespace MWWorld
     }
 
     void Class::hit(const Ptr& ptr, float attackStrength, int type, const Ptr& victim, const osg::Vec3f& hitPosition,
-        bool success, int contactPart) const
+        bool success, int contactPart, bool groundFinisher) const
     {
         throw std::runtime_error("class cannot hit");
     }

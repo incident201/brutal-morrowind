@@ -80,7 +80,7 @@ namespace MWClass
             std::string_view swing) const override;
 
         void hit(const MWWorld::Ptr& ptr, float attackStrength, int type, const MWWorld::Ptr& victim,
-            const osg::Vec3f& hitPosition, bool success, int contactPart) const override;
+            const osg::Vec3f& hitPosition, bool success, int contactPart, bool groundFinisher) const override;
 
         void onHit(const MWWorld::Ptr& ptr, const std::map<std::string, float>& damages, ESM::RefId object,
             const MWWorld::Ptr& attacker, bool successful,

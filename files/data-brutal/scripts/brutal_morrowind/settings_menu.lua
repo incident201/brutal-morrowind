@@ -38,10 +38,11 @@ for _,key in ipairs({
     'ragdollEnabled','ragdollWeaponDrop','dynamicProps','movementEnabled','staminaEnabled',
     'kickEnabled','kickAlwaysRagdoll','slideEnabled','activeBlockEnabled','shieldBashEnabled','parryEnabled',
     'clinchEnabled','attackCombosEnabled','fastAttacksEnabled','wallBounceEnabled','npcAiTweaks','npcStagger','hitRecovery',
-    'adrenalineEnabled','finisherEnabled','superKickEnabled','slowMotionEnabled','dismemberment','bloodEffects','sparkEffects',
+    'adrenalineEnabled','finisherEnabled','groundFinisherEnabled','groundFinisherHealth',
+    'superKickEnabled','slowMotionEnabled','dismemberment','bloodEffects','sparkEffects',
     'bloodDecals','combatSounds','adrenalineHudEnabled','adrenalineFxEnabled','slideFxEnabled','clinchFxEnabled',
 }) do
-    if key=='ragdollWeaponDrop' then
+    if key=='ragdollWeaponDrop' or key=='groundFinisherHealth' then
         options[#options+1]=setting(key,'number',{integer=true,min=0,max=100})
     else
         options[#options+1]=setting(key,type(D[key])=='string' and 'select' or 'checkbox',

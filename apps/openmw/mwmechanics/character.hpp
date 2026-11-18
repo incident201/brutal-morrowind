@@ -2,6 +2,7 @@
 #define GAME_MWMECHANICS_CHARACTER_HPP
 
 #include <deque>
+#include <optional>
 
 #include <components/esm3/loadweap.hpp>
 
@@ -191,6 +192,12 @@ namespace MWMechanics
         BrutalCombo mBrutalCombo{ BrutalCombo::None };
         bool mBrutalComboRelease{ false }; // The attack that started a combo must be released first.
         bool mBrutalRushLanded{ false }; // The rush's first blow struck; the charge stops at the target.
+        struct GroundFinisher
+        {
+            MWWorld::SafePtr mVictim;
+            MWWorld::SafePtr mWeapon;
+        };
+        std::optional<GroundFinisher> mGroundFinisher;
         // Dark Messiah clicks: a release before the windup ends strikes the fixed fast attack chain.
         enum class BrutalFast
         {
@@ -328,6 +335,12 @@ namespace MWMechanics
 
         void prepareHit();
         void resolveMeleeHit();
+        bool canPlayGroundFinisher() const;
+        std::optional<osg::Vec3f> groundFinisherContact(const MWWorld::Ptr& target, bool lockedTarget) const;
+        bool startGroundFinisher();
+        bool updateGroundFinisher();
+        void cancelGroundFinisher();
+        void hitGroundFinisher();
 
         void unpersistAnimationState();
 

@@ -12,7 +12,8 @@ Brutal Morrowind (unreleased)
     Combat: Rebalance adrenaline, add obstacle trips and configurable weapon drops, and simplify ragdoll settings.
     Combat: On death the player and NPCs release their weapons, held shields and carried lights. Surviving NPC knockdowns use the weapon-drop chance.
     Ragdolls: On death the first-person camera follows the head's motion. The downward nod stops short of the neck, and the camera keeps clearance from the body and floor before the screen fades and the menu opens.
-    Effects: Import Dark Messiah's incoming-damage flash and separate critical-health vignette below 5 HP. Recipe 9 requires reimporting after an update.
+    Effects: Import Dark Messiah's incoming-damage flash and separate critical-health vignette below 5 HP.
+    Combat: Release a fully charged melee attack while aiming at a downed enemy to perform a ground finisher with matching first-person camera motion. Its switch and default 30% health threshold are available in Brutal Morrowind settings. Recipe 10 requires reimporting the Dark Messiah assets.
     Animations: Restore beast-race locomotion, improve clinches on uneven ground and import Dark Messiah camera motion.
     Ragdolls: Fix delayed corpse cuts and impulses after looting, and support open armor contours in waist cuts.
 

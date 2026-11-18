@@ -17,6 +17,7 @@ local native={
     wallBounceEnabled='wallBounce',clinchEnabled='clinch',dismemberment='dismemberment',
     slideEnabled='slide',combatSounds='combatSounds',fastAttacksEnabled='fastAttacks',
     bloodEffects='bloodEffects',sparkEffects='sparkEffects',kickAlwaysRagdoll='kickAlwaysRagdoll',
+    groundFinisherEnabled='groundFinisher',
 }
 local function apply()
     -- Storage callbacks are asynchronous; explicit apply must see this edit now.
@@ -32,6 +33,7 @@ local function apply()
     if types.Actor.setBrutalRagdollWeaponDrop then
         types.Actor.setBrutalRagdollWeaponDrop(self,S.mode('ragdollWeaponDrop')/100)
     end
+    types.Actor.setBrutalGroundFinisherHealth(self,S.mode('groundFinisherHealth'))
     set(self,'adrenalineHud',S.mode('adrenalineEnabled') and S.mode('adrenalineHudEnabled'))
     if S.raw('enabled') then set(self,'enabled',true) end
     core.sendGlobalEvent('BrutalSettingsChanged',{player=self,values=S.snapshot()})

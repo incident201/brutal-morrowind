@@ -22,6 +22,7 @@ if not loaded or type(data)~='table' or not data.clips then data=nil end
 
 local FADE=.2 -- Source sequence transition
 local LAND_AIR=.3 -- Airborne at least this long before a landing plays its clip
+local GROUND_FINISHER='brutal_ground_finisher'
 local DIRECTIONS={'N','NE','E','SE','S','SW','W','NW'}
 local ZERO={0,0,0,0,0,0}
 
@@ -111,36 +112,59 @@ local function movementSample(dt)
 end
 
 -- Action layer: the arm group playing now and its part between two text keys.
-local function folder()
+local function weaponKind(weapon)
+    return weapon and types.Weapon.objectIsInstance(weapon) and types.Weapon.record(weapon).type
+end
+local function folder(ground)
     local equipment=types.Actor.getEquipment(self)
     local left=equipment[types.Actor.EQUIPMENT_SLOT.CarriedLeft]
+    local kind=weaponKind(equipment[types.Actor.EQUIPMENT_SLOT.CarriedRight])
+    local W=types.Weapon.TYPE
+    local staff=kind==W.SpearTwoWide or kind==W.BluntTwoWide
+    if ground then
+        -- A hidden, equipped shield does not select the sword-and-shield rig.
+        if staff then return 'brutal_fp_staff' end
+        if kind==W.LongBladeTwoHand or kind==W.AxeTwoHand or kind==W.BluntTwoClose then return 'brutal_fp' end
+    end
     if left and types.Armor.objectIsInstance(left) and types.Armor.record(left).type==types.Armor.TYPE.Shield then
         return 'brutal_fp_shield'
     end
-    local weapon=equipment[types.Actor.EQUIPMENT_SLOT.CarriedRight]
-    local kind=weapon and types.Weapon.objectIsInstance(weapon) and types.Weapon.record(weapon).type
-    if kind==types.Weapon.TYPE.SpearTwoWide or kind==types.Weapon.TYPE.BluntTwoWide then return 'brutal_fp_staff' end
-    if kind==types.Weapon.TYPE.ShortBladeOneHand then return 'brutal_fp_dagger' end
+    if staff then return 'brutal_fp_staff' end
+    if kind==W.ShortBladeOneHand and (not ground or
+        (settings.get('dualWieldEnabled') and weaponKind(left)==W.ShortBladeOneHand)) then
+        return 'brutal_fp_dagger'
+    end
     return 'brutal_fp'
+end
+local function groupSample(group,parts,t)
+    for _,part in ipairs(parts) do
+        local s=animation.getTextKeyTime(self,group..': '..part.start)
+        local e=animation.getTextKeyTime(self,group..': '..part.stop)
+        if s and e and e>s and t>=s and t<=e then
+            local clip=data.clips[part.clip]
+            if clip then
+                return sample(clip,math.min((t-s)/(e-s)*part.duration,length(clip)))
+            end
+        end
+    end
+    return nil
 end
 local function actionSample()
     local sets=data.sets or {}
-    local set,base=sets[folder()] or {},sets.brutal_fp or {}
+    local groundTime=animation.getCurrentTime(self,GROUND_FINISHER)
+    local set,base=sets[folder(groundTime~=nil)] or {},sets.brutal_fp or {}
+    if groundTime then
+        -- The finisher starts from an armed hold. Sample its own active phase
+        -- even while a charged attack is blending out underneath it.
+        local parts=set[GROUND_FINISHER] or base[GROUND_FINISHER]
+        if parts then return groupSample(GROUND_FINISHER,parts,groundTime),true end
+    end
     for _,groups in ipairs({set,base}) do
         for group,parts in pairs(groups) do
             local t=animation.getCurrentTime(self,group)
             if t and (groups==set or not set[group]) then
-                for _,part in ipairs(parts) do
-                    local s=animation.getTextKeyTime(self,group..': '..part.start)
-                    local e=animation.getTextKeyTime(self,group..': '..part.stop)
-                    if s and e and e>s and t>=s and t<=e then
-                        local clip=data.clips[part.clip]
-                        if clip then
-                            local headTime=math.min((t-s)/(e-s)*part.duration,length(clip))
-                            return sample(clip,headTime)
-                        end
-                    end
-                end
+                local motion=groupSample(group,parts,t)
+                if motion then return motion,false end
             end
         end
     end
@@ -148,7 +172,7 @@ local function actionSample()
 end
 
 local current={0,0,0,0,0,0}
-local actionWeight,lastAction=0,ZERO
+local actionWeight,lastAction,groundAction=0,ZERO,false
 return {
     interfaceName='BrutalCameraMotion',
     interface={version=1,status=function()
@@ -168,17 +192,24 @@ return {
             if dt<=0 then return end
             dt=math.min(dt,.1)
             local out=settings.get('cameraMotionMovement') and movementSample(dt) or {0,0,0,0,0,0}
-            local action=actionSample()
+            local action,ground=actionSample()
             -- Actions replace the movement clip, with DM's .2 s transitions either way.
-            if action then lastAction=action;actionWeight=math.min(1,actionWeight+dt/FADE)
+            if action then lastAction=action;groundAction=ground;actionWeight=math.min(1,actionWeight+dt/FADE)
             else actionWeight=math.max(0,actionWeight-dt/FADE) end
             if actionWeight>0 then out=mix(out,lastAction,actionWeight) end
+            if actionWeight>0 and groundAction then
+                -- The authored layer adds a steep dip to an already lowered aim.
+                -- Stop the combined view at the vertical instead of turning over.
+                local pitch=camera.getPitch()+camera.getExtraPitch()
+                local limit=math.pi/2-.001
+                out[1]=math.max(math.min(out[1],math.max(0,limit-pitch)),math.min(0,-limit-pitch))
+            end
             current=out
             camera.setExtraPitch(camera.getExtraPitch()+out[1])
             camera.setExtraYaw(camera.getExtraYaw()+out[2])
             camera.setExtraRoll(camera.getExtraRoll()+out[3])
             camera.setFirstPersonOffset(camera.getFirstPersonOffset()+util.vector3(out[4],out[5],out[6]))
         end,
-        onLoad=function() weights,phases,landing,airborne,actionWeight={},{},nil,0,0 end,
+        onLoad=function() weights,phases,landing,airborne,actionWeight,groundAction={},{},nil,0,0,false end,
     },
 }

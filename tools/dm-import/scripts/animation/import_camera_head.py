@@ -66,25 +66,36 @@ def main():
     ap.add_argument('--output', type=Path, required=True)
     a = ap.parse_args()
     vm = iv.Viewmodel.__new__(iv.Viewmodel)
-    vm.vpk, vm.work, vm.models, vm.provenance = a.vpk_root, a.work_dir, {}, []
+    vm.vpk, vm.work, vm.models, vm.sequences, vm.provenance = a.vpk_root, a.work_dir, {}, {}, []
     scale = json.loads(a.camera_contract.read_text())['body_scale']
     animations = vm.dm_model('player_head_mvt')[3]
     # Arm and head clips differ in case (anm_parry_Daggers_A, @layer_parry_daggers_A).
     available = {anim.name.lower(): anim for anim in animations}
     clips, sets, report = {}, {}, {}
 
-    def bake(name):
+    def sample(name, time):
+        position, angles = vm.head_motion(name, time)
+        return np.r_[angles, scale * iv.BASIS @ np.asarray(position, float)]
+
+    def bake(name, previous=None):
         anim = available.get(name.lower())
         if anim is None:
             return False
         name = anim.name
         if name in clips:
             return name
+        fade = vm.sequence_fade('player_head_mvt', name) if previous else 0.
         frames = []
         for frame in range(anim.frame_count):
-            position, angles = vm.head_motion(name, frame/anim.fps)
-            offset = scale*iv.BASIS@np.asarray(position, float)
-            frames.append([float(v) for v in angles]+[float(v) for v in offset])
+            time = frame / anim.fps
+            pose = sample(name, time)
+            # A new ground-impale layer starts on the arm boundary while its
+            # outgoing camera is still playing, including the 30 fps shield.
+            if time < fade:
+                outgoing = sample(previous['clip'], previous['duration'] + time)
+                amount = time / fade
+                pose = (1. - amount) * outgoing + amount * pose
+            frames.append(pose.tolist())
         clips[name] = dict(fps=float(anim.fps), loop=bool(int(anim.flags) & 1), frames=frames)
         return name
 
@@ -100,7 +111,12 @@ def main():
                 continue  # The contest has its own camera curve (clinch_head.lua).
             parts = []
             for entry in entries:
-                head = next((found for found in map(bake, candidates(folder, entry['clip'])) if found), None)
+                ground_finisher = group == 'brutal_ground_finisher'
+                previous = parts[-1] if ground_finisher and parts else None
+                head = next((found for clip in candidates(folder, entry['clip'])
+                             if (found := bake(clip, previous))), None)
+                if ground_finisher and not head:
+                    raise ValueError(f"Ground finisher camera layer missing for {entry['clip']}")
                 report.setdefault(folder, []).append([group, entry['start'], entry['clip'], head])
                 if head:
                     parts.append(dict(start=entry['start'], stop=entry['stop'], clip=head,

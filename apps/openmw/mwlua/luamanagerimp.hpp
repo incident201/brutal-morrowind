@@ -102,7 +102,8 @@ namespace MWLua
         void onHit(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, const MWWorld::Ptr& weapon,
             const MWWorld::Ptr& ammo, int attackType, float attackStrength, float damage, bool isHealth,
             const osg::Vec3f& hitPos, bool successful, MWMechanics::DamageSourceType sourceType,
-            uint64_t brutalAttackId = 0, bool brutalPowered = false, bool brutalBlocked = false, int contactPart = -1) override;
+            uint64_t brutalAttackId = 0, bool brutalPowered = false, bool brutalBlocked = false, int contactPart = -1,
+            bool brutalGroundFinisher = false) override;
         void meleeResolved(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, const MWWorld::Ptr& weapon,
             uint64_t attackId, const std::string& token, bool powered, bool successful, bool blocked,
             float damage, float strength, const osg::Vec3f& hitPos) override;

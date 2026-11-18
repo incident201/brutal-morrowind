@@ -250,6 +250,7 @@ namespace MWPhysics
             const MWWorld::Ptr& attacker, std::uint64_t kickId);
         std::map<std::string, double> getNpcSuperKickState(const MWWorld::Ptr& ptr) const;
         std::vector<osg::Vec3f> getNpcRagdollDynamics(const MWWorld::Ptr& ptr) const;
+        bool isNpcGroundedRagdoll(const MWWorld::Ptr& ptr) const;
         std::vector<osg::Vec3f> getNpcRagdollState(const MWWorld::Ptr& ptr) const;
         std::map<std::string, double> getNpcRagdollEnhancementState(const MWWorld::Ptr& ptr) const;
         bool applyNpcRagdollImpact(const MWWorld::Ptr& ptr, std::size_t part, const osg::Vec3f& point,

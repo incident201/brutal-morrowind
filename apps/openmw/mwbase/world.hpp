@@ -326,6 +326,7 @@ namespace MWBase
             const MWWorld::Ptr& attacker, std::uint64_t kickId) = 0;
         virtual std::map<std::string, double> getNpcSuperKickState(const MWWorld::Ptr& ptr) const = 0;
         virtual std::vector<osg::Vec3f> getNpcRagdollDynamics(const MWWorld::Ptr& ptr) const = 0;
+        virtual bool isNpcGroundedRagdoll(const MWWorld::Ptr& ptr) const = 0;
         virtual std::vector<osg::Vec3f> getNpcRagdollState(const MWWorld::Ptr& ptr) const = 0;
         virtual std::map<std::string, double> getNpcRagdollEnhancementState(const MWWorld::Ptr& ptr) const = 0;
         virtual void releaseNpcRagdollEquipment(const MWWorld::Ptr& ptr, bool afterKnockdown = false) = 0;

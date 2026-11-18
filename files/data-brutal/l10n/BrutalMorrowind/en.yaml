@@ -87,6 +87,10 @@ adrenalineDecay: Adrenaline decay
 adrenalineDecayDescription: "Charge slowly drains between fights."
 finisherEnabled: Adrenaline weapon finishers
 finisherEnabledDescription: "Spend a full charge on a lethal charged weapon strike."
+groundFinisherEnabled: Ground finishers
+groundFinisherEnabledDescription: "Release a charged attack while aiming at a fallen enemy below the health threshold."
+groundFinisherHealth: Ground finisher health threshold, %
+groundFinisherHealthDescription: "The enemy's health must be strictly below this percentage of their maximum health."
 superKickEnabled: Adrenaline super kick
 superKickEnabledDescription: "A stronger kick at full charge. Requires kick, adrenaline and ragdoll."
 dualWieldEnabled: Dual short blades

@@ -612,7 +612,7 @@ namespace MWClass
     }
 
     void Npc::hit(const MWWorld::Ptr& ptr, float attackStrength, int type, const MWWorld::Ptr& victim,
-        const osg::Vec3f& hitPosition, bool success, int contactPart) const
+        const osg::Vec3f& hitPosition, bool success, int contactPart, bool groundFinisher) const
     {
         MWWorld::InventoryStore& inv = getInventoryStore(ptr);
         MWWorld::ContainerStoreIterator weaponslot = inv.getSlot(getCreatureStats(ptr).mBrutalOffhandStrike
@@ -631,7 +631,7 @@ namespace MWClass
         // The charge belongs to the right hand; the left dagger's strike neither carries nor clears it.
         const bool offhand = getCreatureStats(ptr).mBrutalOffhandStrike;
         if (!offhand && !armed.token.empty() && (armed.weapon != weapon || getCreatureStats(ptr).isDead())) armed = {};
-        if (!offhand && !getCreatureStats(ptr).mBrutalFastStrike && !armed.token.empty()
+        if (!groundFinisher && !offhand && !getCreatureStats(ptr).mBrutalFastStrike && !armed.token.empty()
             && attackStrength >= armed.minimumStrength)
         {
             brutalPowered = true;
@@ -655,11 +655,12 @@ namespace MWClass
             return;
 
         const float reach = MWMechanics::getMeleeWeaponReach(ptr, weapon);
-        const bool bodyInReach = MWMechanics::isInMeleeReach(ptr, victim, reach);
+        // The finisher has already traced the actual prone torso at its impact key.
+        const bool bodyInReach = groundFinisher || MWMechanics::isInMeleeReach(ptr, victim, reach);
         if (!bodyInReach && !MWMechanics::hasReachableNpcGuardContact(ptr, victim, reach, hitPosition, contactPart))
             return;
 
-        if (Settings::game().mMeleeContactAlwaysHits
+        if (!groundFinisher && Settings::game().mMeleeContactAlwaysHits
             && !MWBase::Environment::get().getWorld()->getLOS(ptr, victim))
             return;
         // Recheck at the hit frame too: another actor can enter the path after
@@ -755,7 +756,8 @@ namespace MWClass
 
         MWMechanics::applyElementalShields(ptr, victim);
 
-        brutalBlocked = MWMechanics::blockMeleeAttack(ptr, victim, weapon, damage, attackStrength, hitPosition, contactPart);
+        brutalBlocked = !groundFinisher
+            && MWMechanics::blockMeleeAttack(ptr, victim, weapon, damage, attackStrength, hitPosition, contactPart);
         if (brutalBlocked)
             damage = 0;
 
@@ -767,7 +769,7 @@ namespace MWClass
         brutalSuccessful = true;
         MWBase::Environment::get().getLuaManager()->onHit(ptr, victim, weapon, MWWorld::Ptr(), type, attackStrength,
             damage, healthdmg, hitPosition, true, MWMechanics::DamageSourceType::Melee,
-            brutalAttackId, brutalPowered, brutalBlocked, contactPart);
+            brutalAttackId, brutalPowered, brutalBlocked, contactPart, groundFinisher);
     }
 
     void Npc::onHit(const MWWorld::Ptr& ptr, const std::map<std::string, float>& damages, ESM::RefId object,

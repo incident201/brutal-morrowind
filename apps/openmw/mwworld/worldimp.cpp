@@ -1654,6 +1654,9 @@ namespace MWWorld
     std::vector<osg::Vec3f> World::getNpcRagdollDynamics(const Ptr& ptr) const
     { return mPhysics->getNpcRagdollDynamics(ptr); }
 
+    bool World::isNpcGroundedRagdoll(const Ptr& ptr) const
+    { return mPhysics->isNpcGroundedRagdoll(ptr); }
+
     std::vector<osg::Vec3f> World::getNpcRagdollState(const Ptr& ptr) const
     {
         return mPhysics->getNpcRagdollState(ptr);

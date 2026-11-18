@@ -24,7 +24,12 @@ Incoming damage and critical health use the original Dark Messiah vignette.
 Damage determines how long the flash lasts, and the critical-health layer
 starts below 5 HP.
 
-This branch uses **Dark Messiah import recipe 9**. Its launcher asks to reimport
+Release a fully charged melee attack while aiming at a fallen enemy to perform
+a ground finisher. Its first-person camera follows the strike's animation. The
+Brutal Morrowind settings let you turn ground finishers off or change the health
+threshold, which defaults to strictly below 30%.
+
+This branch uses **Dark Messiah import recipe 10**. Its launcher asks to reimport
 older data. See `CHANGELOG.md` for the other unreleased changes.
 
 ## Requirements

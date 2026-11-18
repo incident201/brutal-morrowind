@@ -36,6 +36,8 @@ local DEFAULTS={
     hitRecovery=true,
     adrenalineEnabled=true,
     finisherEnabled=true,
+    groundFinisherEnabled=true,
+    groundFinisherHealth=30,
     superKickEnabled=true,
     slowMotionEnabled=true,
     dismemberment=true,
@@ -57,7 +59,7 @@ local DEFAULTS={
 local DARK_MESSIAH_KEYS={'firstPersonBody','cameraMotionMovement','dualWieldEnabled','meleeGeometry','dismemberment',
     'kickEnabled','kickAlwaysRagdoll','superKickEnabled','slideEnabled','slideFxEnabled','activeBlockEnabled',
     'shieldBashEnabled','parryEnabled','clinchEnabled','clinchFxEnabled','attackCombosEnabled',
-    'fastAttacksEnabled','wallBounceEnabled','adrenalineEnabled','finisherEnabled','bloodEffects',
+    'fastAttacksEnabled','wallBounceEnabled','adrenalineEnabled','finisherEnabled','groundFinisherEnabled','bloodEffects',
     'sparkEffects','bloodDecals','combatSounds'}
 local darkMessiahData=vfs.fileExists('animations/brutal_npc/brutal_hit.kf')
     and vfs.fileExists('animations/brutal_fp/brutal_blockhit1.kf')
@@ -83,7 +85,9 @@ local function validate(key,value)
     if key=='firstPersonAnimations' or key=='npcAnimations' then
         return value=='morrowind' and 'morrowind' or 'darkMessiah'
     end
-    if key=='ragdollWeaponDrop' then return math.max(0,math.min(100,math.floor(value))) end
+    if key=='ragdollWeaponDrop' or key=='groundFinisherHealth' then
+        return math.max(0,math.min(100,math.floor(value)))
+    end
     if key=='superKickSpeed' then return math.max(460,math.min(1000,value)) end
     if key=='adrenalineFastHits' then return math.max(1,math.min(30,math.floor(value))) end
     return value
@@ -112,7 +116,7 @@ local function refresh()
         for _,key in ipairs({'firstPersonBody','dualWieldEnabled',
             'meleeGeometry','dismemberment','kickEnabled','kickAlwaysRagdoll','superKickEnabled',
             'slideEnabled','slideFxEnabled','shieldBashEnabled','clinchEnabled',
-            'clinchFxEnabled','attackCombosEnabled','fastAttacksEnabled','wallBounceEnabled'}) do
+            'clinchFxEnabled','attackCombosEnabled','fastAttacksEnabled','wallBounceEnabled','groundFinisherEnabled'}) do
             mode[key]=false
         end
     end

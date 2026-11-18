@@ -262,7 +262,7 @@ namespace MWClass
     }
 
     void Creature::hit(const MWWorld::Ptr& ptr, float attackStrength, int type, const MWWorld::Ptr& victim,
-        const osg::Vec3f& hitPosition, bool success, int contactPart) const
+        const osg::Vec3f& hitPosition, bool success, int contactPart, bool) const
     {
         MWMechanics::CreatureStats& stats = getCreatureStats(ptr);
 

@@ -479,6 +479,7 @@ namespace MWLua
                 {"classicNpcAnimations", g.mBrutalClassicNpcAnimations}, {"firstPersonBody", g.mBrutalFirstPersonBody},
                 {"dismemberment", g.mBrutalDismemberment}, {"npcCombatTweaks", g.mDarkMessiahNpcCombat},
                 {"guaranteedHits", g.mMeleeContactAlwaysHits}, {"ragdoll", g.mBrutalRagdoll},
+                {"groundFinisher", g.mBrutalGroundFinisher},
                 {"ragdollEnhancements", g.mRagdollEnhancement}, {"npcStandup", g.mDarkMessiahStandUp},
                 {"ragdollSoftStops", g.mRagdollSoftStops}, {"ragdollNeutralPose", g.mRagdollNeutralPose},
                 {"ragdollLimbResponse", g.mRagdollLimbResponse}, {"ragdollSelfCollision", g.mRagdollSelfCollision}, {"dynamicProps", g.mBrutalDynamicProps},
@@ -500,6 +501,12 @@ namespace MWLua
                 [chance] { Settings::game().mBrutalRagdollWeaponDrop.set(std::clamp(chance, 0.f, 1.f)); });
         };
         actor["getBrutalRagdollWeaponDrop"] = [] { return Settings::game().mBrutalRagdollWeaponDrop.get(); };
+        actor["setBrutalGroundFinisherHealth"] = [context](const SelfObject& self, int percentage) {
+            if (self.ptr() != MWMechanics::getPlayer())
+                throw std::runtime_error("Brutal options require player SELF");
+            context.mLuaManager->addAction(
+                [percentage] { Settings::game().mBrutalGroundFinisherHealth.set(percentage); });
+        };
         actor["getBrutalOption"] = [initialiseOptions](std::string name) -> bool {
             initialiseOptions();
             if (!brutalOptions.contains(name)) throw std::runtime_error("Unknown Brutal option: " + name);
@@ -540,6 +547,7 @@ namespace MWLua
                 g.mDarkMessiahNpcCombat.set(on("npcCombatTweaks"));
                 g.mMeleeContactAlwaysHits.set(on("guaranteedHits"));
                 g.mBrutalRagdoll.set(on("ragdoll"));
+                g.mBrutalGroundFinisher.set(on("groundFinisher"));
                 g.mRagdollEnhancement.set(on("ragdoll") && on("ragdollEnhancements"));
                 g.mBrutalKickAlwaysRagdoll.set(on("kickAlwaysRagdoll") && on("ragdoll"));
                 g.mDarkMessiahStandUp.set(on("npcStandup") && on("ragdoll") && !g.mBrutalClassicNpcAnimations);

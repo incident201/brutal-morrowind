@@ -726,7 +726,7 @@ namespace MWLua
     void LuaManager::onHit(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, const MWWorld::Ptr& weapon,
         const MWWorld::Ptr& ammo, int attackType, float attackStrength, float damage, bool isHealth,
         const osg::Vec3f& hitPos, bool successful, MWMechanics::DamageSourceType sourceType,
-        uint64_t brutalAttackId, bool brutalPowered, bool brutalBlocked, int contactPart)
+        uint64_t brutalAttackId, bool brutalPowered, bool brutalBlocked, int contactPart, bool brutalGroundFinisher)
     {
         mLua.protectedCall([&](LuaUtil::LuaView& view) {
             sol::table damageTable = view.newTable();
@@ -749,6 +749,7 @@ namespace MWLua
             data["successful"] = successful;
             data["brutalAttackId"] = brutalAttackId;
             data["brutalPowered"] = brutalPowered;
+            data["brutalGroundFinisher"] = brutalGroundFinisher;
             data["brutalFast"] = !attacker.isEmpty() && attacker.getClass().isActor()
                 && attacker.getClass().getCreatureStats(attacker).mBrutalFastStrike;
             data["brutalShieldRush"] = !attacker.isEmpty() && attacker.getClass().isActor()

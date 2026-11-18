@@ -87,6 +87,10 @@ adrenalineDecay: Убывание адреналина
 adrenalineDecayDescription: "Заряд постепенно убывает вне боя."
 finisherEnabled: Адреналиновые добивания оружием
 finisherEnabledDescription: "Полный заряд даёт смертельный заряженный удар оружием."
+groundFinisherEnabled: Добивания на земле
+groundFinisherEnabledDescription: "Отпустите заряженную атаку, прицелившись в лежащего врага со здоровьем ниже указанного порога."
+groundFinisherHealth: Порог здоровья для добивания, %
+groundFinisherHealthDescription: "Добивание доступно, когда здоровье врага строго ниже этого процента от максимума."
 superKickEnabled: Адреналиновый сверхпинок
 superKickEnabledDescription: "Усиленный пинок за полный заряд. Нужны пинок, адреналин и ragdoll."
 dualWieldEnabled: Два коротких клинка

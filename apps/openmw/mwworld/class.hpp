@@ -140,7 +140,8 @@ namespace MWWorld
         /// (default implementation: throw an exception)
 
         virtual void hit(const Ptr& ptr, float attackStrength, int type = -1, const Ptr& victim = Ptr(),
-            const osg::Vec3f& hitPosition = osg::Vec3f(), bool success = false, int contactPart = -1) const;
+            const osg::Vec3f& hitPosition = osg::Vec3f(), bool success = false, int contactPart = -1,
+            bool groundFinisher = false) const;
         ///< Execute a melee hit on the victim at hitPosition, using the current weapon. If the hit was successful,
         ///< apply damage and process corresponding events.
         /// \param attackStrength how long the attack was charged for, a value in 0-1 range.

@@ -1374,6 +1374,12 @@ namespace MWPhysics
         return out;
     }
 
+    bool PhysicsSystem::isNpcGroundedRagdoll(const MWWorld::Ptr& ptr) const
+    {
+        const auto found = mPushRagdolls.find(ptr.mRef);
+        return found != mPushRagdolls.end() && found->second.supported;
+    }
+
     std::map<std::string, double> PhysicsSystem::getNpcRagdollEnhancementState(const MWWorld::Ptr& ptr) const
     {
         const auto found = mRagdolls.find(ptr.mRef);

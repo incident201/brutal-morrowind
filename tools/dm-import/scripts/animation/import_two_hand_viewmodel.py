@@ -234,7 +234,7 @@ def convert(source, target, retarget):
     # keeps the left palm close to its rigid item-space target as well.
     midpoints = (original_times[:-1] + original_times[1:]) * .5
     times = np.sort(np.r_[original_times, midpoints[np.diff(original_times) > .022]])
-    attacking = group == 'weapononehand'
+    attacking = group in ('weapononehand', 'brutal_ground_finisher')
     poses = []
     previous = None
     for time in times:
@@ -265,7 +265,7 @@ def convert(source, target, retarget):
     if not set(poses[0]).issubset(names):
         raise ValueError(f'Missing arm channels in {source.name}')
     source_keys = list(marks.keys)
-    if attacking:
+    if group == 'weapononehand':
         source_keys.append((0., group + ': brutal paired grip'))
         source_keys.sort(key=lambda key: key[0])
     yaml = source.with_suffix('.yaml')
@@ -296,7 +296,7 @@ def build(arms, clinch, native_skeleton, native_animation):
         convert(folder / 'weapononehand.kf', output / (weapon_group + '.kf'), retarget)
         for path in sources:
             convert(path, output / (path.stem[:-2] + family + '.kf'), retarget)
-        for group in (*guards, *kicks):
+        for group in (*guards, *kicks, 'brutal_ground_finisher'):
             path = folder / (group + '.kf')
             convert(path, output / path.name, retarget)
         for group in contest:

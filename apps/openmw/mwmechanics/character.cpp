@@ -72,6 +72,7 @@
 
 namespace
 {
+    const std::string sGroundFinisher = "brutal_ground_finisher";
 
     std::string_view getBestAttack(const ESM::Weapon* weapon)
     {
@@ -424,6 +425,7 @@ namespace MWMechanics
 
     void CharacterController::resetCurrentWeaponState()
     {
+        cancelGroundFinisher();
         clearStateAnimation(mCurrentWeapon);
         mUpperBodyState = UpperBodyState::None;
         mBrutalChargedHold = mBrutalGuardCharge = false;
@@ -1220,6 +1222,14 @@ namespace MWMechanics
         }
 
         std::string_view action = evt.substr(groupname.size() + 2);
+        if (groupname == sGroundFinisher)
+        {
+            if (mGroundFinisher && action == "swing")
+                playSwishSound();
+            else if (action == "hit")
+                hitGroundFinisher();
+            return;
+        }
         if (mPtr == getPlayer() && (groupname == "brutal_rush" || groupname == "brutal_fallattack"))
         {
             // first_basic.qct HitPow relative to the charged big slash (1.5), which matches a
@@ -1544,6 +1554,157 @@ namespace MWMechanics
         return mPtr == getPlayer() && mAnimation && mAnimation->useBrutalStaffSet() && brutalStaffWeapon(mWeaponType);
     }
 
+    bool CharacterController::canPlayGroundFinisher() const
+    {
+        const auto& settings = Settings::game();
+        if (mPtr != getPlayer() || !settings.mBrutalGroundFinisher || !brutalDmFirstPerson()
+            || mWeapon.isEmpty() || getWeaponType(mWeaponType)->mWeaponClass != ESM::WeaponType::Melee
+            || mWeapon.getType() != ESM::Weapon::sRecordId || !mAnimation)
+            return false;
+        const auto world = MWBase::Environment::get().getWorld();
+        const auto& stats = mPtr.getClass().getCreatureStats(mPtr);
+        if (!world->isFirstPerson() || !world->isOnGround(mPtr) || world->isSwimming(mPtr) || world->isFlying(mPtr)
+            || stats.isDead() || stats.isParalyzed() || stats.getKnockedDown() || stats.getHitRecovery()
+            || stats.mBrutalBlockRequested || stats.mBrutalSlidePhase || stats.mBrutalSlideAttack
+            || stats.mBrutalClinchActive || isScriptedAnimPlaying() || stats.wasTeleported()
+            || stats.getDrawState() != DrawState::Weapon)
+            return false;
+        const auto& inventory = mPtr.getClass().getInventoryStore(mPtr);
+        const auto equipped = inventory.getSlot(MWWorld::InventoryStore::Slot_CarriedRight);
+        return equipped != inventory.end() && *equipped == mWeapon;
+    }
+
+    std::optional<osg::Vec3f> CharacterController::groundFinisherContact(
+        const MWWorld::Ptr& target, bool lockedTarget) const
+    {
+        const auto world = MWBase::Environment::get().getWorld();
+        if (target.isEmpty() || !target.isInCell() || !target.getClass().isNpc() || target == mPtr)
+            return std::nullopt;
+        const auto& stats = target.getClass().getCreatureStats(target);
+        const auto& health = stats.getHealth();
+        if (stats.isDead() || health.getCurrent() <= 0.f
+            || health.getCurrent() * 100.f >= health.getModified() * Settings::game().mBrutalGroundFinisherHealth.get()
+            || !stats.getAiSequence().isInCombat(mPtr))
+            return std::nullopt;
+
+        const bool groundedRagdoll = world->isNpcGroundedRagdoll(target);
+        if (!groundedRagdoll && (!stats.getKnockedDown() || !world->isOnGround(target) || world->isSwimming(target)))
+            return std::nullopt;
+
+        const osg::Vec3f torso = getMeleeTorsoPosition(target);
+        const auto targetBounds = world->getHalfExtents(target, true);
+        // The knocked-down flag also covers the upright parts of a fall and get-up.
+        if (!groundedRagdoll && torso.z() - target.getRefData().getPosition().pos[2] > targetBounds.z() * .8f)
+            return std::nullopt;
+        const auto [origin, aim] = getMeleeAim(mPtr);
+        const osg::Vec3f delta = torso - origin;
+        const float along = delta * aim;
+        const float reach = getMeleeWeaponReach(mPtr, mWeapon);
+        const float feetHeight = mPtr.getRefData().getPosition().pos[2];
+        const float radius = std::max(12.f, targetBounds.x());
+        // Measure against the ragdoll's actual chest. Its standing actor bounds can be
+        // several feet away when a kick moves the body.
+        const osg::Vec2f horizontal(torso.x() - origin.x(), torso.y() - origin.y());
+        // Once selected, the body may roll between the release and the impact key.
+        // Its chest must still be in front of the strike and unobstructed.
+        const float aimRadius = lockedTarget ? radius + 28.f : radius;
+        if (along <= 0.f || aim.z() >= 0.f || (delta - aim * along).length2() > aimRadius * aimRadius
+            || horizontal.length() > reach + world->getHalfExtents(mPtr).y()
+            || delta.z() > 0.f || torso.z() < feetHeight - radius)
+            return std::nullopt;
+
+        constexpr int mask = MWPhysics::CollisionType_World | MWPhysics::CollisionType_Door
+            | MWPhysics::CollisionType_HeightMap | MWPhysics::CollisionType_Dynamic | MWPhysics::CollisionType_Actor;
+        if (world->getRayCasting()->castRay(origin, torso, { mPtr, target }, {}, mask).mHit)
+            return std::nullopt;
+        MWPhysics::RayCastingResult surface;
+        if (world->castRenderingRay(surface, origin, torso, true, false, {}, true))
+        {
+            if (surface.mHitObject != target)
+                return std::nullopt;
+            return surface.mHitPos;
+        }
+        return torso;
+    }
+
+    bool CharacterController::startGroundFinisher()
+    {
+        if (!canPlayGroundFinisher() || !mAnimation->hasAnimation(sGroundFinisher))
+            return false;
+        const osg::Vec3f origin = getMeleeAim(mPtr).first;
+        const float searchRadius = getMeleeWeaponReach(mPtr, mWeapon) * 2.f
+            + MWBase::Environment::get().getWorld()->getHalfExtents(mPtr, true).z() * 2.f;
+        std::vector<MWWorld::Ptr> actors;
+        MWBase::Environment::get().getMechanicsManager()->getActorsInRange(origin, searchRadius, actors);
+        MWWorld::Ptr victim;
+        float closest = std::numeric_limits<float>::max();
+        for (const auto& actor : actors)
+        {
+            const auto contact = groundFinisherContact(actor, false);
+            if (!contact)
+                continue;
+            const float distance = (*contact - origin).length2();
+            if (distance < closest)
+            {
+                closest = distance;
+                victim = actor;
+            }
+        }
+        if (victim.isEmpty())
+            return false;
+
+        mGroundFinisher.emplace(GroundFinisher{ MWWorld::SafePtr(victim), MWWorld::SafePtr(mWeapon) });
+        mReadyToHit = false;
+        mBrutalChargedHold = false;
+        mBrutalFast = BrutalFast::None;
+        resetBrutalFastContinuation();
+        mUpperBodyState = UpperBodyState::WeaponEquipped;
+        MWBase::Environment::get().getWorld()->breakInvisibility(mPtr);
+        mAnimation->disable(mCurrentWeapon);
+        playBlendedAnimation(sGroundFinisher, Priority_Knockdown, MWRender::BlendMask_All,
+            true, 1.f, "start", "stop", 0.f, 0);
+        return true;
+    }
+
+    bool CharacterController::updateGroundFinisher()
+    {
+        if (!mGroundFinisher)
+            return false;
+        if (!canPlayGroundFinisher() || mGroundFinisher->mWeapon.ptrOrEmpty() != mWeapon)
+        {
+            cancelGroundFinisher();
+            return false;
+        }
+        if (mAnimation->isPlaying(sGroundFinisher))
+            return true;
+        mGroundFinisher.reset();
+        return false;
+    }
+
+    void CharacterController::cancelGroundFinisher()
+    {
+        if (mGroundFinisher && mAnimation)
+            mAnimation->disable(sGroundFinisher);
+        mGroundFinisher.reset();
+    }
+
+    void CharacterController::hitGroundFinisher()
+    {
+        if (!mGroundFinisher)
+            return;
+        const auto selected = std::exchange(mGroundFinisher->mVictim, MWWorld::SafePtr());
+        if (!canPlayGroundFinisher() || mGroundFinisher->mWeapon.ptrOrEmpty() != mWeapon)
+            return;
+        const auto& victim = selected.ptrOrEmpty();
+        const auto contact = groundFinisherContact(victim, true);
+        if (!contact)
+            return;
+        const auto& skill = mWeapon.getClass().getEquipmentSkill(mWeapon);
+        const int attack = skill == ESM::Skill::ShortBlade || skill == ESM::Skill::LongBlade || skill == ESM::Skill::Spear
+            ? ESM::Weapon::AT_Thrust : ESM::Weapon::AT_Chop;
+        mPtr.getClass().hit(mPtr, 1.f, attack, victim, *contact, true, -1, true);
+    }
+
     bool CharacterController::hasBrutalOffhandDagger() const
     {
         if (!brutalDualWield() || mPtr != getPlayer() || !mAnimation || !brutalDmFirstPerson() || !mPtr.getClass().hasInventoryStore(mPtr))
@@ -1590,6 +1751,8 @@ namespace MWMechanics
         if (!mPtr.getClass().getCreatureStats(mPtr).mBrutalBlockRequested)
             mBrutalGuardCharge = false;
         normalizeBrutalDualDaggers();
+        if (updateGroundFinisher())
+            return false;
         // Count the continuation allowance in simulation time; pauses cannot
         // consume it. Guard, scripted actions and a changed set discard it.
         if (mBrutalFastGrace > 0.f)
@@ -2156,6 +2319,9 @@ namespace MWMechanics
             && (mWeaponType == ESM::Weapon::PickProbe || isRandomAttackAnimation(mCurrentWeapon)
                 || !getAttackingOrSpell()))
         {
+            const bool fullyCharged = mBrutalChargedHold || calculateWindUp() >= 1.f;
+            if (!getAttackingOrSpell() && fullyCharged && startGroundFinisher())
+                return false;
             if (mBrutalChargedHold)
             {
                 // Return to the release marker without playing the authored
@@ -3355,6 +3521,7 @@ namespace MWMechanics
         if (!mAnimation)
             return;
         auto& stats = mPtr.getClass().getCreatureStats(mPtr);
+        cancelGroundFinisher();
         cancelBrutalCombo();
         cancelBrutalSlide();
         if (!mCurrentWeapon.empty())
@@ -3536,9 +3703,10 @@ namespace MWMechanics
         // weapon text keys before clearing its pending hit, as stagger does, so no
         // blow lands beneath the kick. Held attack input waits for the kick to end.
         if (!mAnimation || mPtr != getPlayer()
-            || (mBrutalCombo == BrutalCombo::None
+            || (!mGroundFinisher && mBrutalCombo == BrutalCombo::None
                 && (mCurrentWeapon.empty() || !mAnimation->getInfo(mCurrentWeapon))))
             return;
+        cancelGroundFinisher();
         cancelBrutalCombo();
         if (!mCurrentWeapon.empty())
             mAnimation->disable(mCurrentWeapon);
@@ -4085,6 +4253,11 @@ namespace MWMechanics
                 }
                 {
                     // Release: the charged swing's out section, as from a full windup.
+                    if (mBrutalFast == BrutalFast::TransitionHold && startGroundFinisher())
+                    {
+                        refresh();
+                        return;
+                    }
                     const std::string attack = getAttackAnimationType();
                     mAnimation->disable(mCurrentWeapon);
                     playBlendedAnimation(mCurrentWeapon, fastPriority(), MWRender::BlendMask_All, false, 1.f,
@@ -4845,6 +5018,7 @@ namespace MWMechanics
     {
         if (mDeathState == CharState_None)
         {
+            cancelGroundFinisher();
             if (hasPhysicalDeath())
             {
                 // Capture the last evaluated pose before a death animation or

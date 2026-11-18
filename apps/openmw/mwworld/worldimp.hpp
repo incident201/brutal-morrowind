@@ -407,6 +407,7 @@ namespace MWWorld
             std::uint64_t kickId) override;
         std::map<std::string, double> getNpcSuperKickState(const Ptr& ptr) const override;
         std::vector<osg::Vec3f> getNpcRagdollDynamics(const MWWorld::Ptr& ptr) const override;
+        bool isNpcGroundedRagdoll(const MWWorld::Ptr& ptr) const override;
         std::vector<osg::Vec3f> getNpcRagdollState(const Ptr& ptr) const override;
         std::map<std::string, double> getNpcRagdollEnhancementState(const Ptr& ptr) const override;
         void releaseNpcRagdollEquipment(const Ptr& ptr, bool afterKnockdown) override;

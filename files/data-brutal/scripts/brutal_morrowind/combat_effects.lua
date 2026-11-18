@@ -128,15 +128,16 @@ end
 
 interface.adjustDamageForDifficulty = function(attack)
     previous.adjustDamageForDifficulty(attack)
-    -- DM's manual describes a full-adrenaline Power Strike as a finishingmove.
-    -- Apply this after ordinary armor/difficulty in the same Combat damage path,
-    -- so death, killer attribution and ragdoll still receive one ordinary hit.
-    if settings.get('finisherEnabled') and settings.get('adrenalineEnabled') and attack.brutalPowered and attack.successful and not attack.brutalBlocked
+    -- Apply lethal damage after armor and difficulty so the normal hit owns the
+    -- kill, including attribution, ragdoll, and the equipment drop.
+    local ground = attack.brutalGroundFinisher and settings.get('groundFinisherEnabled')
+    local powered = attack.brutalPowered and settings.get('finisherEnabled') and settings.get('adrenalineEnabled')
+    if (ground or powered) and attack.successful and not attack.brutalBlocked
         and attack.sourceType=='melee' and attack.attacker and attack.attacker:isValid()
         and types.Player.objectIsInstance(attack.attacker)
         and not types.Player.objectIsInstance(self)
-        and not types.Actor.isDead(self) and attack.damage and (attack.damage.health or 0)>0 then
-        attack.damage.health=math.max(attack.damage.health,types.Actor.stats.dynamic.health(self).current)
+        and not types.Actor.isDead(self) and attack.damage and (ground or (attack.damage.health or 0)>0) then
+        attack.damage.health=math.max(attack.damage.health or 0,types.Actor.stats.dynamic.health(self).current)
     end
 end
 
