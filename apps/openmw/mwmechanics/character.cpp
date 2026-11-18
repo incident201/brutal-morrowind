@@ -3195,6 +3195,14 @@ namespace MWMechanics
             }
         }
 
+        // Sample the weapon clock across this frame. A seek or an interrupted
+        // attack must never move the player through a skipped section.
+        const bool spearStep = mPtr == getPlayer() && mWeaponType == ESM::Weapon::SpearTwoWide
+            && !mSkipAnim && duration > 0.f && world->isFirstPerson() && brutalDmFirstPerson()
+            && (mBrutalFast == BrutalFast::Attack || mUpperBodyState == UpperBodyState::AttackRelease)
+            && world->isOnGround(mPtr) && !world->isSwimming(mPtr) && !world->isFlying(mPtr)
+            && !isKnockedDown() && !isKnockedOut() && !isScriptedAnimPlaying();
+        const float strideFrom = spearStep ? mAnimation->getCurrentTime(mCurrentWeapon) : -1.f;
         osg::Vec3f movementFromAnimation
             = mAnimation->runAnimation(mSkipAnim && !isScriptedAnimPlaying() ? 0.f : duration);
 
@@ -3250,6 +3258,31 @@ namespace MWMechanics
 
             movement.x() *= scale;
             movement.y() *= scale;
+            if (spearStep && strideFrom >= 0.f)
+            {
+                const float strideTo = mAnimation->getCurrentTime(mCurrentWeapon);
+                const bool quick = mBrutalFast == BrutalFast::Attack;
+                std::string section = "thrust";
+                if (quick)
+                {
+                    section = std::string("fast") + static_cast<char>('a' + mBrutalFastIndex - 1);
+                    const float loop = mAnimation->getTextKeyTime(mCurrentWeapon + ": fastloopa start");
+                    if (mBrutalFastIndex == 1 && loop >= 0.f && strideFrom >= loop)
+                        section = "fastloopa";
+                }
+                const std::string prefix = mCurrentWeapon + ": " + section;
+                const float begin = mAnimation->getTextKeyTime(prefix + " plant");
+                const float end = mAnimation->getTextKeyTime(prefix + " weight forward");
+                if (begin >= 0.f && end > begin && strideTo > strideFrom && strideTo > begin && strideFrom < end)
+                {
+                    const auto weight = [=](float t) {
+                        const float u = std::clamp((t - begin) / (end - begin), 0.f, 1.f);
+                        return u * u * (3.f - 2.f * u);
+                    };
+                    // Normal actor locomotion resolves walls, other actors, and slopes.
+                    movement.y() += (quick ? 11.f : 22.f) * (weight(strideTo) - weight(strideFrom)) / duration;
+                }
+            }
             world->queueMovement(mPtr, movement);
         }
 
