@@ -4,7 +4,9 @@ import argparse
 from functools import lru_cache
 import hashlib
 import json
+import re
 from pathlib import Path
+from typing import NamedTuple
 import shutil
 
 import numpy as np
@@ -61,10 +63,12 @@ def seat_wrist(arm, grasp, weight):
     return clavicle, upper, aligned, hand
 
 
-def steer_arm(start, end, grasp, hand, w, relax=0., parent=None):
+def steer_arm(start, end, grasp, hand, w, relax=0., parent=None, fixed_socket=False):
     """Move a bent arm between two poses, meeting the hand target at both bone lengths."""
     clavicle, upper, fore, wrist = grasp.names
     C, U, F, H = [blend(start.world(n), end.world(n), w) for n in grasp.names]
+    if fixed_socket:
+        U[:3, 3] = (C @ start.local(upper))[:3, 3]
     a, b = grasp.segments
     delta = hand[:3, 3] - U[:3, 3]
     d = np.linalg.norm(delta)
@@ -103,8 +107,16 @@ def close_hand(grasp, profile, side):
         grasp.fingers[name] = matrix(mirror @ rotation @ mirror, grasp.fingers[name][:3, 3])
 
 
+class ThrustPose(NamedTuple):
+    # Wrist position and shaft direction in the first-person camera frame.
+    wrist: tuple[float, float, float]
+    direction: tuple[float, float, float]
+    roll: float
+    shoulder: float
+
+
 class Spear:
-    def __init__(self, rig, source, marks, native, fist, profile):
+    def __init__(self, rig, source, marks, native, fist, profile, single):
         self.rig = rig
         self.channels = source
         self.release = marks['thrust min hit']
@@ -128,6 +140,10 @@ class Spear:
             for name, pose in g.fingers.items():
                 weight = .32 if 'Finger0' in name else .27
                 g.fingers[name] = blend(pose, fist.local(name), weight)
+        self.carrying_arm = Grasp(native, 'R', False)
+        self.carrying_arm.wrist_bias = 2.8
+        self.single_grip = inverse(single.world(ITEM)) @ single.world(right.names[-1])
+        self.single_fingers = {n: single.local(n) for n in right.fingers}
         self.names = [*source]
         self.open_hand = Pose(rig, source, self.release + 49. / 33.)
         self.guard = self.strike(0., 0., 0., 0.)
@@ -244,8 +260,70 @@ class Spear:
         return result
 
     @lru_cache(maxsize=64)
-    def keypose(self, values):
-        return LocalPose(self.rig, self.strike(*values))
+    def keypose(self, pose):
+        guard = LocalPose(self.rig, self.guard)
+        if pose is None:
+            return guard
+        right, left = self.grasps
+        rest = guard.world(ITEM)
+        axis = self.camera[:3, :3] @ unit(np.array(pose.direction))
+        rotation = swing(rest[:3, 1], axis) @ rest[:3, :3] @ turn_about((0, 1, 0), pose.roll)
+        rear = (self.camera @ np.r_[pose.wrist, 1.])[:3]
+        right_grip = inverse(rest) @ guard.world(right.names[-1])
+        # Morrowind's one-handed thrust curls each finger around the shaft.
+        # Keep its complete hand-to-weapon rotation and radial anchor together.
+        # Only the station along the haft changes when the two-handed grip opens.
+        station = right_grip[1, 3] + 15.
+        right_grip = self.single_grip.copy()
+        right_grip[1, 3] = station
+        item = matrix(rotation, rear - rotation @ right_grip[:3, 3])
+        result = self.guard.copy()
+        # Measure the contact frames on the actual skinned guard. Transport the
+        # same radial contacts as the guiding hand slides lengthwise on the haft.
+        for side, grasp in zip(SIDES, self.grasps):
+            grip = inverse(rest) @ guard.world(grasp.names[-1])
+            if side == 'R':
+                grip = right_grip
+            hand = item @ grip
+            free = side == 'L'
+            if free:
+                pocket = (self.camera @ np.array((-17., -29., -18., 1.)))[:3]
+                hand[:3, 3] = pocket
+            drive = pose.shoulder
+            # The shoulder socket moves on the collarbone arc. Both ends of
+            # the upper arm stay connected; the wrist cannot drag the shoulder
+            # out into the middle of the first-person view.
+            clavicle = guard.world(grasp.names[0]).copy()
+            socket = guard.world(grasp.names[1])[:3, 3]-clavicle[:3, 3]
+            reach = self.camera[:3, :3] @ np.array((-.14, -.25, -1.))
+            swing_to = unit(lerp(unit(socket), reach, (.87*drive if side == 'R' else 0.)))
+            arc = swing(socket, swing_to)
+            clavicle[:3, :3] = arc @ clavicle[:3, :3]
+            shoulder = clavicle[:3, 3] + arc @ socket
+            shift = shoulder - grasp.shoulder
+            offset = matrix(np.eye(3), shift)
+            hint = (29., -28., -13.) if side == 'R' else (-23., -26., -14.)
+            elbow = (self.camera @ np.r_[hint, 1.])[:3] - shift
+            # Rotating the staff around its long axis changes which side of
+            # the closed hand faces the camera. Let the elbow settle below
+            # the wrist across the full one-handed range.
+            swivels = np.radians(np.linspace(-145., 145., 19)) if side == 'R' else np.array((-.18, 0., .18))
+            solver = self.carrying_arm if side == 'R' else grasp
+            arm, _ = solver.fit(inverse(offset) @ hand @ inverse(solver.grip), elbow, swivels)
+            if free:
+                arm = (*arm[:-1], relaxed_wrist(arm[-2], arm[-1], grasp, free))
+            arm = (inverse(offset) @ clavicle, *arm[1:])
+            parent = guard.world(self.rig.parents[grasp.names[0]])
+            for name, transform in zip(grasp.names, arm):
+                world = offset @ transform
+                result[name] = inverse(parent) @ world
+                parent = world
+            if side == 'L':
+                for n in grasp.fingers:
+                    result[n] = blend(self.guard[n], self.open_hand.local(n), .42*free)
+        result.update(self.single_fingers)
+        result[ITEM] = inverse(right_grip)
+        return LocalPose(self.rig, result)
 
     def beat(self, t, path):
         for (start, a), (end, b) in zip(path, path[1:]):
@@ -261,16 +339,14 @@ class Spear:
                 right, left = self.grasps
                 rear = blend(first.world(right.names[-1]), last.world(right.names[-1]), w)
                 item = rear @ result[ITEM]
-                result.update(steer_arm(first, last, right, rear, w))
+                result.update(steer_arm(first, last, right, rear, w, fixed_socket=True))
                 h = left.names[-1]
                 contact = item @ blend(inverse(first.world(ITEM)) @ first.world(h),
                                        inverse(last.world(ITEM)) @ last.world(h), w)
                 free = blend(first.world(h), last.world(h), w)
-                released = lerp(a[-1], b[-1], w)
+                released = lerp(float(a is not None), float(b is not None), w)
                 hand = blend(contact, free, ease(2.*released))
-                result.update(steer_arm(first, last, left, hand, w))
-                for name in left.fingers:
-                    result[name] = blend(left.fingers[name], self.open_hand.local(name), ease(2.4*released))
+                result.update(steer_arm(first, last, left, hand, w, fixed_socket=True))
                 return result
         return self.keypose(path[-1][1]).transforms
 
@@ -392,11 +468,20 @@ def build(arms, native_skeleton, native_animation):
     profile = json.loads((arms / 'staff-native-grasp-profile.json').read_text())
     staff_back_hand(stream, channels, rig, vanilla, marks['thrust min hit'])
     stream.save(source)
-    spear = Spear(rig, channels, marks, vanilla, fist, profile)
-    guard = (0., 0., 0., 0., 0.)
-    charged = [(0., guard), (.085, (-5.5, 0., 4., -3.8, .16)),
-               (.225, (26., 1., -.5, 1., 1.)), (.300, (26., 1., -.5, 1., 1.)),
-               (.50, guard)]
+    single = Pose(native_rig, native_tracks, starts['weapononehand: thrust hit'])
+    spear = Spear(rig, channels, marks, vanilla, fist, profile, single)
+    guard = None
+    # Move the blade and wrist together along a fixed line in camera space.
+    def along(chamber, distance, drive):
+        wrist = np.array(chamber.wrist) + unit(np.array(chamber.direction))*distance
+        return chamber._replace(wrist=tuple(wrist), shoulder=drive)
+
+    ready = ThrustPose((10., -6., -30.), (-.27, .14, -.95), -105., .42)
+    drawn = ThrustPose((13.4, -1.5, -16.), (-.37, -.08, -.926), -120., -.08)
+    deep = along(drawn, -6., -.2)
+    extended = along(deep, 29., 1.)
+    charged = [(0., deep), (.038, deep), (.222, extended), (.425, extended),
+               (.67, along(deep, 12., .32)), (.88, guard)]
     segments = []
     labels = []
 
@@ -405,46 +490,64 @@ def build(arms, native_skeleton, native_animation):
         labels.extend((start + t, 'weapononehand: ' + name + ' ' + event) for t, event in events)
 
     start, maximum, release = (marks['thrust ' + key] for key in ('start', 'max attack', 'min hit'))
-    drawn = (-6., .25, 4., -3.5, .0)
-    preparation = [(0., guard), (.38, drawn), (maximum-start, drawn)]
-    charged[0] = (0., drawn)
+    preparation = [(0., guard), (.43, deep), (maximum-start, deep)]
     section('thrust', start, maximum - start, lambda t: spear.beat(t, preparation),
             [(0., 'start'), (marks['thrust min attack'] - start, 'min attack'), (maximum - start, 'max attack')])
-    end = .55
+    end = .9
     section('thrust', release, end, lambda t: spear.beat(t, charged),
-            [(0., 'min hit'), (.211, 'hit'), (.46, 'chain')] +
-            [(t, length + ' follow ' + edge) for t, edge in ((.212, 'start'), (end, 'stop'))
+            [(0., 'min hit'), (.218, 'hit'), (.62, 'chain')] +
+            [(t, length + ' follow ' + edge) for t, edge in ((.219, 'start'), (end, 'stop'))
              for length in ('small', 'medium', 'large')])
     hold = marks['thrust hold start']
-    held_pose = spear.strike(*drawn)
+    held_pose = spear.keypose(deep).transforms
     section('thrust hold', hold, .22, lambda t: held_pose,
             [(0., 'start'), (.02, 'loop start'), (.22, 'loop stop'), (.22, 'stop')])
     labels.extend([(hold + .02, 'weapononehand: loop start'), (hold + .22, 'weapononehand: loop stop')])
-    # Four strokes share the standing guard: centre, inside-low, high outside
-    # and a fully released finishing thrust.
+    # Draw, settle, drive, hold at contact, then recover. The support hand
+    # stays clear between strokes; fastend is the separate return to guard.
+    # New sections live past the source clips so longer holds cannot overlap
+    # the next motion or borrow its last frame.
     attacks = [
-        ('a', .42, .20, (20., .84, -4., -5., .70), (-2.5, 0., -2., -2., 0.)),
-        ('b', .39, .205, (17., .76, 8., -1., .42), (-4., .05, 9., -7., 0.)),
-        ('c', .41, .265, (16., .72, 3.5, 7.5, .55), (-3., 0., 5., 8.5, .12)),
-        ('d', .49, .295, (25., 1., -5., 3., 1.), (-7., 0., 9., -6., .12)),
+        # duration, back of draw, end of drive, end of fixation, travel
+        ('a', .56, .17, .31, .412, 25.,
+         ThrustPose((16.5, -7.2, -15.), (-.32, .095, -.944), -105., -.08)),
+        ('b', .57, .178, .335, .435, 25.,
+         ThrustPose((12.5, -10., -15.), (-.21, .35, -.913), -75., -.08)),
+        ('c', .61, .18, .352, .463, 26.,
+         ThrustPose((23., 3., -12.), (-.48, -.15, -.865), -135., -.06)),
+        ('d', .67, .205, .398, .515, 24.,
+         ThrustPose((-3., -10.4, -14.), (.105, .18, -.978), -135., -.16)),
     ]
-    for letter, duration, hit, extended, drawn in attacks:
-        draw = .070 if letter == 'a' else .105
-        path = [(0., guard), (draw, drawn), (hit + .016, extended), (hit + .038, extended), (duration, guard)]
-        if letter == 'd':
-            path.insert(2, (.18, (-5., .06, 6.5, -3., .34)))
-            path[-2] = (hit + .075, extended)
-
-        def fast(t, path=path):
-            return spear.beat(t, path)
-
-        name = 'fast' + letter
-        section(name, marks[name + ' start'], duration, fast,
-                [(0., 'start'), (draw, 'swing'), (hit, 'thrust hit'), (duration, 'stop')])
-        endname = 'fastend' + letter
-        endstart = marks.get(endname + ' start', marks['bouncer stop'] + .1)
-        section(endname, endstart, .22, lambda t: spear.guard,
-                [(0., 'start'), (.22, 'stop')])
+    # Each preceding recovery crosses into the next lane while the arm is
+    # travelling back. D starts inside the centre line after the high C.
+    links = [ready,
+             ThrustPose((10., -5., -30.), (-.24, .27, -.93), -87., .4),
+             ThrustPose((13., -2., -27.), (-.36, .05, -.93), -106., .4),
+             ThrustPose((1., -4., -29.), (-.07, .06, -.996), -135., .41)]
+    cursor = max(float(t) for t, _ in text.keys) + .2
+    for i, (letter, duration, draw, impact, fixed, distance, chamber) in enumerate(attacks):
+        point = along(chamber, distance, .85 if letter != 'd' else 1.)
+        aligned = along(chamber, 13., .45)
+        finish = links[(i+1) % len(links)]
+        path = [(0., links[i]), (draw*.30, aligned), (draw, chamber), (draw+.033, chamber),
+                (impact, point), (fixed, point), (duration, finish)]
+        sections = [('fast'+letter, path, 0.)]
+        if letter == 'a':
+            # The first release and withdrawal are one gesture. Going via an
+            # already extended ready pose here would look like a false hit.
+            pickup = .085
+            entry = [(0., guard)] + [(pickup+t, pose) for t,pose in path[2:]]
+            sections = [('fasta', entry, pickup), ('fastloopa', path, 0.)]
+        for name, motion, pickup in sections:
+            length = duration+pickup
+            section(name, cursor, length, lambda t, p=motion: spear.beat(t, p),
+                    [(0., 'start'), (pickup+draw+.033, 'swing'),
+                     (pickup+impact-.005, 'thrust hit'), (length, 'stop')])
+            cursor += length + .06
+        recovery = [(0., finish), (.035, finish), (.29, guard)]
+        section('fastend' + letter, cursor, .29, lambda t, p=recovery: spear.beat(t, p),
+                [(0., 'start'), (.29, 'stop')])
+        cursor += .35
 
     # A tap briefly starts the charged windup before the engine recognises a
     # fast attack. Keep that grace period in guard; a held press completes the
@@ -519,7 +622,14 @@ def build(arms, native_skeleton, native_animation):
             field.keys = merged
         controller.stop_time = max(controller.stop_time, times[-1])
     stream.save(target / source.name)
-    shutil.copyfile(source.with_suffix('.yaml'), target / 'weapononehand.yaml')
+    # The staff's 200 ms cross-fade consumes the short spear withdrawal.
+    # These clips already meet at an authored ready pose. Keep a small blend
+    # for a fresh click arriving partway through the return to guard.
+    rules = source.with_suffix('.yaml').read_text()
+    rules = re.sub(r"(to: 'weapononehand:fast(?:end)?[abcd] start'\s+easing: linear\s+duration: )0\.2[0-9]*",
+                   r"\g<1>0.045", rules)
+    rules += "  - from: '*'\n    to: 'weapononehand:fastloopa start'\n    easing: linear\n    duration: 0.045\n"
+    (target / 'weapononehand.yaml').write_text(rules)
     for path in sorted(folder.glob('*1h.kf')):
         if path.stem.startswith(('idle', 'walk', 'run', 'sneak', 'jump', 'brutal_sprint')):
             movement_overlay(spear, path, target)
@@ -528,7 +638,8 @@ def build(arms, native_skeleton, native_animation):
     for path in (source, *sorted(target.iterdir())):
         manifest['outputs'][path.relative_to(arms).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
     manifest['spear'] = {'charged': 'thrust', 'quick': [row[0] for row in attacks],
-                         'base': 'brutal_fp_staff', 'native_grip': 'idle2w'}
+                         'base': 'brutal_fp_staff', 'native_grip': 'idle2w',
+                         'one_hand_grip': 'weapononehand: thrust hit'}
     manifest_path.write_text(json.dumps(manifest, indent=1) + '\n')
 
 

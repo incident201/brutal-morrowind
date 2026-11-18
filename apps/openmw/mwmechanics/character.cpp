@@ -4042,6 +4042,7 @@ namespace MWMechanics
         int next = mBrutalFastIndex + 1;
         if (next > last)
             next = last == 5 && !dagger ? 2 : 1;
+        const bool spearLoop = next == 1 && mBrutalFastIndex == last && brutalActiveKey("fastloopa start");
         mBrutalFastIndex = next;
         resetBrutalFastContinuation();
         mBrutalFastQueued = false;
@@ -4051,7 +4052,7 @@ namespace MWMechanics
         mAttackSuccess = false;
         mAttackVictim = MWWorld::Ptr();
         const char letter = static_cast<char>('a' + next - 1);
-        startBrutalFastClip(std::string("fast") + letter, BrutalFast::Attack);
+        startBrutalFastClip(spearLoop ? "fastloopa" : std::string("fast") + letter, BrutalFast::Attack);
     }
 
     bool CharacterController::startBrutalChargedHold()
@@ -4120,8 +4121,8 @@ namespace MWMechanics
             case BrutalFast::Attack:
                 if (pressed)
                     mBrutalFastQueued = true;
-                // Sword and staff turn a held click into a charge at once; daggers finish the blow.
-                if (charged && (!dagger || finished))
+                // Let a dagger or one-handed spear finish its active stroke before entering a charge.
+                if (charged && (finished || (!dagger && !brutalActiveKey("fastloopa start"))))
                 {
                     mBrutalFastQueued = false;
                     if (staff)
