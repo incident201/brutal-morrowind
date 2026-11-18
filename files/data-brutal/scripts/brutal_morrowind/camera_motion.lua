@@ -30,8 +30,7 @@ local ZERO={0,0,0,0,0,0}
 -- each short gaze curve to the corresponding arm key so weapon speed, an
 -- interrupted combo and a held charge all use the actual game clock.
 local function addSpearHeadMotion(set, clips)
-    local planted={1.1,-2.4,1.55}
-    local charged={1.6,-3.25,1.8}
+    local charged={1.6,-4.0,2.35,2.4,-2.8,-1.1}
     local function add(group, from, to, a, b)
         local name='spear_'..group..'_'..from
         local frames={}
@@ -40,22 +39,31 @@ local function addSpearHeadMotion(set, clips)
             local w=u*u*(3-2*u)
             local frame={0,0,0,0,0,0}
             for k=1,3 do frame[k]=math.rad(1.4*(a[k]+(b[k]-a[k])*w)) end
+            for k=4,6 do frame[k]=a[k]+(b[k]-a[k])*w end
             frames[#frames+1]=frame
         end
         clips[name]={fps=12,loop=false,frames=frames}
         set[#set+1]={start=group..' '..from,stop=group..' '..to,clip=name,duration=1}
     end
-    local impacts={fasta={-1.8,1.65,-1.15},fastloopa={-1.8,1.65,-1.15},
-        fastb={-.85,2.3,-1.65},fastc={-2.7,1.65,-1.25},fastd={-1.35,2.9,-1.8}}
+    -- Each approach has its own shoulder lead. The last few centimetres
+    -- of head travel follow the plant, then ease back with the recoil.
+    local leads={fasta={1.2,-2.8,1.8,1.0,-1.5,-.55},fastb={2.6,-1.8,2.4,1.4,-1.1,-2.3},
+        fastc={-.9,-3.6,-1.55,2.5,-2.1,1.4},fastd={1.1,-4.1,2.2,2.5,-2.4,-1.0}}
+    local impacts={fasta={-1.8,2.2,-1.4,-1.4,3.1,-1.0},fastb={-1.8,1.35,-.9,-1.0,3.4,.95},
+        fastc={-3.1,2.65,1.2,-2.3,4.2,-2.0},fastd={-1.4,3.3,-2.0,-3.1,3.8,-.8}}
+    leads.fastloopa,impacts.fastloopa=leads.fasta,impacts.fasta
     for _,group in ipairs({'fasta','fastloopa','fastb','fastc','fastd'}) do
-        add(group,'start','plant',ZERO,planted)
-        add(group,'plant','weight forward',planted,impacts[group])
+        add(group,'start','plant',ZERO,leads[group])
+        add(group,'plant','weight forward',leads[group],impacts[group])
         add(group,'weight forward','stop',impacts[group],ZERO)
     end
+    local press={-3.9,3.2,-2.7,-3.2,6.8,-2.5}
+    local inhale={2.1,-4.35,2.6,2.9,-3.3,-.4}
     add('thrust','start','max attack',ZERO,charged)
-    add('thrust hold','start','stop',charged,charged)
-    add('thrust','plant','weight forward',charged,{-3.8,2.8,-2.5})
-    add('thrust','weight forward','large follow stop',{-3.8,2.8,-2.5},ZERO)
+    add('thrust hold','start','breath',charged,inhale)
+    add('thrust hold','breath','stop',inhale,charged)
+    add('thrust','plant','weight forward',charged,press)
+    add('thrust','weight forward','large follow stop',press,ZERO)
 end
 if data and data.sets and data.sets.brutal_fp_spear then
     addSpearHeadMotion(data.sets.brutal_fp_spear.weapononehand, data.clips)
