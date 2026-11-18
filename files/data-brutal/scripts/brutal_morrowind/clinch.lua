@@ -46,6 +46,7 @@ local function headMotion(state)
     local lo=math.floor(position)+1
     local a,b=clip.frames[lo],clip.frames[math.min(lo+1,#clip.frames)]
     local f=position-math.floor(position)
+    local pitch,yaw,roll=a[1]+(b[1]-a[1])*f,a[2]+(b[2]-a[2])*f,a[3]+(b[3]-a[3])*f
     -- The ordinary camera update clears extra angles before this onFrame.
     -- Add the source head track after its usual bob/roll, without rotating the
     -- physical body or applying a cumulative offset from the previous frame.
@@ -57,10 +58,21 @@ local function headMotion(state)
             or 1-state.elapsed/.5
         t=math.max(0,math.min(1,t))
         gripOffset=gripPitch*t*t*(3-2*t)
+        if state.group~='brutal_clinch' then
+            local held=clips.brutal_clinch
+            local last=held and held.frames and held.frames[#held.frames]
+            if last then
+                local progress=math.max(0,math.min(1,state.elapsed/.18))
+                progress=progress*progress*(3-2*progress)
+                pitch=last[1]+(pitch-last[1])*progress
+                yaw=last[2]+(yaw-last[2])*progress
+                roll=last[3]+(roll-last[3])*progress
+            end
+        end
     end
-    camera.setExtraPitch(camera.getExtraPitch()+a[1]+(b[1]-a[1])*f+gripOffset)
-    camera.setExtraYaw(camera.getExtraYaw()+a[2]+(b[2]-a[2])*f)
-    camera.setExtraRoll(camera.getExtraRoll()+a[3]+(b[3]-a[3])*f)
+    camera.setExtraPitch(camera.getExtraPitch()+pitch+gripOffset)
+    camera.setExtraYaw(camera.getExtraYaw()+yaw)
+    camera.setExtraRoll(camera.getExtraRoll()+roll)
 end
 return {
     interfaceName='BrutalClinch',

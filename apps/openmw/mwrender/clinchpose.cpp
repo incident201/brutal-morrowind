@@ -181,12 +181,14 @@ namespace MWRender
             return;
         const double now = visitor.getFrameStamp()->getSimulationTime();
         const bool contest = stats.mBrutalClinchActive && stats.mBrutalClinchPhase <= 2;
+        const bool polearm = mViewmodelSet == BrutalViewmodel_Staff;
         auto world = MWBase::Environment::get().getWorld();
         auto* opponent = stats.mBrutalClinchOpponent.isEmpty() ? nullptr
             : dynamic_cast<NpcAnimation*>(world->getAnimation(stats.mBrutalClinchOpponent));
         const auto playerMatrix = nodeWorld(getWeaponNode());
         const auto opponentMatrix = opponent ? nodeWorld(opponent->getWeaponNode()) : std::nullopt;
         osg::Vec3f correction;
+        float polearmExit = 0.f;
         audit.frame = visitor.getTraversalNumber();
         audit.phase = stats.mBrutalClinchPhase;
         audit.elapsed = stats.mBrutalClinchElapsed;
@@ -239,12 +241,14 @@ namespace MWRender
             const float fade = 1.f - smooth(static_cast<float>(now - mClinchExitTime) / .2f);
             correction = mClinchExitCorrection * fade;
             audit.weight = fade;
+            if (polearm && stats.mBrutalClinchActive && stats.mBrutalClinchPhase >= 3)
+                polearmExit = 1.f - smooth(static_cast<float>(now - mClinchExitTime) / .55f);
         }
         // Diagnostics only: compare the authored contest pose without any fit.
         if (std::getenv("BRUTAL_CLINCH_FIT_DIAGNOSTICS_OFF"))
             correction = {};
         audit.correction = correction;
-        if (correction.length2() < 1e-8f && !audit.active)
+        if (correction.length2() < 1e-8f && !audit.active && polearmExit <= 0.f)
             return;
 
         const auto cameraBefore = getBoneWorldMatrix("Camera");
@@ -261,7 +265,6 @@ namespace MWRender
         // wide): shorten the shift until no more of the shoulders is on screen
         // than in the authored pose.
         audit.exposureScale = 1.f;
-        const bool polearm = mViewmodelSet == BrutalViewmodel_Staff;
         const bool pairedGrip = hasPairedViewmodel() || polearm;
         if (auto* camera = world->getCamera(); camera && !pairedGrip)
         {
@@ -319,6 +322,13 @@ namespace MWRender
             auto& elbow = limits.elbows[polearm ? 0 : 1];
             elbow.guide.set(std::sin(yaw), std::cos(yaw), polearm ? -.4f : .6f);
             elbow.turn = osg::DegreesToRadians(polearm ? 55.f : 42.f) * audit.weight;
+            if (polearmExit > 0.f)
+            {
+                // The release folds the dominant arm back toward the camera.
+                // Support its elbow longer than the fading blade correction.
+                elbow.guide -= osg::Vec3f(std::cos(yaw), -std::sin(yaw), 0.f) * (.35f * polearmExit);
+                elbow.turn = osg::DegreesToRadians(72.f) * polearmExit;
+            }
             if (!solveSharedGripArms(
                     getNodeMap(), osg::Matrixf::translate(correction), {}, local, arms, fitted, limits))
                 return;
