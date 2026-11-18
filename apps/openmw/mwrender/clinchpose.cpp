@@ -199,13 +199,11 @@ namespace MWRender
             if (mClinchPoseId != stats.mBrutalClinchId)
             {
                 mClinchPoseId = stats.mBrutalClinchId;
-                mClinchEntryTime = now;
                 mClinchExitCorrection = {};
             }
             // The pair is placed while the guard pose still holds. Fitting that pose to the blade
-            // just placed would throw the arms at the camera, so the fit starts with the contest.
-            if (stats.mBrutalClinchPhase < 2)
-                mClinchEntryTime = now;
+            // just placed would throw the arms at the camera. Advance the fit with the contest clip
+            // so a delayed render frame cannot leave the weapons apart after the arms have settled.
             audit.active = true;
             audit.playerHilt = playerMatrix->getTrans();
             audit.opponentHilt = opponentMatrix->getTrans();
@@ -223,7 +221,7 @@ namespace MWRender
             audit.clamped = correction.length2() > maximumCorrection * maximumCorrection;
             if (audit.clamped)
                 correction *= maximumCorrection / correction.length();
-            audit.weight = smooth(static_cast<float>(now - mClinchEntryTime) / blendTime);
+            audit.weight = stats.mBrutalClinchPhase == 2 ? smooth(audit.sourceElapsed / blendTime) : 0.f;
             correction *= audit.weight;
             mClinchLastCorrection = correction;
             mClinchWasContest = true;

@@ -252,7 +252,7 @@ namespace MWRender
         osg::Vec3f mClinchBladeRange;
         std::uint64_t mClinchPoseId = 0;
         bool mClinchWasContest = false;
-        double mClinchEntryTime = 0., mClinchExitTime = 0.;
+        double mClinchExitTime = 0.;
         osg::Vec3f mClinchLastCorrection, mClinchExitCorrection;
         osg::Vec3f getClinchBladeRange();
 
