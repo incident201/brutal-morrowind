@@ -286,7 +286,8 @@ namespace MWRender
         osg::Vec3f mSwordWallCorrectionOrigin;
         float mSwordWallTailAge = -1.f;
         bool mSwordWallCorrectionValid = false;
-        bool applySwordWallCorrection(const osg::Matrixf& correction, const osg::FrameStamp& frameStamp);
+        bool applySwordWallCorrection(
+            const osg::Matrixf& correction, const osg::FrameStamp& frameStamp, osg::Matrixf* applied = nullptr);
         bool sampleWeaponWallContact(unsigned mount, osg::Node* node, float duration, const osg::FrameStamp& frameStamp);
 
         osg::Vec3f mFirstPersonOffset;
@@ -343,9 +344,15 @@ namespace MWRender
             BrutalViewmodel_Shield,
             BrutalViewmodel_Staff,
             BrutalViewmodel_Dagger,
+            BrutalViewmodel_Paired,
+            BrutalViewmodel_PairedBlunt,
         };
         static constexpr std::string_view sBrutalLeftWeaponBone = "Brutal Left Weapon";
         BrutalViewmodel mViewmodelSet = BrutalViewmodel_Default; // Clip set loaded for the first-person rig.
+        bool hasPairedViewmodel() const
+        {
+            return mViewmodelSet == BrutalViewmodel_Paired || mViewmodelSet == BrutalViewmodel_PairedBlunt;
+        }
         BrutalViewmodel brutalViewmodelSet() const;
         bool carriesLeftWeapon() const;
         bool carriesShield() const;

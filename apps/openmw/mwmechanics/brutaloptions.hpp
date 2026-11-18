@@ -25,6 +25,12 @@ namespace MWMechanics
     {
         return type == ESM::Weapon::BluntTwoWide || type == ESM::Weapon::SpearTwoWide;
     }
+
+    inline bool brutalPairedWeapon(int type)
+    {
+        return type == ESM::Weapon::LongBladeTwoHand || type == ESM::Weapon::AxeTwoHand
+            || type == ESM::Weapon::BluntTwoClose;
+    }
 }
 
 #endif

@@ -641,7 +641,10 @@ namespace MWInput
                     && !(MWMechanics::getWeaponType(type)->mFlags & ESM::WeaponType::TwoHanded);
                 const bool parryWeapon = type == ESM::Weapon::ShortBladeOneHand || type == ESM::Weapon::LongBladeOneHand
                     || type == ESM::Weapon::BluntOneHand || type == ESM::Weapon::AxeOneHand
-                    || (MWMechanics::brutalStaffWeapon(type) && MWMechanics::brutalDmFirstPerson());
+                    || (MWMechanics::brutalDmFirstPerson()
+                        && (MWMechanics::brutalStaffWeapon(type)
+                            || (MWMechanics::brutalPairedWeapon(type)
+                                && MWBase::Environment::get().getMechanicsManager()->isReadyToBlock(player))));
                 if (stats.getDrawState() == MWMechanics::DrawState::Weapon && !stats.isDead() && !stats.isParalyzed()
                     && ((shield && Settings::game().mPlayerActiveShieldBlock)
                         || (!shield && parryWeapon && Settings::game().mDarkMessiahSwordParry)))

@@ -404,6 +404,8 @@ namespace MWMechanics
         bool brutalActiveKey(const std::string& key) const;
         bool isBrutalDaggerSet() const;
         bool isBrutalChainStaff() const;
+        bool usesBrutalPairedWeapon() const;
+        bool isBrutalWallWeapon() const;
         void startBrutalFastClip(const std::string& key, BrutalFast phase);
         void startBrutalFastNext();
         void resetBrutalFastContinuation();

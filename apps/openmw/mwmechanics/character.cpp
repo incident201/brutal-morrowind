@@ -2094,11 +2094,12 @@ namespace MWMechanics
                         // rightward/stationary swings retain source _L. Capture it
                         // once: changing direction during a held windup cannot splice
                         // into the opposite release or reverse its hit metadata.
-                        stats.mBrutalSlashRight = mPtr == getPlayer() && mCurrentWeapon == "weapononehand"
+                        stats.mBrutalSlashRight = mPtr == getPlayer()
+                            && (mCurrentWeapon == "weapononehand" || usesBrutalPairedWeapon())
                             && !stats.mBrutalSlideAttack && mAttackType == "slash"
                             && cls.getMovementSettings(mPtr).mPosition[0] < -.1f
-                            && mAnimation->activeSourceHasTextKey(mCurrentWeapon + ": slash start",
-                                mCurrentWeapon + ": slashright start")
+                            && mAnimation->activeSourceHasTextKey(
+                                mCurrentWeapon + ": slash start", mCurrentWeapon + ": slashright start")
                             && mAnimation->getTextKeyTime(mCurrentWeapon + ": slashright start") >= 0.f
                             && mAnimation->getTextKeyTime(mCurrentWeapon + ": slashright max attack") >= 0.f
                             && mAnimation->getTextKeyTime(mCurrentWeapon + ": slashright hit") >= 0.f;
@@ -2214,7 +2215,7 @@ namespace MWMechanics
             float minAttackTime = mAnimation->getTextKeyTime(mCurrentWeapon + ": " + attackAnimation + " min attack");
             float maxAttackTime = mAnimation->getTextKeyTime(mCurrentWeapon + ": " + attackAnimation + " max attack");
             const bool continuousPlayerSwordRelease = mPtr == getPlayer() && world->isFirstPerson()
-                && MWMechanics::brutalDmFirstPerson() && mCurrentWeapon == "weapononehand"
+                && MWMechanics::brutalDmFirstPerson() && (mCurrentWeapon == "weapononehand" || usesBrutalPairedWeapon())
                 && mAnimation->getNode("Brutal Camera Pivot") != nullptr;
             const bool continuousNpcSwordRelease = mPtr != getPlayer() && cls.isNpc()
                 && mCurrentWeapon == "weapononehand"
@@ -3766,10 +3767,9 @@ namespace MWMechanics
 
     bool CharacterController::brutalFastAvailable() const
     {
-        // The set's own sections decide: Morrowind's two-handed sets have no fast attacks.
         const auto& stats = mPtr.getClass().getCreatureStats(mPtr);
-        return Settings::game().mBrutalFastAttacks && mPtr == getPlayer() && mAnimation && brutalDmFirstPerson() && mCurrentWeapon == "weapononehand"
-            && !stats.mBrutalSlideAttack
+        return Settings::game().mBrutalFastAttacks && mPtr == getPlayer() && mAnimation && brutalDmFirstPerson()
+            && (mCurrentWeapon == "weapononehand" || usesBrutalPairedWeapon()) && !stats.mBrutalSlideAttack
             && brutalActiveKey("fasta start");
     }
 
@@ -3813,6 +3813,18 @@ namespace MWMechanics
     bool CharacterController::isBrutalChainStaff() const
     {
         return brutalActiveKey("fastendb start") && !brutalActiveKey("faste start");
+    }
+
+    bool CharacterController::usesBrutalPairedWeapon() const
+    {
+        return mAnimation && mPtr == getPlayer() && brutalDmFirstPerson() && brutalPairedWeapon(mWeaponType)
+            && brutalActiveKey("brutal paired grip");
+    }
+
+    bool CharacterController::isBrutalWallWeapon() const
+    {
+        return mWeaponType == ESM::Weapon::LongBladeOneHand || mWeaponType == ESM::Weapon::ShortBladeOneHand
+            || usesBrutalPairedWeapon() || isBrutalChainStaff();
     }
 
     void CharacterController::startBrutalFastClip(const std::string& key, BrutalFast phase)
@@ -4105,12 +4117,11 @@ namespace MWMechanics
         const float start = mAnimation->getTextKeyTime(mCurrentWeapon + ": " + attack + (fast ? " start" : " max attack"));
         const float stop = mAnimation->getTextKeyTime(mCurrentWeapon + ": " + attack + (fast ? " stop" : " large follow stop"));
         const bool armed = Settings::game().mBrutalWallBounce && !key.empty() && brutalDmFirstPerson()
-            && (mWeaponType == ESM::Weapon::LongBladeOneHand || mWeaponType == ESM::Weapon::ShortBladeOneHand
-                || isBrutalChainStaff())
-            && brutalActiveKey(key + " start") && !stats.isDead() && !stats.mBrutalClinchActive
+            && isBrutalWallWeapon() && brutalActiveKey(key + " start") && !stats.isDead() && !stats.mBrutalClinchActive
             && !stats.mBrutalSlideAttack && stats.mBrutalSlidePhase == 0 && !isScriptedAnimPlaying()
             && !mBrutalWallBodyHit && (fast || (mBrutalFast == BrutalFast::None && mAttackStrength >= 0.f))
-            && (fast || mUpperBodyState == UpperBodyState::AttackRelease || mUpperBodyState == UpperBodyState::AttackEnd)
+            && (fast || mUpperBodyState == UpperBodyState::AttackRelease
+                || mUpperBodyState == UpperBodyState::AttackEnd)
             && start >= 0.f && time >= start && stop > start && time < stop;
         animation->configureSwordWallSweep(mBrutalWallSwing, mCurrentWeapon, armed ? key : "");
     }
@@ -4126,9 +4137,8 @@ namespace MWMechanics
         if (!animation->consumeSwordWallContact(mBrutalWallSwing, key))
             return false;
         const auto& stats = mPtr.getClass().getCreatureStats(mPtr);
-        if (stats.isDead() || stats.mBrutalClinchActive || stats.mBrutalSlidePhase != 0
-            || !(mWeaponType == ESM::Weapon::LongBladeOneHand || mWeaponType == ESM::Weapon::ShortBladeOneHand
-                || isBrutalChainStaff()) || mBrutalWallBodyHit
+        if (stats.isDead() || stats.mBrutalClinchActive || stats.mBrutalSlidePhase != 0 || !isBrutalWallWeapon()
+            || mBrutalWallBodyHit
             || (mUpperBodyState != UpperBodyState::AttackRelease && mUpperBodyState != UpperBodyState::AttackEnd))
             return false;
         mReadyToHit = false;
@@ -4590,8 +4600,8 @@ namespace MWMechanics
             hasShield = shield != inv.end() && shield->getType() == ESM::Armor::sRecordId
                 && updateCarriedLeftVisible(mWeaponType);
         }
-        // Without a shield a one-handed weapon raises Dark Messiah's sword parry.
-        const bool parry = !hasShield && Settings::game().mDarkMessiahSwordParry && isBrutalOneHanded(mWeaponType);
+        const bool parry = !hasShield && Settings::game().mDarkMessiahSwordParry
+            && (isBrutalOneHanded(mWeaponType) || usesBrutalPairedWeapon());
         static const std::string parryBreak = "brutal_parrybreak";
         const bool able = (hasShield || parry) && !mAnimation->isPlaying(parryBreak) && !isBrutalComboActive()
             && brutalSimulationTime() >= stats.mBrutalGuardBrokenUntil
@@ -5023,6 +5033,8 @@ namespace MWMechanics
 
     bool CharacterController::isReadyToBlock() const
     {
+        if (usesBrutalPairedWeapon())
+            return true;
         if (mAnimation && mAnimation->useBrutalStaffSet() && brutalStaffWeapon(mWeaponType))
             return true; // The staff guard is a two-handed parry, not a shield stance.
         return mAnimation && updateCarriedLeftVisible(mWeaponType);

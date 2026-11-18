@@ -1307,6 +1307,10 @@ namespace MWRender
                 loadAdditionalAnimations(VFS::Path::NormalizedView("meshes/brutal_fp_staff.nif"), smodel);
             else if (mViewmodelSet == BrutalViewmodel_Dagger)
                 loadAdditionalAnimations(VFS::Path::NormalizedView("meshes/brutal_fp_dagger.nif"), smodel);
+            else if (mViewmodelSet == BrutalViewmodel_Paired)
+                loadAdditionalAnimations(VFS::Path::NormalizedView("meshes/brutal_fp_paired.nif"), smodel);
+            else if (mViewmodelSet == BrutalViewmodel_PairedBlunt)
+                loadAdditionalAnimations(VFS::Path::NormalizedView("meshes/brutal_fp_paired_blunt.nif"), smodel);
         }
 
         if (is1stPerson)
@@ -1613,6 +1617,19 @@ namespace MWRender
 
     std::string NpcAnimation::bodyAwarenessGroup(const std::string& group, bool sneaking) const
     {
+        // The paired arms reuse the matching sword clock. The visible body has
+        // no arms or weapon, so it can use the same imported lower-body motion.
+        if (hasPairedViewmodel())
+        {
+            if (group == "weapontwohand" || group == "blunttwohand")
+                return "weapononehand";
+            if (group.ends_with("2b") || group.ends_with("2c"))
+            {
+                const std::string mapped = group.substr(0, group.size() - 2) + "1h";
+                if (mBodyAwarenessAnimation->hasAnimation(mapped))
+                    return mapped;
+            }
+        }
         // The arms keep their own stance (stock spell, fist, bow or probe arms have no
         // imported crouch), but the visible legs and torso must crouch whenever the
         // player sneaks. The body has no arms, head or items, so the imported crouch
@@ -1930,6 +1947,14 @@ namespace MWRender
         // inventory slot must not override the weapon's animation set.
         if (MWMechanics::brutalStaffWeapon(type))
             return BrutalViewmodel_Staff;
+        if (MWMechanics::brutalPairedWeapon(type))
+        {
+            const bool sword = type == ESM::Weapon::LongBladeTwoHand;
+            const VFS::Path::NormalizedView clips(sword ? "animations/brutal_fp_paired/weapontwohand.kf"
+                                                        : "animations/brutal_fp_paired_blunt/blunttwohand.kf");
+            if (mResourceSystem->getVFS()->exists(clips))
+                return sword ? BrutalViewmodel_Paired : BrutalViewmodel_PairedBlunt;
+        }
         if (MWMechanics::getWeaponType(type)->mFlags & ESM::WeaponType::TwoHanded)
             return BrutalViewmodel_Default;
         if (carriesShield())

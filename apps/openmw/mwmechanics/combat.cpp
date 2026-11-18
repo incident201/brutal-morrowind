@@ -1,5 +1,6 @@
 
 #include "combat.hpp"
+#include "weapontype.hpp"
 
 #include <algorithm>
 #include <array>
@@ -367,7 +368,11 @@ namespace MWMechanics
         {
             const auto& inventory = blocker.getClass().getInventoryStore(blocker);
             const auto left = inventory.getSlot(MWWorld::InventoryStore::Slot_CarriedLeft);
-            carriesShield = left != inventory.end() && left->getType() == ESM::Armor::sRecordId;
+            const auto right = inventory.getSlot(MWWorld::InventoryStore::Slot_CarriedRight);
+            const bool handsOccupied = blockerStats.getDrawState() == DrawState::Weapon && right != inventory.end()
+                && right->getType() == ESM::Weapon::sRecordId
+                && (getWeaponType(right->get<ESM::Weapon>()->mBase->mData.mType)->mFlags & ESM::WeaponType::TwoHanded);
+            carriesShield = left != inventory.end() && left->getType() == ESM::Armor::sRecordId && !handsOccupied;
         }
         const bool playerGuard = blocker == getPlayer() && (Settings::game().mPlayerActiveShieldBlock
             || (!carriesShield && Settings::game().mDarkMessiahSwordParry));

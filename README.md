@@ -16,9 +16,12 @@ NPCs direct their weapon or shield towards the incoming attack while keeping
 their grip. The first-person camera follows the visible body during movement
 and crouching, including when holding a spell.
 
-This branch uses **Dark Messiah import recipe 7** for directional weapon and
-shield guards, including two-handed grips. Its launcher asks to reimport older
-data. See `CHANGELOG.md` for the other unreleased changes.
+First-person claymores, battle axes and warhammers use adapted Dark Messiah
+sword motion with both hands on the grip. They support directional charged
+attacks, quick strikes, weapon parries, wall recoil and timed-parry clinches.
+
+This branch uses **Dark Messiah import recipe 8**. Its launcher asks to reimport
+older data. See `CHANGELOG.md` for the other unreleased changes.
 
 ## Requirements
 

@@ -1,5 +1,6 @@
-#include "npcanimation.hpp"
 #include "camera.hpp"
+#include "griparms.hpp"
+#include "npcanimation.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -255,7 +256,7 @@ namespace MWRender
         // wide): shorten the shift until no more of the shoulders is on screen
         // than in the authored pose.
         audit.exposureScale = 1.f;
-        if (auto* camera = world->getCamera())
+        if (auto* camera = world->getCamera(); camera && !hasPairedViewmodel())
         {
             const osg::Matrixf view = camera->getViewMatrix();
             double fov = mFirstPersonFieldOfView, aspect = 1., near = 1., far = 8192.;
@@ -298,24 +299,50 @@ namespace MWRender
             correction *= scale;
             audit.correction = correction;
         }
-        for (auto* clavicle : clavicles)
+        if (hasPairedViewmodel())
         {
-            auto paths = clavicle->getParentalNodePaths();
-            if (paths.empty())
-            {
-                restoreTransientPose();
+            std::array<GripArm, 2> arms;
+            osg::Matrixf fitted;
+            const auto local = [](osg::MatrixTransform* bone) { return osg::Matrixf(bone->getMatrix()); };
+            if (!solveSharedGripArms(getNodeMap(), osg::Matrixf::translate(correction), {}, local, arms, fitted,
+                    osg::DegreesToRadians(25.f)))
                 return;
+            for (const auto& arm : arms)
+            {
+                if (arm.clavicle)
+                {
+                    mClinchSourcePose.emplace_back(arm.clavicle, arm.clavicleSource);
+                    arm.clavicle->setMatrix(arm.clavicleResult);
+                }
+                for (std::size_t joint = 0; joint < arm.bones.size(); ++joint)
+                {
+                    mClinchSourcePose.emplace_back(arm.bones[joint], arm.source[joint]);
+                    arm.bones[joint]->setMatrix(arm.result[joint]);
+                }
             }
-            paths.front().pop_back();
-            const osg::Matrixf parentInverse = osg::Matrixf::inverse(osg::computeLocalToWorld(paths.front()));
-            const osg::Matrixf source = clavicle->getMatrix();
-            const auto wall = std::find_if(mSwordWallSourcePose.begin(), mSwordWallSourcePose.end(),
-                [clavicle](const auto& entry) { return entry.first.get() == clavicle; });
-            mClinchSourcePose.emplace_back(clavicle, wall == mSwordWallSourcePose.end() ? source : wall->second);
-            osg::Matrixf fitted = source;
-            fitted.setTrans(source.getTrans() + osg::Matrixf::transform3x3(correction, parentInverse));
-            clavicle->setMatrix(fitted);
+            audit.correction = fitted.getTrans();
+            if (contest)
+                mClinchLastCorrection = audit.correction;
         }
+        else
+            for (auto* clavicle : clavicles)
+            {
+                auto paths = clavicle->getParentalNodePaths();
+                if (paths.empty())
+                {
+                    restoreTransientPose();
+                    return;
+                }
+                paths.front().pop_back();
+                const osg::Matrixf parentInverse = osg::Matrixf::inverse(osg::computeLocalToWorld(paths.front()));
+                const osg::Matrixf source = clavicle->getMatrix();
+                const auto wall = std::find_if(mSwordWallSourcePose.begin(), mSwordWallSourcePose.end(),
+                    [clavicle](const auto& entry) { return entry.first.get() == clavicle; });
+                mClinchSourcePose.emplace_back(clavicle, wall == mSwordWallSourcePose.end() ? source : wall->second);
+                osg::Matrixf fitted = source;
+                fitted.setTrans(source.getTrans() + osg::Matrixf::transform3x3(correction, parentInverse));
+                clavicle->setMatrix(fitted);
+            }
         if (mSkeleton)
             mSkeleton->markDirty();
         // Refresh skin bounds with the fitted transforms but do not invoke any

@@ -29,9 +29,9 @@ ANIMATION = ROOT / 'scripts/animation'
 CREATURES = ROOT / 'scripts/creatures'
 EFFECTS = ROOT / 'scripts/effects'
 CALIBRATION = HERE / 'calibration'
-RECIPE_VERSION = 7  # Misc::DarkMessiahData::sRecipe in the engine must match.
+RECIPE_VERSION = 8  # Misc::DarkMessiahData::sRecipe in the engine must match.
 # Conversion steps per import, for progress reporting.
-TOTAL_STEPS = 37
+TOTAL_STEPS = 38
 KEYFRAMES = ('.kf', '.yaml')
 # Steps run side by side, one core each; the matrices involved are 4x4.
 ENVIRONMENT = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1')
@@ -524,6 +524,10 @@ class Importer:
                 self.run('Camera motion', ANIMATION / 'import_camera_head.py', '--vpk-root', self.vpks,
                          '--work-dir', self.cache, '--arms', arms, '--camera-contract', self.contract,
                          '--output', self.stage('clinch'))
+                self.run('Two-handed player viewmodels', ANIMATION / 'import_two_hand_viewmodel.py',
+                         '--arms', arms, '--clinch', self.stage('clinch'),
+                         '--native-skeleton', self.meshes / 'xbase_anim.1st.nif',
+                         '--native-animation', self.meshes / 'xbase_anim.1st.kf')
                 self.run('Footstep keys', ANIMATION / 'add_footstep_keys.py', self.stage('npc'))
             except BaseException:
                 # One failed or cancelled step stops the others instead of waiting for them.
