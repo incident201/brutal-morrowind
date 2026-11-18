@@ -1255,8 +1255,9 @@ namespace MWClass
 
         // Race weight should not affect 1st-person meshes, otherwise it will change hand proportions and can break
         // aiming.
-        if (ptr == MWMechanics::getPlayer() && ptr.isInCell() && MWBase::Environment::get().getWorld()->isFirstPerson()
-            && !Settings::game().mFirstPersonFullBody)
+        const MWWorld::Ptr player = MWMechanics::getPlayer();
+        if (ptr == player && ptr.isInCell() && MWBase::Environment::get().getWorld()->isFirstPerson()
+            && !Settings::game().mFirstPersonFullBody && !getCreatureStats(player).isDead())
         {
             if (ref->mBase->isMale())
                 scale *= race->mData.mMaleHeight;

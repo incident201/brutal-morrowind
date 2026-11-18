@@ -1145,6 +1145,7 @@ namespace MWRender
 
     void RenderingManager::clear()
     {
+        mCamera->setPlayerDeathTime(std::nullopt);
         mSky->setMoonColour(false);
 
         notifyWorldSpaceChanged();

@@ -1020,11 +1020,8 @@ namespace MWMechanics
     void CharacterController::playRandomDeath(float startpoint)
     {
         if (mPtr == getPlayer())
-        {
-            // The first-person animations do not include death, so we need to
-            // force-switch to third person before playing the death animation.
-            MWBase::Environment::get().getWorld()->useDeathCamera();
-        }
+            if (auto* animation = dynamic_cast<MWRender::NpcAnimation*>(mAnimation))
+                animation->preparePlayerDeathPose(); // The first-person rig has no death clip.
 
         mDeathState = hitStateToDeathState(mHitState);
         if (mDeathState == CharState_None && MWBase::Environment::get().getWorld()->isSwimming(mPtr))
@@ -3341,7 +3338,7 @@ namespace MWMechanics
 
     bool CharacterController::hasPhysicalDeath() const
     {
-        return Settings::game().mBrutalRagdoll && mPtr != getPlayer() && (mPtr.getClass().isNpc() || MWPhysics::findCreatureRig(mPtr));
+        return Settings::game().mBrutalRagdoll && (mPtr.getClass().isNpc() || MWPhysics::findCreatureRig(mPtr));
     }
 
     bool CharacterController::canSwordClinch() const
@@ -4855,21 +4852,24 @@ namespace MWMechanics
                 // This base NPC death behavior also applies with enhancements
                 // disabled; combat already delivered its native point impulse.
                 const auto world = MWBase::Environment::get().getWorld();
+                auto* playerAnimation = mPtr == getPlayer() ? dynamic_cast<MWRender::NpcAnimation*>(mAnimation) : nullptr;
                 bool physical = mAnimation && mAnimation->isRagdollPose();
                 if (!physical)
                 {
                     try
                     {
-                        physical = world->canStartNpcRagdoll(mPtr) && world->startNpcRagdoll(mPtr, {});
+                        if (playerAnimation)
+                            playerAnimation->preparePlayerDeathPose();
+                        physical = world->startNpcRagdoll(mPtr, {});
                     }
                     catch (const std::exception& error)
                     {
-                        Log(Debug::Warning) << "NPC death ragdoll rejected for " << mPtr.getCellRef().getRefId()
+                        Log(Debug::Warning) << "Death ragdoll rejected for " << mPtr.getCellRef().getRefId()
                             << ": " << error.what();
                     }
-                    if (!physical && !mPtr.getClass().isNpc())
+                    if (!physical && (mPtr == getPlayer() || !mPtr.getClass().isNpc()))
                     {
-                        // A creature whose body could not start falls the ordinary way.
+                        // A player or creature with an unsupported rig can still use the normal death animation.
                         playRandomDeath();
                         resetCurrentIdleState();
                         return Result_DeathAnimStarted;
@@ -4927,6 +4927,9 @@ namespace MWMechanics
             mAnimation->endRagdollPose();
         resetCurrentDeathState();
         mWeaponType = ESM::Weapon::None;
+        if (mPtr == getPlayer())
+            if (auto* animation = dynamic_cast<MWRender::NpcAnimation*>(mAnimation))
+                animation->restorePlayerDeathView();
     }
 
     void CharacterController::updateContinuousVfx() const

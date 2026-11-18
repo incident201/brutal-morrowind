@@ -8,6 +8,7 @@
 **/
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include <osg/ref_ptr>
@@ -361,6 +362,7 @@ namespace MWGui
         void setBlindness(const int percent) override;
 
         void activateHitOverlay(bool interrupt) override;
+        void setPlayerDeathFade(std::optional<float> fade);
         void setWerewolfOverlay(bool set) override;
 
         void toggleConsole() override;
@@ -467,6 +469,7 @@ namespace MWGui
         ScreenFader* mBlindnessFader;
         ScreenFader* mHitFader;
         ScreenFader* mScreenFader;
+        bool mPlayerDeathFading = false;
         DebugWindow* mDebugWindow;
         PostProcessorHud* mPostProcessorHud;
         JailScreen* mJailScreen;

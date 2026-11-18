@@ -15,6 +15,7 @@
 #include <mutex>
 #include <set>
 #include <tuple>
+#include <utility>
 #include <atomic>
 #include <cstdlib>
 #include <filesystem>
@@ -1026,6 +1027,13 @@ namespace MWRender
     void NpcAnimation::setViewMode(NpcAnimation::ViewMode viewMode)
     {
         assert(viewMode != VM_HeadOnly);
+        if (mPlayerDeathView && viewMode != VM_Normal)
+        {
+            // Scaling refreshes the camera synchronously. Keep its requested
+            // view for resurrection while the full death rig is being built.
+            mPlayerDeathView = viewMode;
+            return;
+        }
         if (mViewMode == viewMode)
             return;
         // FIXME: sheathing state must be consistent if the third person skeleton doesn't have the necessary node, but
@@ -1045,6 +1053,88 @@ namespace MWRender
             MWMechanics::getActiveWeapon(mPtr, &weaptype);
             showCarriedLeft(updateCarriedLeftVisible(weaptype));
         }
+    }
+
+    void NpcAnimation::preparePlayerDeathPose()
+    {
+        if (mPlayerDeathView)
+            return;
+        const ViewMode previous = mViewMode;
+        if (previous == VM_Normal)
+        {
+            mPlayerDeathView = previous;
+            updateParts();
+            return;
+        }
+
+        // Arms projected with their own field of view and the separate body
+        // have different shoulder anchors. Copy the world body's local pose,
+        // then pose the two full-length arm chains along the visible directions.
+        constexpr std::array<std::array<std::string_view, 3>, 2> arms{
+            std::array<std::string_view, 3>{ "Bip01 L UpperArm", "Bip01 L Forearm", "Bip01 L Hand" },
+            std::array<std::string_view, 3>{ "Bip01 R UpperArm", "Bip01 R Forearm", "Bip01 R Hand" },
+        };
+        const bool fullBody = useFullBodyFirstPerson();
+        const auto* body = fullBody ? this : mBodyAwarenessAnimation.get();
+        std::map<std::string, osg::Matrixf, std::less<>> localPose;
+        if (body)
+            for (const auto& [bone, node] : body->getNodeMap())
+                localPose.emplace(bone, node->getMatrix());
+
+        std::array<std::array<osg::Vec3f, 2>, 2> armDirections{};
+        if (!fullBody)
+            for (std::size_t side = 0; side < arms.size(); ++side)
+                for (std::size_t joint = 0; joint < armDirections[side].size(); ++joint)
+                {
+                    const auto start = getBoneWorldMatrix(arms[side][joint]);
+                    const auto end = getBoneWorldMatrix(arms[side][joint + 1]);
+                    if (start && end)
+                        armDirections[side][joint] = end->getTrans() - start->getTrans();
+                }
+
+        mPlayerDeathView = previous;
+        setViewMode(VM_Normal);
+        if (localPose.empty())
+        {
+            // The body can be hidden altogether in first person. Evaluate an
+            // idle once to seed the exposed torso and legs in that mode.
+            play("idle", AnimPriority(0), BlendMask_All, false, 0.f, "start", "stop", 0.f, 0, false);
+            runAnimation(0.f);
+            osgUtil::UpdateVisitor update;
+            update.setFrameStamp(new osg::FrameStamp);
+            update.setNodeMaskOverride(~0u);
+            mObjectRoot->accept(update);
+        }
+        else
+            for (const auto& [bone, node] : getNodeMap())
+                if (const auto found = localPose.find(bone); found != localPose.end())
+                    node->setMatrix(found->second);
+
+        for (std::size_t side = 0; side < arms.size(); ++side)
+            for (std::size_t joint = 0; joint < armDirections[side].size(); ++joint)
+            {
+                const osg::Vec3f direction = armDirections[side][joint];
+                if (!(direction.length2() > .001f))
+                    continue;
+                const auto start = getBoneWorldMatrix(arms[side][joint]);
+                const auto end = getBoneWorldMatrix(arms[side][joint + 1]);
+                if (!start || !end)
+                    continue;
+                const auto pivot = start->getTrans();
+                const osg::Vec3f along(end->getTrans() - pivot);
+                if (!(along.length2() > .001f))
+                    continue;
+                osg::Quat swing;
+                swing.makeRotate(along, direction);
+                setBoneWorldMatrix(arms[side][joint], *start * osg::Matrixf::translate(-pivot)
+                    * osg::Matrixf::rotate(swing) * osg::Matrixf::translate(pivot));
+            }
+    }
+
+    void NpcAnimation::restorePlayerDeathView()
+    {
+        if (mPlayerDeathView)
+            setViewMode(*std::exchange(mPlayerDeathView, std::nullopt));
     }
 
     /// @brief A RenderBin callback to clear the depth buffer before rendering.
@@ -3592,10 +3682,10 @@ namespace MWRender
             }
         }
         // Hide only the camera's enclosing geometry; torso and equipment keep their actual race/body records.
-        if (Settings::game().mFirstPersonFullBody && mPtr == MWMechanics::getPlayer()
+        if (!mPlayerDeathView && Settings::game().mFirstPersonFullBody && mPtr == MWMechanics::getPlayer()
             && (type == ESM::PRT_Head || type == ESM::PRT_Hair || type == ESM::PRT_Neck))
             return false;
-        if ((Settings::game().mFirstPersonFullBody || MWMechanics::brutalDmFirstPerson())
+        if (!mPlayerDeathView && (Settings::game().mFirstPersonFullBody || MWMechanics::brutalDmFirstPerson())
             && mPtr == MWMechanics::getPlayer() && (type == ESM::PRT_LPauldron || type == ESM::PRT_RPauldron))
             return false;
         if (priority <= mPartPriorities[type])

@@ -208,6 +208,7 @@ namespace MWRender
         VFS::Path::Normalized mHeadModel;
         VFS::Path::Normalized mHairModel;
         ViewMode mViewMode;
+        std::optional<ViewMode> mPlayerDeathView;
         bool mShowWeapons;
         bool mShowCarriedLeft;
 
@@ -540,6 +541,9 @@ namespace MWRender
         void showWeapon(bool show) override { showWeapons(show); }
 
         void setViewMode(ViewMode viewMode);
+        void preparePlayerDeathPose();
+        void restorePlayerDeathView();
+        bool hasPlayerDeathView() const { return mPlayerDeathView.has_value(); }
 
         void updateParts();
 

@@ -5,6 +5,7 @@
 #include <string>
 
 #include <osg/Matrix>
+#include <osg/Quat>
 #include <osg/Vec3>
 #include <osg/Vec3d>
 #include <osg/ref_ptr>
@@ -87,6 +88,7 @@ namespace MWRender
         void processViewChange();
 
         void update(float duration, bool paused = false);
+        void setPlayerDeathTime(std::optional<float> elapsed);
 
         float getCameraDistance() const { return mCameraDistance; }
         void setPreferredCameraDistance(float v) { mPreferredCameraDistance = v; }
@@ -149,6 +151,16 @@ namespace MWRender
         osg::Matrixf mViewMatrix;
         osg::Matrixf mProjectionMatrix;
 
+        struct PlayerDeathView
+        {
+            osg::Vec3d entryPosition;
+            osg::Quat entryOrientation;
+            osg::Quat orientation;
+            osg::Vec3d offset;
+            float elapsed = 0.f;
+        };
+        std::optional<PlayerDeathView> mPlayerDeathView;
+
         float mCameraDistance, mPreferredCameraDistance;
 
         osg::Vec3f mFirstPersonOffset{ 0, 0, 0 };
@@ -171,6 +183,7 @@ namespace MWRender
         osg::Vec3d getFocalPointOffset() const;
         void updateFocalPointOffset(float duration);
         void updatePosition();
+        void updatePlayerDeathView();
 
         osg::ref_ptr<osg::Callback> mUpdateCallback;
 

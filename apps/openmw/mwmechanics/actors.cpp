@@ -1839,12 +1839,7 @@ namespace MWMechanics
 
                 stats.getMagicEffects().add(EffectKey(ESM::MagicEffect::Vampirism), vampirism);
 
-                if (isPlayer)
-                {
-                    // player's death animation is over
-                    MWBase::Environment::get().getStateManager()->askLoadRecent();
-                }
-                else
+                if (!isPlayer)
                 {
                     // NPC death animation is over, disable actor collision
                     MWBase::Environment::get().getWorld()->enableActorCollision(actor.getPtr(), false);

@@ -121,7 +121,7 @@ namespace MWRender
         osg::Vec3d up = orient * osg::Vec3d(0, 0, 1);
 
         osg::Vec3d pos = mPosition;
-        if (mMode == Mode::FirstPerson)
+        if (mMode == Mode::FirstPerson && !mPlayerDeathView)
         {
             // It is a hack. Camera position depends on neck animation.
             // Animations are updated in OSG cull traversal and in order to avoid 1 frame delay we
@@ -139,18 +139,82 @@ namespace MWRender
     void Camera::update(float duration, bool paused)
     {
         mLockPitch = mLockYaw = false;
+        MWBase::WindowManager* wm = MWBase::Environment::get().getWindowManager();
+        if (mPlayerDeathView)
+        {
+            wm->showCrosshair(false);
+            if (!paused)
+                updatePlayerDeathView();
+            return;
+        }
+
         if (mQueuedMode && mAnimation->upperBodyReady())
             setMode(*mQueuedMode);
         if (mProcessViewChange)
             processViewChange();
 
         // only show the crosshair in game mode
-        MWBase::WindowManager* wm = MWBase::Environment::get().getWindowManager();
         wm->showCrosshair(!wm->isGuiMode() && mShowCrosshair);
 
         if (!paused)
             updateFocalPointOffset(duration);
         updatePosition();
+    }
+
+    void Camera::setPlayerDeathTime(std::optional<float> elapsed)
+    {
+        if (!elapsed)
+        {
+            mProcessViewChange |= mPlayerDeathView.has_value();
+            mPlayerDeathView.reset();
+            return;
+        }
+        if (!mPlayerDeathView)
+        {
+            const osg::Quat orientation = getOrient();
+            const osg::Quat heading(mYaw + mExtraYaw, osg::Vec3d(0, 0, 1));
+            mPlayerDeathView.emplace(PlayerDeathView{
+                mPosition, orientation, orientation, heading * osg::Vec3d(28, -96, 49) });
+            mQueuedMode.reset();
+        }
+        mPlayerDeathView->elapsed = *elapsed;
+    }
+
+    void Camera::updatePlayerDeathView()
+    {
+        if (mTrackingPtr.isEmpty() || !mAnimation)
+            return;
+
+        auto& death = *mPlayerDeathView;
+        const auto pelvis = mAnimation->getBoneWorldMatrix("Bip01 Pelvis");
+        const auto chest = mAnimation->getBoneWorldMatrix("Bip01 Spine2");
+        const osg::Vec3d center = pelvis && chest ? osg::Vec3d(pelvis->getTrans() + chest->getTrans()) * .5
+            : osg::Vec3d(mTrackingPtr.getRefData().getPosition().asVec3()) + osg::Vec3d(0, 0, 26);
+        const osg::Vec3d focus = center + osg::Vec3d(0, 0, 6);
+        const float progress = std::clamp(death.elapsed / .92f, 0.f, 1.f);
+        const double blend = progress * progress * (3.f - 2.f * progress);
+        mPosition = death.entryPosition * (1. - blend) + (focus + death.offset) * blend;
+
+        // Follow the falling torso from outside its mesh and keep the camera clear of the room.
+        if (blend > 0.)
+        {
+            constexpr float radius = 6.f;
+            constexpr int worldGeometry = (MWPhysics::CollisionType_Default & ~MWPhysics::CollisionType_Actor)
+                | MWPhysics::CollisionType_CameraOnly;
+            const auto* rays = MWBase::Environment::get().getWorld()->getRayCasting();
+            const auto hit = rays->castSphere(focus, mPosition, radius, worldGeometry);
+            if (hit.mHit)
+                mPosition = hit.mHitPos + hit.mHitNormal * radius;
+        }
+
+        const osg::Vec3d direction = focus - mPosition;
+        if (direction.length2() > 1.)
+        {
+            const double yaw = -std::atan2(direction.x(), direction.y());
+            const double pitch = std::atan2(direction.z(), std::hypot(direction.x(), direction.y()));
+            const osg::Quat target = osg::Quat(pitch, osg::Vec3d(1, 0, 0)) * osg::Quat(yaw, osg::Vec3d(0, 0, 1));
+            death.orientation.slerp(blend, death.entryOrientation, target);
+        }
     }
 
     osg::Vec3d Camera::calculateFirstPersonPosition(const osg::Vec3d& trackedPosition) const
@@ -231,12 +295,16 @@ namespace MWRender
 
     osg::Quat Camera::getOrient() const
     {
+        if (mPlayerDeathView)
+            return mPlayerDeathView->orientation;
         return osg::Quat(mRoll + mExtraRoll, osg::Vec3d(0, 1, 0)) * osg::Quat(mPitch + mExtraPitch, osg::Vec3d(1, 0, 0))
             * osg::Quat(mYaw + mExtraYaw, osg::Vec3d(0, 0, 1));
     }
 
     void Camera::setMode(Mode newMode, bool force)
     {
+        if (mPlayerDeathView)
+            return;
         // Lua camera actions call setMode directly, bypassing toggleViewMode.
         // Static remains available for explicit scripted cameras.
         if ((Settings::game().mFirstPersonFullBody || MWMechanics::brutalDmFirstPerson()) && !Settings::game().mFirstPersonBodyAllowThirdPerson

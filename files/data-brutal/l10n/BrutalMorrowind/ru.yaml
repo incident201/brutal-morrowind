@@ -24,7 +24,7 @@ meleeGeometryDescription: "Попадания по видимой модели �
 ragdollEnabled: Ragdoll
 ragdollEnabledDescription: "Физические падения NPC и существ, включая улучшения тел, пределы суставов, физику выпавшего снаряжения и подъём живых NPC (подъёму нужны анимации Dark Messiah)."
 ragdollWeaponDrop: Шанс выпадения оружия, %
-ragdollWeaponDropDescription: "Шанс, что каждое оружие или щит выпадет из рук, когда NPC переходит в ragdoll."
+ragdollWeaponDropDescription: "Шанс выпадения каждого оружия из рук живого сбитого с ног NPC. При смерти оружие выпадает всегда. Этот шанс также применяется к щитам и заряженным боеприпасам."
 dynamicProps: Физика предметов мира
 dynamicPropsDescription: "Удары сдвигают лежащие предметы."
 movementEnabled: Ходьба, бег и спринт

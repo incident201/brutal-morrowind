@@ -150,6 +150,7 @@ namespace MWWorld
         void initObjectInCell(const Ptr& ptr, CellStore& cell, bool adjustPos, bool notifyScripts = true);
         Ptr moveObjectToCell(const Ptr& ptr, CellStore* cell, ESM::Position pos, bool adjustPos);
         Ptr copyObjectToCell(const ConstPtr& ptr, CellStore* cell, ESM::Position pos, int count, bool adjustPos);
+        ESM::Position getGroundDropPosition(const Ptr& actor) const;
 
         void updateSoundListener();
 
@@ -224,7 +225,6 @@ namespace MWWorld
         void readRecord(ESM::ESMReader& reader, uint32_t type) override;
 
         // switch to POV before showing player's death animation
-        void useDeathCamera() override;
 
         void setWaterHeight(const float height) override;
 
@@ -409,7 +409,7 @@ namespace MWWorld
         std::vector<osg::Vec3f> getNpcRagdollDynamics(const MWWorld::Ptr& ptr) const override;
         std::vector<osg::Vec3f> getNpcRagdollState(const Ptr& ptr) const override;
         std::map<std::string, double> getNpcRagdollEnhancementState(const Ptr& ptr) const override;
-        void releaseNpcRagdollEquipment(const Ptr& ptr) override;
+        void releaseNpcRagdollEquipment(const Ptr& ptr, bool retainedWeaponsOnly) override;
         std::vector<RagdollDroppedItem> getNpcRagdollDroppedItems(const Ptr& ptr) const override;
         std::vector<osg::Vec3f> getReleasedEquipmentState(const Ptr& ptr) const override;
         bool applyNpcRagdollImpact(const Ptr& ptr, std::size_t part, const osg::Vec3f& point,

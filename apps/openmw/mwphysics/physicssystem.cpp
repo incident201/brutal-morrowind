@@ -1132,7 +1132,7 @@ namespace MWPhysics
             mKickWatches.erase(ptr.mRef);
             auto& state=mPushRagdolls[ptr.mRef]; state.peakZ=state.previousZ=position.z(); state.attacker=attacker;
             state.knockDown=knockDown;
-            // Every living ragdoll is a disarm, including ordinary knockdowns.
+            // Each surviving fall gets one equipment drop roll per held item.
             world->releaseNpcRagdollEquipment(ptr);
         } catch (...) {animation->endRagdollPose();throw;}
         if (!attacker.isEmpty() && !knockDown)
@@ -1195,8 +1195,8 @@ namespace MWPhysics
             push->second.peakZ = push->second.previousZ = body.getDynamics()[0].z();
             push->second.knockDown = true;
         }
-        // createNpcRagdoll already rolled this body's equipment release; an existing
-        // ragdoll rolled when it began. One roll per fall keeps the configured chance.
+        // Each newly created body has handled its initial equipment release.
+        // An existing body keeps any equipment it retained during the fall.
         refreshSuperKickActors();
         return true;
     }
@@ -1501,8 +1501,13 @@ namespace MWPhysics
         // for the whole group, then select one deterministic residual clock.
         if (!mRagdolls.empty()) mTaskScheduler->waitForRagdollStep();
         processSuperKickContacts();
-        struct Update { MWWorld::Ptr ptr; osg::Vec3f position;
-            std::vector<std::pair<std::string, osg::Matrixf>> poses; };
+        struct Update
+        {
+            MWWorld::Ptr ptr;
+            std::optional<osg::Vec3f> position;
+            std::vector<std::pair<std::string, osg::Matrixf>> poses;
+            bool diedWhileDown;
+        };
         std::vector<Update> updates;
         std::vector<MWWorld::Ptr> cancel;
         std::vector<MWWorld::Ptr> recover;
@@ -1528,6 +1533,7 @@ namespace MWPhysics
                 // are reapplied below, leaving every rendered limb unchanged.
                 position->z() = ragdoll->retainedBottom();
             }
+            bool diedWhileDown = false;
             if (auto it=mPushRagdolls.find(ptr.mRef); it!=mPushRagdolls.end())
             {
                 auto& push=it->second; push.age+=duration;
@@ -1564,24 +1570,30 @@ namespace MWPhysics
                 if (position) { position->x()=dynamics[0].x();position->y()=dynamics[0].y();position->z()=ragdoll->bottom(); }
                 if (supported && ragdoll->speed()<35.f && ragdoll->angularSpeed()<1.5f) push.settled+=duration;
                 else push.settled=0.f;
-                if (stats.isDead()) mPushRagdolls.erase(it); // retain the same body/momentum as a corpse
+                if (stats.isDead())
+                {
+                    mPushRagdolls.erase(it); // Retain the same body and momentum as a corpse.
+                    diedWhileDown = true;
+                }
                 // In water there is nothing to come to rest on: the actor swims again.
                 else if (push.age>=2.f && (push.settled>=.35f || (mWaterEnabled && z<mWaterHeight))) recover.push_back(ptr);
             }
-            if (position)
-                updates.push_back({ptr, *position, std::move(poses)});
+            if (position || diedWhileDown)
+                updates.push_back({ptr, position, std::move(poses), diedWhileDown});
         }
         for (const auto& ptr : cancel)
             stopNpcRagdoll(ptr);
         for (const auto& update : updates)
         {
             // Cell moves can replace references or unload a corpse; never keep map iterators across World calls.
-            const auto ptr = world->moveObject(update.ptr, update.position, false, false);
+            const auto ptr = update.position ? world->moveObject(update.ptr, *update.position, false, false) : update.ptr;
             if (!mRagdolls.contains(ptr.mRef))
                 continue;
             if (auto* animation = world->getAnimation(ptr); animation && animation->isRagdollPose())
                 for (const auto& [bone, matrix] : update.poses)
                     animation->setBoneWorldMatrix(bone, matrix);
+            if (update.diedWhileDown)
+                world->releaseNpcRagdollEquipment(ptr, true);
         }
         for (const auto& ptr:recover)
         {
@@ -1664,7 +1676,7 @@ namespace MWPhysics
         for (const auto& [ptr, pos] : mActorsPositions)
             world->moveObject(ptr, pos, false, false);
 
-        if (player != nullptr)
+        if (player != nullptr && !player->isRagdoll())
             world->moveObject(player->getPtr(), player->getSimulationPosition(), false, false);
     }
 

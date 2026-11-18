@@ -646,8 +646,8 @@ namespace MWGui
         if (!mMap)
             return; // UI not created yet
 
-        mHud->setVisible(mHudEnabled && !loading);
-        mToolTips->setVisible(mHudEnabled && !loading);
+        mHud->setVisible(mHudEnabled && !loading && !mPlayerDeathFading);
+        mToolTips->setVisible(mHudEnabled && !loading && !mPlayerDeathFading);
 
         bool gameMode = !isGuiMode();
 
@@ -675,13 +675,14 @@ namespace MWGui
         // If in game mode (or interactive messagebox), show the pinned windows
         if (mGuiModes.empty())
         {
-            mMap->setVisible(mMap->pinned() && !isConsoleMode() && !(mForceHidden & GW_Map) && (mAllowed & GW_Map));
+            const bool showPinned = !isConsoleMode() && !mPlayerDeathFading;
+            mMap->setVisible(mMap->pinned() && showPinned && !(mForceHidden & GW_Map) && (mAllowed & GW_Map));
             mStatsWindow->setVisible(
-                mStatsWindow->pinned() && !isConsoleMode() && !(mForceHidden & GW_Stats) && (mAllowed & GW_Stats));
-            mInventoryWindow->setVisible(mInventoryWindow->pinned() && !isConsoleMode()
+                mStatsWindow->pinned() && showPinned && !(mForceHidden & GW_Stats) && (mAllowed & GW_Stats));
+            mInventoryWindow->setVisible(mInventoryWindow->pinned() && showPinned
                 && !(mForceHidden & GW_Inventory) && (mAllowed & GW_Inventory));
             mSpellWindow->setVisible(
-                mSpellWindow->pinned() && !isConsoleMode() && !(mForceHidden & GW_Magic) && (mAllowed & GW_Magic));
+                mSpellWindow->pinned() && showPinned && !(mForceHidden & GW_Magic) && (mAllowed & GW_Magic));
 
             if (Settings::gui().mControllerMenus)
             {
@@ -1990,6 +1991,7 @@ namespace MWGui
     void WindowManager::clear()
     {
         mPlayerBounty = -1;
+        mPlayerDeathFading = false;
 
         for (const auto& window : mWindows)
         {
@@ -2293,7 +2295,7 @@ namespace MWGui
 
     void WindowManager::activateHitOverlay(bool interrupt)
     {
-        if (!Settings::gui().mHitFader)
+        if (mPlayerDeathFading || !Settings::gui().mHitFader)
             return;
 
         if (!interrupt && !mHitFader->isEmpty())
@@ -2302,6 +2304,27 @@ namespace MWGui
         mHitFader->clearQueue();
         mHitFader->fadeTo(100, 0.0f);
         mHitFader->fadeTo(0, 0.5f);
+    }
+
+    void WindowManager::setPlayerDeathFade(std::optional<float> fade)
+    {
+        if (mPlayerDeathFading != fade.has_value())
+        {
+            mPlayerDeathFading = fade.has_value();
+            updateVisible();
+        }
+        if (!fade)
+        {
+            mScreenFader->clear();
+            mHitFader->clear();
+            return;
+        }
+
+        mScreenFader->clearQueue();
+        mHitFader->clearQueue();
+        mScreenFader->notifyAlphaChanged(*fade);
+        // The additive hit layer sits above black and must fade out with the scene.
+        mHitFader->notifyAlphaChanged(Settings::gui().mHitFader ? 1.f - *fade : 0.f);
     }
 
     void WindowManager::setWerewolfOverlay(bool set)

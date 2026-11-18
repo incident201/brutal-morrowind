@@ -1,6 +1,7 @@
 #include <components/sdlutil/windowcoordinates.hpp>
 #include "engine.hpp"
 
+#include <algorithm>
 #include <cerrno>
 #include <chrono>
 #include <future>
@@ -72,6 +73,7 @@
 #include "mwworld/datetimemanager.hpp"
 #include "mwworld/worldimp.hpp"
 
+#include "mwrender/camera.hpp"
 #include "mwrender/vismask.hpp"
 
 #include "mwclass/classes.hpp"
@@ -188,6 +190,39 @@ void OMW::Engine::executeLocalScripts()
     }
 }
 
+void OMW::Engine::updatePlayerDeath(float duration, bool paused)
+{
+    if (mStateManager->getState() != MWBase::StateManager::State_Running)
+        return;
+
+    const auto player = mWorld->getPlayerPtr();
+    if (!player.getClass().getCreatureStats(player).isDead())
+    {
+        if (mPlayerDeathElapsed)
+        {
+            mPlayerDeathElapsed.reset();
+            mWorld->getCamera()->setPlayerDeathTime(std::nullopt);
+            mWindowManager->setPlayerDeathFade(std::nullopt);
+        }
+        return;
+    }
+    if (paused)
+        return;
+
+    constexpr float bodyHold = 1.25f;
+    constexpr float fadeDuration = 1.4f;
+    mPlayerDeathElapsed = mPlayerDeathElapsed ? *mPlayerDeathElapsed + duration : 0.f;
+    const float elapsed = *mPlayerDeathElapsed;
+    const float fade = std::clamp((elapsed - bodyHold) / fadeDuration, 0.f, 1.f);
+    mWorld->getCamera()->setPlayerDeathTime(elapsed);
+    mWindowManager->setPlayerDeathFade(fade);
+    if (fade >= 1.f)
+    {
+        mStateManager->endGame();
+        mStateManager->askLoadRecent();
+    }
+}
+
 bool OMW::Engine::frame(unsigned frameNumber, float frametime)
 {
     const osg::Timer_t frameStart = mViewer->getStartTick();
@@ -201,7 +236,8 @@ bool OMW::Engine::frame(unsigned frameNumber, float frametime)
         // update input
         {
             ScopedProfile<UserStatsType::Input> profile(frameStart, frameNumber, *timer, *stats);
-            mInputManager->update(frametime, false);
+            const bool deathInProgress = mPlayerDeathElapsed && mStateManager->getState() == MWBase::StateManager::State_Running;
+            mInputManager->update(frametime, deathInProgress, deathInProgress);
         }
 
         // When the window is minimized, pause the game. Currently this *has* to be here to work around a MyGUI bug.
@@ -276,12 +312,7 @@ bool OMW::Engine::frame(unsigned frameNumber, float frametime)
                 mMechanicsManager->update(frametime, paused);
             }
 
-            if (mStateManager->getState() == MWBase::StateManager::State_Running)
-            {
-                MWWorld::Ptr player = mWorld->getPlayerPtr();
-                if (!paused && player.getClass().getCreatureStats(player).isDead())
-                    mStateManager->endGame();
-            }
+            updatePlayerDeath(frametime, paused);
         }
 
         // update physics

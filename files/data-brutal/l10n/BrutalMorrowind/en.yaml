@@ -24,7 +24,7 @@ meleeGeometryDescription: "Use visible weapon contact and the swing area."
 ragdollEnabled: Ragdoll
 ragdollEnabledDescription: "Physical falls for NPCs and creatures, including body enhancements, joint limits, dropped equipment physics and living NPC recovery (recovery needs Dark Messiah animations)."
 ragdollWeaponDrop: Weapon drop chance, %
-ragdollWeaponDropDescription: "Chance that each held weapon or shield falls out of the hands when an NPC goes ragdoll."
+ragdollWeaponDropDescription: "Chance per held weapon when a living NPC is knocked down. Held weapons always drop on death. This chance also applies to shields and loaded ammunition."
 dynamicProps: Movable world items
 dynamicPropsDescription: "Impacts move loose items."
 movementEnabled: Walking, running and sprinting
