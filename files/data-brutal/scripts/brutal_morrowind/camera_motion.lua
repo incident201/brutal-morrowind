@@ -39,7 +39,7 @@ local function addSpearHeadMotion(set, clips)
             local u=i/12
             local w=u*u*(3-2*u)
             local frame={0,0,0,0,0,0}
-            for k=1,3 do frame[k]=math.rad(a[k]+(b[k]-a[k])*w) end
+            for k=1,3 do frame[k]=math.rad(1.4*(a[k]+(b[k]-a[k])*w)) end
             frames[#frames+1]=frame
         end
         clips[name]={fps=12,loop=false,frames=frames}
