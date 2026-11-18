@@ -199,10 +199,10 @@ class Spear:
         # Author the screen silhouette in camera space. During a full lunge the
         # rear hand carries the pole while the other hand opens and falls back.
         freed = ease(release)
-        diagonal = unit(np.array((-.65, .45, -.613)))
+        diagonal = unit(np.array((-.65, .41, -.64)))
         forward = unit(np.array((-9. - across*.70, 4. - height*.7 - 7.*freed, -49.)))
         axis = unit(lerp(diagonal, forward, push) + np.array((-.012*across, -.010*height, 0.))*(1.-push))
-        rear = np.array((16.3 + across - 4.*push, -16.1 + height + 6.*push + 16.*freed,
+        rear = np.array((16.3 + across - 4.*push, -14.5 + height + 6.*push + 16.*freed,
                          -27.4 + 16.*push)) + travel * axis
         item = shaft(axis, np.array((-.78, -.62, 0.)), rear)
         item[:3, 3] -= axis * (self.grasps[0].grip[1, 3] + 1.7)
@@ -264,7 +264,7 @@ class Spear:
         # knuckles above it, with the rear elbow trailing below the wrist.
         stance = LocalPose(self.rig, result.copy())
         item = stance.world(ITEM)
-        for side, g, roll, swivel, hint in zip(SIDES, self.grasps, (20., -5.), (-40., 40.),
+        for side, g, roll, swivel, hint in zip(SIDES, self.grasps, (-60., -5.), (10., 40.),
                                                ((23., -26., -10.), (-24., -25., -12.))):
             grip = inverse(item) @ stance.world(g.names[-1])
             if side == 'R':
@@ -773,6 +773,13 @@ def build(arms, native_skeleton, native_animation, body=None):
             gather = gather._replace(wrist=(gather.wrist[0], 5.5, gather.wrist[2]), roll=164.)
         path = [(0., ready), (draw*.34, gather), (draw, chamber), (impact, point),
                 (fixed, settle), (fixed+.098, recoil), (duration, finish)]
+        if letter == 'd':
+            # Briefly catch the recovering haft for the final accent. The
+            # guiding palm stays below while the right fist drives through.
+            held_chamber = chamber._replace(support=True)
+            path = [(0., ready), (draw*.45, gather._replace(support=True)),
+                    (draw, held_chamber), (draw+.065, along(held_chamber, 4., .16)),
+                    (impact, point), (fixed, settle), (fixed+.098, recoil), (duration, ready)]
         sections = [('fast'+letter, path, 0.)]
         if letter == 'a':
             # The first release and withdrawal are one gesture. Going via an
