@@ -463,6 +463,7 @@ namespace MWRender
                 ++mSwordWallContact.sounds;
         }
         std::map<std::string, osg::Vec3f> getShieldGeometryForAudit() const;
+        std::map<std::string, double> getDeathCameraClearanceForAudit(const osg::Vec3f& eye) const;
         struct WeaponGripGeometry
         {
             std::map<std::string, std::string> models;

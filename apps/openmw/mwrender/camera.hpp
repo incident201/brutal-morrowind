@@ -153,7 +153,7 @@ namespace MWRender
 
         struct PlayerDeathView
         {
-            osg::Quat entryOrientation;
+            osg::Quat orientationInHead;
             osg::Quat orientation;
             osg::Vec3d eyeInHead;
             float pitchDrop = 0.f;

@@ -870,6 +870,34 @@ namespace MWLua
                 MWBase::Environment::get().getWorld()->getAnimation(ptr));
             return animation && animation->isTorsoSevered();
         };
+        actor["_getDeathCameraClearanceForAudit"] = [lua = context.mLua](const SelfObject& self, const osg::Vec3f& eye,
+                                                     const osg::Vec3f& forward, const osg::Vec3f& right) {
+            if (self.ptr() != MWMechanics::getPlayer())
+                throw std::runtime_error("_getDeathCameraClearanceForAudit requires player SELF");
+            const auto* animation = dynamic_cast<const MWRender::NpcAnimation*>(
+                MWBase::Environment::get().getWorld()->getAnimation(self.ptr()));
+            sol::table state(lua->unsafeState(), sol::create);
+            if (animation)
+            {
+                for (const auto& [name, value] : animation->getDeathCameraClearanceForAudit(eye))
+                    state[name] = value;
+                if (const auto head = animation->getBoneWorldMatrix("Bip01 Head"))
+                {
+                    osg::Vec3f position, scale;
+                    osg::Quat orientation, stretch;
+                    head->decompose(position, orientation, scale, stretch);
+                    state["forwardInHead"] = orientation.inverse() * forward;
+                    state["rightInHead"] = orientation.inverse() * right;
+                }
+                if (const auto neck = animation->getBoneWorldMatrix("Bip01 Neck"))
+                {
+                    osg::Vec3f towardNeck = osg::Vec3f(neck->getTrans()) - eye;
+                    if (towardNeck.normalize() > .001f)
+                        state["neckAngle"] = osg::RadiansToDegrees(std::acos(std::clamp(towardNeck * forward, -1.f, 1.f)));
+                }
+            }
+            return state;
+        };
         actor["_getHeightStateForAudit"] = [lua = context.mLua](const Object& object) {
             const auto& ptr = object.ptr();
             if (!ptr.getClass().isActor())

@@ -1063,7 +1063,7 @@ namespace MWRender
         if (previous == VM_Normal)
         {
             mPlayerDeathView = previous;
-            for (auto part : { ESM::PRT_Head, ESM::PRT_Hair, ESM::PRT_Neck })
+            for (auto part : { ESM::PRT_Head, ESM::PRT_Hair })
                 removeIndividualPart(part);
             updateParts();
             return;
@@ -2503,6 +2503,86 @@ namespace MWRender
         return result;
     }
 
+    namespace
+    {
+        // A point-to-triangle query with the eye translated to the origin.
+        double eyeDistanceSquared(const osg::Vec3d& a, const osg::Vec3d& b, const osg::Vec3d& c)
+        {
+            const osg::Vec3d normal = (b - a) ^ (c - a);
+            const double areaSquared = normal.length2();
+            if (areaSquared > 1e-12 && (((b - a) ^ -a) * normal) >= 0.
+                && (((c - b) ^ -b) * normal) >= 0. && (((a - c) ^ -c) * normal) >= 0.)
+            {
+                const double plane = a * normal;
+                return plane * plane / areaSquared;
+            }
+            const auto edgeDistance = [](const osg::Vec3d& start, const osg::Vec3d& end) {
+                const osg::Vec3d edge = end - start;
+                const double along = std::clamp(-(start * edge) / std::max(edge.length2(), 1e-12), 0., 1.);
+                return (start + edge * along).length2();
+            };
+            return std::min({ edgeDistance(a, b), edgeDistance(b, c), edgeDistance(c, a) });
+        }
+
+        double eyeSolidAngle(const osg::Vec3d& a, const osg::Vec3d& b, const osg::Vec3d& c)
+        {
+            const double la = a.length(), lb = b.length(), lc = c.length();
+            return 2. * std::atan2(a * (b ^ c), la * lb * lc + (a * b) * lc + (b * c) * la + (c * a) * lb);
+        }
+    }
+
+    std::map<std::string, double> NpcAnimation::getDeathCameraClearanceForAudit(const osg::Vec3f& eye) const
+    {
+        if (!mPlayerDeathView)
+            return {};
+
+        double closest = std::numeric_limits<double>::infinity();
+        int nearestPart = -1;
+        std::size_t triangles = 0, insideParts = 0, unsupported = 0;
+        const std::function<std::optional<osg::Matrixf>(std::string_view)> bones
+            = [this](std::string_view name) { return getBoneWorldMatrix(name); };
+        for (std::size_t index = 0; index < std::size(mObjectParts); ++index)
+        {
+            const auto& part = mObjectParts[index];
+            if (!part || !part->getNode()->getNodeMask())
+                continue;
+            std::vector<DecapitationGeometry::Snapshot> snapshots;
+            DecapitationGeometry::SnapshotVisitor visitor(snapshots, bones, osg::Matrixf(), false);
+            visitor.setNodeMaskOverride(0u);
+            visitor.snapshot(part->getNode());
+            unsupported += visitor.failed;
+            double solidAngle = 0.;
+            for (const auto& snapshot : snapshots)
+            {
+                const auto* vertices = dynamic_cast<const osg::Vec3Array*>(snapshot.geometry->getVertexArray());
+                if (!vertices)
+                {
+                    ++unsupported;
+                    continue;
+                }
+                osg::TriangleIndexFunctor<DecapitationGeometry::TriangleList> faces;
+                snapshot.geometry->accept(faces);
+                for (const auto& face : faces.triangles)
+                {
+                    const osg::Vec3d a = osg::Vec3d((*vertices)[face[0]]) - osg::Vec3d(eye);
+                    const osg::Vec3d b = osg::Vec3d((*vertices)[face[1]]) - osg::Vec3d(eye);
+                    const osg::Vec3d c = osg::Vec3d((*vertices)[face[2]]) - osg::Vec3d(eye);
+                    const double distance = eyeDistanceSquared(a, b, c);
+                    if (distance < closest)
+                    {
+                        closest = distance;
+                        nearestPart = static_cast<int>(index);
+                    }
+                    solidAngle += eyeSolidAngle(a, b, c);
+                    ++triangles;
+                }
+            }
+            insideParts += std::abs(solidAngle) > 2. * osg::PI;
+        }
+        return { { "surfaceDistance", std::sqrt(closest) }, { "nearestPart", nearestPart },
+            { "triangles", triangles }, { "insideParts", insideParts }, { "unsupported", unsupported } };
+    }
+
     std::map<std::string, osg::Vec3f> NpcAnimation::getShieldGeometryForAudit() const
     {
         if(!mShowCarriedLeft || !mObjectParts[ESM::PRT_Shield])return {};
@@ -3714,10 +3794,12 @@ namespace MWRender
                     return false;
             }
         }
-        // Hide only the camera's enclosing geometry; torso and equipment keep their actual race/body records.
-        if ((mPlayerDeathView || Settings::game().mFirstPersonFullBody) && mPtr == MWMechanics::getPlayer()
-            && (type == ESM::PRT_Head || type == ESM::PRT_Hair || type == ESM::PRT_Neck))
-            return false;
+        if ((mPlayerDeathView || Settings::game().mFirstPersonFullBody) && mPtr == MWMechanics::getPlayer())
+        {
+            // A death pose can expose the collar. Keep its neck surface in place.
+            if (type == ESM::PRT_Head || type == ESM::PRT_Hair || (type == ESM::PRT_Neck && !mPlayerDeathView))
+                return false;
+        }
         if (!mPlayerDeathView && (Settings::game().mFirstPersonFullBody || MWMechanics::brutalDmFirstPerson())
             && mPtr == MWMechanics::getPlayer() && (type == ESM::PRT_LPauldron || type == ESM::PRT_RPauldron))
             return false;
