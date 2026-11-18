@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """First-person spear thrusts, using native finger curls and the DM staff's release/regrip."""
 import argparse
+from functools import lru_cache
 import hashlib
 import json
 from pathlib import Path
@@ -115,12 +116,15 @@ class Spear:
         # forward along the shaft, preserving its finger axes and curl.
         right, left = self.grasps
         right.grip = inverse(self.idle.local(ITEM))
-        left.grip[1, 3] = right.grip[1, 3] + 29.
+        left.grip[1, 3] = right.grip[1, 3] + 31.
         left.pole = unit(np.array((-.8, -.58, .15)))
         left.wrist_bias = 6.
         left.grip = matrix(turn_about((0, 1, 0), -24.), np.zeros(3)) @ left.grip
         for side, g in zip(SIDES, self.grasps):
+            original = g.grip.copy()
             close_hand(g, profile, side)
+            if side == 'L':
+                g.grip = blend(original, g.grip, .82)
             for name, pose in g.fingers.items():
                 weight = .32 if 'Finger0' in name else .27
                 g.fingers[name] = blend(pose, fist.local(name), weight)
@@ -132,11 +136,11 @@ class Spear:
         # Author the screen silhouette in camera space. During a full lunge the
         # rear hand carries the pole while the other hand opens and falls back.
         freed = ease(release)
-        diagonal = np.array((-.777, .562, -.284))
+        diagonal = unit(np.array((-.774, .554, -.31)))
         forward = unit(np.array((-9. - across*.70, 4. - height*.7 - 7.*freed, -49.)))
         axis = unit(lerp(diagonal, forward, push) + np.array((-.012*across, -.010*height, 0.))*(1.-push))
         rear = np.array((17.4 + across - 4.*push, -20.3 + height + 6.*push + 16.*freed,
-                         -23.4 + 12.*push)) + travel * axis
+                         -27.4 + 16.*push)) + travel * axis
         item = shaft(axis, np.array((-.78, -.62, 0.)), rear)
         item[:3, 3] -= axis * (self.grasps[0].grip[1, 3] + 1.7)
         item = self.camera @ item
@@ -239,11 +243,36 @@ class Spear:
             result[name] = blend(result[name], source.local(name), clearance * np.sin(np.pi*u))
         return result
 
+    @lru_cache(maxsize=64)
+    def keypose(self, values):
+        return LocalPose(self.rig, self.strike(*values))
+
     def beat(self, t, path):
         for (start, a), (end, b) in zip(path, path[1:]):
             if t <= end:
-                return self.strike(*lerp(np.array(a), np.array(b), ease((t - start) / (end - start))))
-        return self.strike(*path[-1][1])
+                if a == b:
+                    return self.keypose(a).transforms
+                first, last = self.keypose(a), self.keypose(b)
+                w = ease((t-start)/(end-start))
+                result = {n: blend(first.local(n), last.local(n), w) for n in self.names}
+                # Follow the authored elbow path between beats. Re-solving a
+                # swivel on every transitional frame can send the elbow through
+                # the upper screen even when both end poses are comfortable.
+                right, left = self.grasps
+                rear = blend(first.world(right.names[-1]), last.world(right.names[-1]), w)
+                item = rear @ result[ITEM]
+                result.update(steer_arm(first, last, right, rear, w))
+                h = left.names[-1]
+                contact = item @ blend(inverse(first.world(ITEM)) @ first.world(h),
+                                       inverse(last.world(ITEM)) @ last.world(h), w)
+                free = blend(first.world(h), last.world(h), w)
+                released = lerp(a[-1], b[-1], w)
+                hand = blend(contact, free, ease(2.*released))
+                result.update(steer_arm(first, last, left, hand, w))
+                for name in left.fingers:
+                    result[name] = blend(left.fingers[name], self.open_hand.local(name), ease(2.4*released))
+                return result
+        return self.keypose(path[-1][1]).transforms
 
     def staff_edge(self, source, time, progress):
         """Cross from diagonal guard to the source using the DM free-hand path."""
