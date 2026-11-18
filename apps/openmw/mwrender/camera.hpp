@@ -100,7 +100,7 @@ namespace MWRender
         void setStaticPosition(const osg::Vec3d& pos);
 
         bool isVanityOrPreviewModeEnabled() const { return mMode == Mode::Vanity || mMode == Mode::Preview; }
-        Mode getMode() const { return mMode; }
+        Mode getMode() const { return mPlayerDeathView ? Mode::FirstPerson : mMode; }
         std::optional<Mode> getQueuedMode() const { return mQueuedMode; }
         void setMode(Mode mode, bool force = true);
 
@@ -153,10 +153,10 @@ namespace MWRender
 
         struct PlayerDeathView
         {
-            osg::Vec3d entryPosition;
             osg::Quat entryOrientation;
             osg::Quat orientation;
-            osg::Vec3d offset;
+            osg::Vec3d eyeInHead;
+            float pitchDrop = 0.f;
             float elapsed = 0.f;
         };
         std::optional<PlayerDeathView> mPlayerDeathView;

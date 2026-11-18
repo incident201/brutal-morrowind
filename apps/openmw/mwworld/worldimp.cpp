@@ -1664,13 +1664,16 @@ namespace MWWorld
     void World::releaseNpcRagdollEquipment(const Ptr& ptr, bool retainedWeaponsOnly)
     {
         if (!Settings::game().mBrutalEquipmentPhysics) return;
-        if (ptr == getPlayerPtr() || !ptr.getClass().isNpc())
+        if (!ptr.getClass().isNpc())
+            return;
+        const bool player = ptr == getPlayerPtr();
+        const bool dead = ptr.getClass().getCreatureStats(ptr).isDead();
+        if (player && !dead)
             return;
         const auto* animation = dynamic_cast<const MWRender::NpcAnimation*>(getAnimation(ptr));
         if (!animation || !animation->isRagdollPose())
             return;
         auto& inventory = ptr.getClass().getInventoryStore(ptr);
-        const bool dead = ptr.getClass().getCreatureStats(ptr).isDead();
         const float dropChance = Settings::game().mBrutalRagdollWeaponDrop.get();
         struct Candidate
         {
@@ -1707,8 +1710,10 @@ namespace MWWorld
             else if (item.getType() != ESM::Armor::sRecordId
                 || item.get<ESM::Armor>()->mBase->mData.mType != ESM::Armor::Shield)
                 continue;
-            if (retainedWeaponsOnly && !heldWeapon)
-                continue; // Shields and loaded ammunition already rolled for this fall.
+            // A player's death only releases weapons. For an NPC that dies
+            // while knocked down, the shield and ammunition already rolled.
+            if ((player || retainedWeaponsOnly) && !heldWeapon)
+                continue;
             const bool guaranteed = dead && heldWeapon;
             if (!guaranteed && Misc::Rng::rollProbability(getPrng()) >= dropChance)
                 continue;

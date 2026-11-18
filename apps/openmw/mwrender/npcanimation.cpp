@@ -1063,6 +1063,8 @@ namespace MWRender
         if (previous == VM_Normal)
         {
             mPlayerDeathView = previous;
+            for (auto part : { ESM::PRT_Head, ESM::PRT_Hair, ESM::PRT_Neck })
+                removeIndividualPart(part);
             updateParts();
             return;
         }
@@ -1076,6 +1078,14 @@ namespace MWRender
         };
         const bool fullBody = useFullBodyFirstPerson();
         const auto* body = fullBody ? this : mBodyAwarenessAnimation.get();
+        std::optional<osg::Matrixf> leftWeaponGrip;
+        if (mShowCarriedLeft && carriesLeftWeapon())
+        {
+            const auto hand = getBoneWorldMatrix(arms[0][2]);
+            const auto mount = getBoneWorldMatrix(sBrutalLeftWeaponBone);
+            if (hand && mount)
+                leftWeaponGrip = *mount * osg::Matrixf::inverse(*hand);
+        }
         std::map<std::string, osg::Matrixf, std::less<>> localPose;
         if (body)
             for (const auto& [bone, node] : body->getNodeMap())
@@ -1129,12 +1139,35 @@ namespace MWRender
                 setBoneWorldMatrix(arms[side][joint], *start * osg::Matrixf::translate(-pivot)
                     * osg::Matrixf::rotate(swing) * osg::Matrixf::translate(pivot));
             }
+
+        // The imported dagger rig owns an off-hand attachment that is absent
+        // from the regular body. Carry its grip to the physical left hand so
+        // the drop starts at the palm with the arm's linear and angular motion.
+        if (leftWeaponGrip)
+        {
+            if (!getNode(sBrutalLeftWeaponBone))
+            {
+                const auto hand = getNodeMap().find(arms[0][2]);
+                if (hand == getNodeMap().end())
+                    return;
+                osg::ref_ptr<osg::MatrixTransform> mount = new osg::MatrixTransform(*leftWeaponGrip);
+                mount->setName(std::string(sBrutalLeftWeaponBone));
+                hand->second->addChild(mount);
+                mNodeMap.emplace(mount->getName(), mount);
+            }
+            showCarriedLeft(true);
+        }
     }
 
     void NpcAnimation::restorePlayerDeathView()
     {
-        if (mPlayerDeathView)
-            setViewMode(*std::exchange(mPlayerDeathView, std::nullopt));
+        if (const auto previous = std::exchange(mPlayerDeathView, std::nullopt))
+        {
+            if (*previous == mViewMode)
+                updateParts();
+            else
+                setViewMode(*previous);
+        }
     }
 
     /// @brief A RenderBin callback to clear the depth buffer before rendering.
@@ -3682,7 +3715,7 @@ namespace MWRender
             }
         }
         // Hide only the camera's enclosing geometry; torso and equipment keep their actual race/body records.
-        if (!mPlayerDeathView && Settings::game().mFirstPersonFullBody && mPtr == MWMechanics::getPlayer()
+        if ((mPlayerDeathView || Settings::game().mFirstPersonFullBody) && mPtr == MWMechanics::getPlayer()
             && (type == ESM::PRT_Head || type == ESM::PRT_Hair || type == ESM::PRT_Neck))
             return false;
         if (!mPlayerDeathView && (Settings::game().mFirstPersonFullBody || MWMechanics::brutalDmFirstPerson())
