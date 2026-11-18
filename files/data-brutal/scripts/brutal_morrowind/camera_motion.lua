@@ -26,6 +26,41 @@ local GROUND_FINISHER='brutal_ground_finisher'
 local DIRECTIONS={'N','NE','E','SE','S','SW','W','NW'}
 local ZERO={0,0,0,0,0,0}
 
+-- The spear uses the same action mixer as the imported head layers. Anchor
+-- each short gaze curve to the corresponding arm key so weapon speed, an
+-- interrupted combo and a held charge all use the actual game clock.
+local function addSpearHeadMotion(set, clips)
+    local planted={1.1,-2.4,1.55}
+    local charged={1.6,-3.25,1.8}
+    local function add(group, from, to, a, b)
+        local name='spear_'..group..'_'..from
+        local frames={}
+        for i=0,12 do
+            local u=i/12
+            local w=u*u*(3-2*u)
+            local frame={0,0,0,0,0,0}
+            for k=1,3 do frame[k]=math.rad(a[k]+(b[k]-a[k])*w) end
+            frames[#frames+1]=frame
+        end
+        clips[name]={fps=12,loop=false,frames=frames}
+        set[#set+1]={start=group..' '..from,stop=group..' '..to,clip=name,duration=1}
+    end
+    local impacts={fasta={-1.8,1.65,-1.15},fastloopa={-1.8,1.65,-1.15},
+        fastb={-.85,2.3,-1.65},fastc={-2.7,1.65,-1.25},fastd={-1.35,2.9,-1.8}}
+    for _,group in ipairs({'fasta','fastloopa','fastb','fastc','fastd'}) do
+        add(group,'start','plant',ZERO,planted)
+        add(group,'plant','weight forward',planted,impacts[group])
+        add(group,'weight forward','stop',impacts[group],ZERO)
+    end
+    add('thrust','start','max attack',ZERO,charged)
+    add('thrust hold','start','stop',charged,charged)
+    add('thrust','plant','weight forward',charged,{-3.8,2.8,-2.5})
+    add('thrust','weight forward','large follow stop',{-3.8,2.8,-2.5},ZERO)
+end
+if data and data.sets and data.sets.brutal_fp_spear then
+    addSpearHeadMotion(data.sets.brutal_fp_spear.weapononehand, data.clips)
+end
+
 local function sample(clip,t)
     local frames=clip.frames
     local n=#frames

@@ -3280,7 +3280,7 @@ namespace MWMechanics
                         return u * u * (3.f - 2.f * u);
                     };
                     // Normal actor locomotion resolves walls, other actors, and slopes.
-                    movement.y() += (quick ? 11.f : 22.f) * (weight(strideTo) - weight(strideFrom)) / duration;
+                    movement.y() += (quick ? 18.f : 32.f) * (weight(strideTo) - weight(strideFrom)) / duration;
                 }
             }
             world->queueMovement(mPtr, movement);
