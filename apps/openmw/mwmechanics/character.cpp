@@ -898,11 +898,20 @@ namespace MWMechanics
         const bool importedWeaponSneak = mIdleState == CharState_IdleSneak && mPtr == getPlayer()
             && brutalDmFirstPerson() && MWBase::Environment::get().getWorld()->isFirstPerson()
             && !shortGroup.empty();
-        const bool importedCrouch = importedWeaponSneak && isRealWeapon(mWeaponType)
-            && mWeaponType != ESM::Weapon::PickProbe && (shortGroup == "1h" || shortGroup == "1s")
-            && mAnimation->hasAnimation("idlesneak1h");
-        if (importedCrouch)
-            idleGroup = "idlesneak1h";
+        bool importedCrouch = false;
+        if (importedWeaponSneak && isRealWeapon(mWeaponType) && mWeaponType != ESM::Weapon::PickProbe)
+        {
+            const std::string_view suffix = shortGroup == "1h" || shortGroup == "1s" ? "1h"
+                : usesBrutalPairedWeapon()                                           ? shortGroup
+                                                                                     : "";
+            std::string armedSneak = idleGroup;
+            armedSneak += suffix;
+            if (!suffix.empty() && mAnimation->hasAnimation(armedSneak))
+            {
+                idleGroup = std::move(armedSneak);
+                importedCrouch = true;
+            }
+        }
 
         MWRender::Animation::AnimPriority priority = getIdlePriority(mIdleState);
         size_t numLoops = std::numeric_limits<uint32_t>::max();
