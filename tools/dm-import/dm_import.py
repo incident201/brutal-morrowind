@@ -31,7 +31,7 @@ EFFECTS = ROOT / 'scripts/effects'
 CALIBRATION = HERE / 'calibration'
 RECIPE_VERSION = 12  # Misc::DarkMessiahData::sRecipe in the engine must match.
 # Conversion steps per import, for progress reporting.
-TOTAL_STEPS = 39
+TOTAL_STEPS = 40
 KEYFRAMES = ('.kf', '.yaml')
 # Steps run side by side, one core each; the matrices involved are 4x4.
 ENVIRONMENT = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1')
@@ -528,6 +528,9 @@ class Importer:
                          '--output', self.stage('clinch'))
                 self.run('Two-handed player viewmodels', ANIMATION / 'import_two_hand_viewmodel.py',
                          '--arms', arms, '--clinch', self.stage('clinch'),
+                         '--native-skeleton', self.meshes / 'xbase_anim.1st.nif',
+                         '--native-animation', self.meshes / 'xbase_anim.1st.kf')
+                self.run('Spear thrusts', ANIMATION / 'import_spear_thrust.py', '--arms', arms,
                          '--native-skeleton', self.meshes / 'xbase_anim.1st.nif',
                          '--native-animation', self.meshes / 'xbase_anim.1st.kf')
                 self.run('Footstep keys', ANIMATION / 'add_footstep_keys.py', self.stage('npc'))

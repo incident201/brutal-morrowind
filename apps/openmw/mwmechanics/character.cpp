@@ -3949,7 +3949,7 @@ namespace MWMechanics
 
     void CharacterController::chooseBrutalChargedAttack()
     {
-        // Forward and back take the source _T and _B swings; standing takes the neutral clip.
+        // Spears thrust on either longitudinal step. Other sets use the source _T and _B swings.
         // Sideways stays the established mapping that the limb cuts rely on.
         auto& stats = mPtr.getClass().getCreatureStats(mPtr);
         const float* move = mPtr.getClass().getMovementSettings(mPtr).mPosition;
@@ -4041,9 +4041,7 @@ namespace MWMechanics
         const bool dagger = isBrutalDaggerSet();
         int next = mBrutalFastIndex + 1;
         if (next > last)
-            // The spear opener includes the change from the staff stance. Stay in
-            // the forward grip while the player continues the chain.
-            next = (last == 5 && !dagger) || brutalActiveKey("brutal spear grip") ? 2 : 1;
+            next = last == 5 && !dagger ? 2 : 1;
         mBrutalFastIndex = next;
         resetBrutalFastContinuation();
         mBrutalFastQueued = false;

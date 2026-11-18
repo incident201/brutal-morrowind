@@ -113,7 +113,7 @@ class Grasp:
             # Keep the same closed fingers and radial contact on the shaft.
             self.grip[1, 3] -= 7.
 
-    def fit(self, item):
+    def fit(self, item, elbow_hint=None, swivels=SWIVELS):
         hand = item @ self.grip
         wrist = hand[:3, 3]
         delta = wrist - self.shoulder
@@ -123,7 +123,8 @@ class Grasp:
         projection = (distance ** 2 + upper_length ** 2 - fore_length ** 2) / (2 * distance)
         height = np.sqrt(max(0., upper_length ** 2 - projection ** 2))
         base = self.shoulder + axis * projection
-        pole = unit(self.pole - axis * (axis @ self.pole))
+        guide = self.pole if elbow_hint is None else elbow_hint - self.shoulder
+        pole = unit(guide - axis * (axis @ guide))
         tangent = cross(axis, pole)
         desired_fore = hand[:3, :3] @ self.wrist_frame.T
         palm_along = hand[:3, :3] @ self.palm_along
@@ -146,10 +147,10 @@ class Grasp:
 
         # A smooth preference through competing elbow solutions avoids a
         # discontinuous change of pole on successive frames of the swing.
-        flex, twist, palm_flex = np.array([frames(angle)[:3] for angle in SWIVELS]).T
-        costs = flex ** 2 + .23 * twist ** 2 + .38 * SWIVELS ** 2 + self.wrist_bias * palm_flex ** 2
+        flex, twist, palm_flex = np.array([frames(angle)[:3] for angle in swivels]).T
+        costs = flex ** 2 + .23 * twist ** 2 + .38 * swivels ** 2 + self.wrist_bias * palm_flex ** 2
         weights = np.exp(-12 * (costs - costs.min()))
-        flex, twist, palm_flex, upper_rotation, fore_rotation, elbow = frames(weights @ SWIVELS / weights.sum())
+        flex, twist, palm_flex, upper_rotation, fore_rotation, elbow = frames(weights @ swivels / weights.sum())
         twist = np.clip(twist, -1.05, 1.05)
         c, s = np.cos(twist), np.sin(twist)
         fore_rotation = fore_rotation @ np.array(((1., 0., 0.), (0., c, -s), (0., s, c)))
