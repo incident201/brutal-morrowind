@@ -1957,9 +1957,28 @@ namespace MWRender
                 const AnimState& source = *sourceState;
                 if (!body.hasAnimation(group))
                     continue;
+                // The secondary rig has a complete planted thrust, but no
+                // fast A-D tracks. Run the real hips and legs on the same
+                // draw/contact/recovery clock as the first-person hand.
+                std::string_view bodyStart = source.mStartKey, bodyStop = source.mStopKey;
+                const bool spear = group == "weapononehand" && mViewmodelSet == BrutalViewmodel_Spear;
+                const bool heldSpear = spear && bodyStart == "thrust hold start";
+                float plant = -1.f, contact = -1.f;
+                if (spear && bodyStart.starts_with("fast") && !bodyStart.starts_with("fastend") && bodyStart.ends_with(" start"))
+                {
+                    const std::string prefix = group + ": " + std::string(bodyStart.substr(0, bodyStart.size() - 6));
+                    plant = getTextKeyTime(prefix + " plant");
+                    contact = getTextKeyTime(prefix + " thrust hit");
+                }
+                const bool quickSpear = plant >= 0.f && contact > plant;
+                if (quickSpear || heldSpear)
+                {
+                    bodyStart = heldSpear ? "thrust max attack" : "thrust start";
+                    bodyStop = heldSpear ? "thrust hit" : "thrust large follow stop";
+                }
                 auto found = body.mStates.find(group);
-                if (found == body.mStates.end() || found->second.mStartKey != source.mStartKey
-                    || found->second.mStopKey != source.mStopKey)
+                if (found == body.mStates.end() || found->second.mStartKey != bodyStart
+                    || found->second.mStopKey != bodyStop)
                 {
                     // Secondary visuals must never send animationEnded events for the player.
                     // play() removes equal-priority states with notifications; remove those
@@ -1970,7 +1989,7 @@ namespace MWRender
                         else
                             ++it;
                     body.play(group, source.mPriority, source.mBlendMask, false, 0.f,
-                        source.mStartKey, source.mStopKey, 0.f, 0, false);
+                        bodyStart, bodyStop, 0.f, 0, false);
                     found = body.mStates.find(group);
                     if (found == body.mStates.end())
                         continue;
@@ -1993,7 +2012,20 @@ namespace MWRender
                                          : to1;
                 };
                 const float time = source.getTime();
-                if (time < sourceLoopStart)
+                if (heldSpear)
+                    target.setTime(target.mStartTime);
+                else if (quickSpear)
+                {
+                    const float back = body.getTextKeyTime(group + ": thrust max attack");
+                    const float hit = body.getTextKeyTime(group + ": thrust hit");
+                    if (time < plant)
+                        target.setTime(mapSegment(time, source.mStartTime, plant, target.mStartTime, back));
+                    else if (time < contact)
+                        target.setTime(mapSegment(time, plant, contact, back, hit));
+                    else
+                        target.setTime(mapSegment(time, contact, source.mStopTime, hit, target.mStopTime));
+                }
+                else if (time < sourceLoopStart)
                     target.setTime(mapSegment(time, source.mStartTime, sourceLoopStart, target.mStartTime, targetLoopStart));
                 else if (time <= sourceLoopStop)
                 {
