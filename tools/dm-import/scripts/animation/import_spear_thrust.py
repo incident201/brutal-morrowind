@@ -327,10 +327,10 @@ class Spear:
             free = side == 'L' and not pose.support
             if free:
                 # The open hand counterbalances the carrying arm. Use a
-                # relaxed curve below the line of sight, visible on extension.
+                # quiet curve below the carrying hand throughout a series.
                 lead = np.clip(pose.shoulder, 0., 1.)
-                pocket = (-17. - 3.*lead, -20. - 5.*lead,
-                          -21. + 4.*lead)
+                pocket = (-18. - 1.1*lead, -26. - 1.5*lead,
+                          -18. + .8*lead)
                 hand[:3, 3] = (self.camera @ np.r_[pocket, 1.])[:3]
             drive = pose.shoulder
             # The shoulder socket moves on the collarbone arc. Both ends of
@@ -640,7 +640,7 @@ def build(arms, native_skeleton, native_animation, body=None):
     hold = marks['thrust hold start']
     # A small closed breathing cycle keeps the held shoulder and fingers
     # under load. Any phase can release directly into the full thrust.
-    breath = deep._replace(wrist=(16.35, -6.45, -13.6), shoulder=-.12, elbow=-5.)
+    breath = deep._replace(wrist=(15.25, -5.9, -15.1), shoulder=-.06, elbow=-4.)
     period = 1.24
     held = [(0., deep), (period*.54, breath), (period, deep)]
     section('thrust hold', hold, period, lambda t: spear.beat(t, held),
@@ -655,12 +655,12 @@ def build(arms, native_skeleton, native_animation, body=None):
         # duration, back of draw, end of drive, end of fixation, travel
         ('a', .64, .16, .33, .435, 23.,
          ThrustPose((15., -7.2, -15.), (-.32, .095, -.944), 151., -.08, -5.)),
-        ('b', .71, .19, .37, .493, 25.,
-         ThrustPose((17.5, -15.6, -11.3), (-.185, .28, -.942), 115., -.10, -32.)),
-        ('c', .71, .18, .36, .485, 25.2,
-         ThrustPose((24., 4., -7.), (-.39, -.22, -.894), 174., -.06, -18.)),
-        ('d', .78, .225, .446, .580, 26.4,
-         ThrustPose((26., -6., -6.), (-.43, .05, -.901), 148., -.13, -5.)),
+        ('b', .71, .19, .37, .493, 23.62,
+         ThrustPose((14., -10.3, -16.), (-.285, .215, -.9341), 115., -.10, -32.)),
+        ('c', .71, .18, .36, .485, 21.08,
+         ThrustPose((14., 5., -15.), (-.335, -.195, -.9218), 174., -.06, -18.)),
+        ('d', .78, .225, .446, .580, 21.95,
+         ThrustPose((16., -3.3, -17.), (-.525, .02, -.8509), 148., -.13, -5.)),
     ]
     # Clear the struck line before the next hand changes height. The next
     # attack then starts from the same one-handed carry as the previous exit.
