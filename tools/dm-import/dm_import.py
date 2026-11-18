@@ -531,6 +531,7 @@ class Importer:
                          '--native-skeleton', self.meshes / 'xbase_anim.1st.nif',
                          '--native-animation', self.meshes / 'xbase_anim.1st.kf')
                 self.run('Spear thrusts', ANIMATION / 'import_spear_thrust.py', '--arms', arms,
+                         '--body', self.stage('body-jump'),
                          '--native-skeleton', self.meshes / 'xbase_anim.1st.nif',
                          '--native-animation', self.meshes / 'xbase_anim.1st.kf')
                 self.run('Footstep keys', ANIMATION / 'add_footstep_keys.py', self.stage('npc'))

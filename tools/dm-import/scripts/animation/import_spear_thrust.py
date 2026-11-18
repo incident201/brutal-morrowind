@@ -14,7 +14,7 @@ import numpy as np
 from import_staff_native_grasp import swing
 from import_two_hand_viewmodel import (
     Grasp, ITEM, Pose, Rig, SIDES, bone, inverse, keys, lerp, load, matrix,
-    matrix_quat, native_starts, nif, quat_matrix, slerp, tracks, turn_about, unit,
+    matrix_quat, native_starts, nif, quat_matrix, sample, slerp, tracks, turn_about, unit,
 )
 
 
@@ -521,7 +521,65 @@ def staff_back_hand(stream, channels, rig, vanilla, release):
             data.translations.keys[i, 1:] = value[:3, 3]
 
 
-def build(arms, native_skeleton, native_animation):
+def body_footwork(body, weapon):
+    """Fit the imported walking footfalls to the spear's actual contact keys."""
+    folder = body / 'Animations/brutal_firstperson'
+    idle = folder / 'idle1h.kf'
+    walking = folder / 'walkforward1h.kf'
+    stride = tracks(walking)
+    period = native_starts(walking)['walkforward1h: loop stop']
+    stance = tracks(idle)
+    stream = load(idle)
+    text = keys(stream)
+    marks = {name.removeprefix('weapononehand: '): time for name, time in native_starts(weapon).items()}
+    group = 'brutal_spear_step: '
+    ranges = {}
+    for clip in ('fasta', 'fastb', 'fastc', 'fastd', 'fastloopa'):
+        start, plant, hit, stop = [marks[clip+' '+key] for key in ('start','plant','thrust hit','stop')]
+        lead = .5 if clip in ('fastb', 'fastd') else 0.
+        ranges[clip] = [(start, lead-.13, 0.), (plant, lead-.05, .36),
+                        (hit, lead+.22, .76), (hit+.085, lead+.29, .76), (stop, lead+.48, 0.)]
+    for letter in 'abcd':
+        name = 'fastend'+letter
+        ranges[name] = [(marks[name+' start'], 0., 0.), (marks[name+' stop'], 0., 0.)]
+    draw, back, release, hit, end = [marks['thrust '+key] for key in
+                                     ('start','max attack','min hit','hit','large follow stop')]
+    ranges['thrust'] = [(draw, .65, 0.), (back, .78, .45), (release, .78, .45),
+                        (hit, 1.22, .9), (hit+.13, 1.30, .86), (end, 1.53, 0.)]
+    ranges['thrust hold'] = [(marks['thrust hold '+key], .78, .45) for key in ('start','stop')]
+    labels = [(time, group+label) for label,time in marks.items() if label.startswith(('fast','thrust '))]
+    # Secondary animation.play() resolves the hold's generic loop range.
+    for key in ('loop start','loop stop'):
+        labels.append((marks['thrust hold '+key], group+key))
+    final_time = max(t for t,_ in labels)
+    labels.extend([(0., group+'start'), (final_time, group+'stop')])
+    text.keys = np.array(sorted(labels), dtype=text.keys.dtype)
+    frames = {}
+    for curve in ranges.values():
+        for (begin,p0,w0), (end,p1,w1) in zip(curve,curve[1:]):
+            for t in np.linspace(begin,end,max(2,int(np.ceil((end-begin)*60))+1)):
+                u = ease((t-begin)/(end-begin))
+                frames[t] = (lerp(p0,p1,u)%1.*period, lerp(w0,w1,u))
+    times = sorted(frames)
+    names = [e.string_data for e in stream.root.extra_datas if isinstance(e, nif.NiStringExtraData)]
+    for name, ctl in zip(names, stream.root.controllers):
+        for index, field in enumerate((ctl.data.rotations, ctl.data.translations)):
+            n, interpolate = (4, slerp) if index == 0 else (3, lerp)
+            rest = stance[name][index][0,1:]
+            values = []
+            for t in times:
+                phase, weight = frames[t]
+                donor = sample(stride[name][index], phase, n, interpolate)
+                value = interpolate(rest, donor, weight)
+                if index == 0 and values and value @ values[-1] < 0.:
+                    value = -value
+                values.append(value)
+            field.keys = np.column_stack((times,values)).astype(np.float32)
+        ctl.start_time, ctl.stop_time = 0., final_time
+    stream.save(folder / 'brutal_spear_step.kf')
+
+
+def build(arms, native_skeleton, native_animation, body=None):
     folder = arms / 'Animations/brutal_fp_staff'
     source = folder / 'weapononehand.kf'
     target = folder.with_name('brutal_fp_spear')
@@ -730,6 +788,8 @@ def build(arms, native_skeleton, native_animation):
             field.keys = merged
         controller.stop_time = max(controller.stop_time, times[-1])
     stream.save(target / source.name)
+    if body is not None:
+        body_footwork(body, target / source.name)
     # The staff's 200 ms cross-fade consumes the short spear withdrawal.
     # These clips already meet at an authored ready pose. Keep a small blend
     # for a fresh click arriving partway through the return to guard.
@@ -755,5 +815,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('arms', 'native-skeleton', 'native-animation'):
         parser.add_argument('--' + name, type=Path, required=True)
+    parser.add_argument('--body', type=Path)
     args = parser.parse_args()
-    build(args.arms, args.native_skeleton, args.native_animation)
+    build(args.arms, args.native_skeleton, args.native_animation, args.body)
