@@ -1426,8 +1426,12 @@ namespace MWRender
             loadAdditionalAnimations(VFS::Path::NormalizedView("meshes/brutal_fp.nif"), smodel);
             if (mViewmodelSet == BrutalViewmodel_Shield)
                 loadAdditionalAnimations(VFS::Path::NormalizedView("meshes/brutal_fp_shield.nif"), smodel);
-            else if (mViewmodelSet == BrutalViewmodel_Staff)
+            else if (hasPolearmViewmodel())
+            {
                 loadAdditionalAnimations(VFS::Path::NormalizedView("meshes/brutal_fp_staff.nif"), smodel);
+                if (mViewmodelSet == BrutalViewmodel_Spear)
+                    loadAdditionalAnimations(VFS::Path::NormalizedView("meshes/brutal_fp_spear.nif"), smodel);
+            }
             else if (mViewmodelSet == BrutalViewmodel_Dagger)
                 loadAdditionalAnimations(VFS::Path::NormalizedView("meshes/brutal_fp_dagger.nif"), smodel);
             else if (mViewmodelSet == BrutalViewmodel_Paired)
@@ -2068,6 +2072,9 @@ namespace MWRender
             ? weapon->get<ESM::Weapon>()->mBase->mData.mType : ESM::Weapon::None;
         // OpenMW keeps a shield equipped while a two-handed weapon hides it. Its
         // inventory slot must not override the weapon's animation set.
+        if (type == ESM::Weapon::SpearTwoWide
+            && mResourceSystem->getVFS()->exists(VFS::Path::NormalizedView("animations/brutal_fp_spear/weapononehand.kf")))
+            return BrutalViewmodel_Spear;
         if (MWMechanics::brutalStaffWeapon(type))
             return BrutalViewmodel_Staff;
         if (MWMechanics::brutalPairedWeapon(type))
@@ -2094,7 +2101,7 @@ namespace MWRender
 
     bool NpcAnimation::useBrutalStaffSet() const
     {
-        return mViewMode == VM_FirstPerson && !mBodyAwareness && mViewmodelSet == BrutalViewmodel_Staff
+        return mViewMode == VM_FirstPerson && !mBodyAwareness && hasPolearmViewmodel()
             && getNode(sBrutalLeftWeaponBone) != nullptr;
     }
 

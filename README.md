@@ -35,7 +35,7 @@ away within a game day. Blood also splatters onto nearby floors and walls, using
 Dark Messiah's decals; outdoors the rain washes it away. Both have switches in
 the Brutal Morrowind settings.
 
-This branch uses **Dark Messiah import recipe 11**. Its launcher asks to reimport
+This branch uses **Dark Messiah import recipe 12**. Its launcher asks to reimport
 older data. See `CHANGELOG.md` for the other unreleased changes.
 
 ## Requirements

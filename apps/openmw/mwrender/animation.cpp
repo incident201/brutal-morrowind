@@ -1339,14 +1339,15 @@ namespace MWRender
         // Weapon families opt only their first-person arm tracks into local
         // source fade rules. Never turn on global smoothing for their camera,
         // root, classic animations or other actors.
+        const bool polearm = kfname.starts_with("animations/brutal_fp_staff/") || kfname.starts_with("animations/brutal_fp_spear/");
         const bool importedFamily = mPtr == MWBase::Environment::get().getWorld()->getPlayerPtr()
             && (kfname.starts_with("animations/brutal_fp/")
                 || kfname.starts_with("animations/brutal_fp_shield/")
-                || kfname.starts_with("animations/brutal_fp_staff/")
+                || polearm
                 || kfname.starts_with("animations/brutal_fp_dagger/"));
         animsrc->mImportedFamilyArms = importedFamily;
         animsrc->mImportedFarArms = importedFamily
-            && (kfname.starts_with("animations/brutal_fp_staff/") || kfname.starts_with("animations/brutal_fp_dagger/"));
+            && (polearm || kfname.starts_with("animations/brutal_fp_dagger/"));
         animsrc->mImportedDaggerArms = importedFamily && kfname.starts_with("animations/brutal_fp_dagger/");
         if (Settings::game().mSmoothAnimTransitions || importedNpc || importedFamily)
         {

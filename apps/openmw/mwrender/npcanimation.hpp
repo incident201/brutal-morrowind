@@ -347,12 +347,17 @@ namespace MWRender
             BrutalViewmodel_Default,
             BrutalViewmodel_Shield,
             BrutalViewmodel_Staff,
+            BrutalViewmodel_Spear,
             BrutalViewmodel_Dagger,
             BrutalViewmodel_Paired,
             BrutalViewmodel_PairedBlunt,
         };
         static constexpr std::string_view sBrutalLeftWeaponBone = "Brutal Left Weapon";
         BrutalViewmodel mViewmodelSet = BrutalViewmodel_Default; // Clip set loaded for the first-person rig.
+        bool hasPolearmViewmodel() const
+        {
+            return mViewmodelSet == BrutalViewmodel_Staff || mViewmodelSet == BrutalViewmodel_Spear;
+        }
         bool hasPairedViewmodel() const
         {
             return mViewmodelSet == BrutalViewmodel_Paired || mViewmodelSet == BrutalViewmodel_PairedBlunt;

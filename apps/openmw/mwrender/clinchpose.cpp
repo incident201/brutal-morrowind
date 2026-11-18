@@ -181,7 +181,7 @@ namespace MWRender
             return;
         const double now = visitor.getFrameStamp()->getSimulationTime();
         const bool contest = stats.mBrutalClinchActive && stats.mBrutalClinchPhase <= 2;
-        const bool polearm = mViewmodelSet == BrutalViewmodel_Staff;
+        const bool polearm = hasPolearmViewmodel();
         auto world = MWBase::Environment::get().getWorld();
         auto* opponent = stats.mBrutalClinchOpponent.isEmpty() ? nullptr
             : dynamic_cast<NpcAnimation*>(world->getAnimation(stats.mBrutalClinchOpponent));

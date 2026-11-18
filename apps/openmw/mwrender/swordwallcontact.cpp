@@ -152,7 +152,7 @@ namespace MWRender
         osg::Matrixf sourceGrip;
         float checkedClamp = 0.f;
         const bool paired = hasPairedViewmodel();
-        const bool solveArms = paired || mViewmodelSet == BrutalViewmodel_Staff;
+        const bool solveArms = paired || hasPolearmViewmodel();
         const bool auditArms = solveArms && std::getenv("BRUTAL_SWORD_WALL_DIAGNOSTICS");
         // Keep the authored pose for restoring, also when the clinch fit moved this bone first.
         const auto authored = [&](osg::MatrixTransform* bone) {
@@ -497,7 +497,7 @@ namespace MWRender
         const auto right = inventory.getSlot(MWWorld::InventoryStore::Slot_CarriedRight);
         const bool shortBlade = right != inventory.end() && right->getType() == ESM::Weapon::sRecordId
             && right->get<ESM::Weapon>()->mBase->mData.mType == ESM::Weapon::ShortBladeOneHand;
-        const bool pairedGrasp = mViewmodelSet == BrutalViewmodel_Staff || hasPairedViewmodel();
+        const bool pairedGrasp = hasPolearmViewmodel() || hasPairedViewmodel();
         const auto recoil = [&](bool fresh) {
             if (!weapon.materialWitness || weapon.recoilAge < 0.f || stats.isDead()
                 || stats.mBrutalClinchActive || stats.mBrutalSlidePhase != 0)

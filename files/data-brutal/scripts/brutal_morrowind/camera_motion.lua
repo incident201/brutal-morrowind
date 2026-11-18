@@ -121,6 +121,7 @@ local function folder(ground)
     local kind=weaponKind(equipment[types.Actor.EQUIPMENT_SLOT.CarriedRight])
     local W=types.Weapon.TYPE
     local staff=kind==W.SpearTwoWide or kind==W.BluntTwoWide
+    if kind==W.SpearTwoWide then return 'brutal_fp_spear' end
     if ground then
         -- A hidden, equipped shield does not select the sword-and-shield rig.
         if staff then return 'brutal_fp_staff' end

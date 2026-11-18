@@ -124,6 +124,12 @@ def main():
             if parts:
                 sets.setdefault(folder, {})[group] = parts
 
+    # The thrusts have their own shoulder motion. Preserve staff head layers
+    # for the actions still played from that set, including the ground finisher.
+    staff = sets['brutal_fp_staff']
+    sets['brutal_fp_spear'] = {**staff, 'weapononehand': [
+        part for part in staff['weapononehand'] if not part['start'].startswith(('thrust ', 'fast'))]}
+
     def lua(value, indent=''):
         if isinstance(value, dict):
             inner = indent+'  '

@@ -3955,7 +3955,7 @@ namespace MWMechanics
         const float* move = mPtr.getClass().getMovementSettings(mPtr).mPosition;
         mBrutalNeutralAttack = false;
         if (std::abs(move[1]) > std::abs(move[0]) + 0.2f)
-            mAttackType = move[1] > 0.f ? "chop" : "thrust";
+            mAttackType = move[1] > 0.f && !brutalActiveKey("brutal spear grip") ? "chop" : "thrust";
         else if (std::abs(move[0]) > std::abs(move[1]) + 0.2f)
             mAttackType = "slash";
         else if (brutalActiveKey("neutral start"))
@@ -4041,7 +4041,9 @@ namespace MWMechanics
         const bool dagger = isBrutalDaggerSet();
         int next = mBrutalFastIndex + 1;
         if (next > last)
-            next = last == 5 && !dagger ? 2 : 1;
+            // The spear opener includes the change from the staff stance. Stay in
+            // the forward grip while the player continues the chain.
+            next = (last == 5 && !dagger) || brutalActiveKey("brutal spear grip") ? 2 : 1;
         mBrutalFastIndex = next;
         resetBrutalFastContinuation();
         mBrutalFastQueued = false;
