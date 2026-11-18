@@ -261,7 +261,9 @@ namespace MWRender
         // wide): shorten the shift until no more of the shoulders is on screen
         // than in the authored pose.
         audit.exposureScale = 1.f;
-        if (auto* camera = world->getCamera(); camera && !hasPairedViewmodel())
+        const bool polearm = mViewmodelSet == BrutalViewmodel_Staff;
+        const bool pairedGrip = hasPairedViewmodel() || polearm;
+        if (auto* camera = world->getCamera(); camera && !pairedGrip)
         {
             const osg::Matrixf view = camera->getViewMatrix();
             double fov = mFirstPersonFieldOfView, aspect = 1., near = 1., far = 8192.;
@@ -304,16 +306,19 @@ namespace MWRender
             correction *= scale;
             audit.correction = correction;
         }
-        if (hasPairedViewmodel())
+        if (pairedGrip)
         {
             std::array<GripArm, 2> arms;
             osg::Matrixf fitted;
             const auto local = [](osg::MatrixTransform* bone) { return osg::Matrixf(bone->getMatrix()); };
             const float yaw = mPtr.getRefData().getPosition().rot[2];
-            // Keep the support elbow farther forward so its forearm and sleeve
-            // follow the grip through the ordinary first-person frustum.
-            const GripArmLimits limits{ osg::DegreesToRadians(25.f), osg::Vec3f(std::sin(yaw), std::cos(yaw), .6f),
-                osg::DegreesToRadians(42.f) * audit.weight };
+            // The high polearm grip brings the dominant elbow into view at
+            // the side. The close grip needs the same help on the support arm.
+            GripArmLimits limits;
+            limits.clavicleTurn = osg::DegreesToRadians(polearm ? 25.f : 33.f);
+            auto& elbow = limits.elbows[polearm ? 0 : 1];
+            elbow.guide.set(std::sin(yaw), std::cos(yaw), polearm ? -.4f : .6f);
+            elbow.turn = osg::DegreesToRadians(polearm ? 55.f : 42.f) * audit.weight;
             if (!solveSharedGripArms(
                     getNodeMap(), osg::Matrixf::translate(correction), {}, local, arms, fitted, limits))
                 return;

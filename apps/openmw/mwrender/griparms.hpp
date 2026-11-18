@@ -27,9 +27,13 @@ namespace MWRender
 
     struct GripArmLimits
     {
+        struct Elbow
+        {
+            osg::Vec3f guide;
+            float turn = 0.f;
+        };
         float clavicleTurn = 0.f;
-        osg::Vec3f leftElbowGuide;
-        float leftElbowTurn = 0.f;
+        std::array<Elbow, 2> elbows;
     };
 
     // Rotate the clavicle about its own neck attachment to gain a little
@@ -154,13 +158,14 @@ namespace MWRender
                 transport.makeRotate(oldAxis, axis);
                 bend = transport * sourceBend;
             }
-            if (&arm == &arms.back() && limits.leftElbowTurn > 0.f)
+            const auto& elbowLimit = limits.elbows[&arm == &arms.front() ? 0 : 1];
+            if (elbowLimit.turn > 0.f)
             {
-                osg::Vec3f guide = limits.leftElbowGuide - axis * (limits.leftElbowGuide * axis);
+                osg::Vec3f guide = elbowLimit.guide - axis * (elbowLimit.guide * axis);
                 if (guide.normalize() > .001f)
                 {
                     const float swivel = std::atan2(axis * (bend ^ guide), bend * guide);
-                    bend = osg::Quat(std::clamp(swivel, -limits.leftElbowTurn, limits.leftElbowTurn), axis) * bend;
+                    bend = osg::Quat(std::clamp(swivel, -elbowLimit.turn, elbowLimit.turn), axis) * bend;
                 }
             }
             const float along = (upperLength * upperLength - foreLength * foreLength + reach * reach)

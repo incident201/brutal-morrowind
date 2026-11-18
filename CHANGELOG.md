@@ -7,6 +7,7 @@ Brutal Morrowind (unreleased)
     Combat: NPC weapon and shield guards follow the incoming aim and require contact with the equipped item.
     Animations: Preserve both grips during two-handed NPC guards.
     Animations: Add first-person sword-derived motion, paired grips, parries, wall recoil and clinches for claymores, battle axes and warhammers. Import recipe 8 requires reimporting after an update.
+    Animations: Keep two-handed clinch grips and sleeves in view with weapon-specific camera pitch and bounded shoulder and elbow motion.
     Camera: Keep first-person movement and crouching attached to the visible body, including with a readied spell.
     Combat: Rebalance adrenaline, add obstacle trips and configurable weapon drops, and simplify ragdoll settings.
     Animations: Restore beast-race locomotion, improve clinches on uneven ground and import Dark Messiah camera motion.
