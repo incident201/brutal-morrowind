@@ -1,4 +1,10 @@
 #include "npcblood.hpp"
+#include "brutalblood.hpp"
+#include "effectmanager.hpp"
+#include "../mwworld/inventorystore.hpp"
+#include "../mwworld/worldmodel.hpp"
+#include "../mwworld/cellstore.hpp"
+#include <components/esm3/loadweap.hpp>
 #include "../mwbase/environment.hpp"
 #include "../mwbase/world.hpp"
 #include "../mwmechanics/actorutil.hpp"
@@ -504,6 +510,10 @@ namespace MWRender
                 osg::StateAttribute::OFF | osg::StateAttribute::OVERRIDE | osg::StateAttribute::PROTECTED);
             state->setAttribute(new osg::ColorMask(true, true, true, false), flags);
             state->setRenderBinDetails(1, "RenderBin", osg::StateSet::OVERRIDE_RENDERBIN_DETAILS);
+            // The program is shared with drying weapon and floor blood; a wound
+            // must not inherit their last uniform values.
+            state->addUniform(new osg::Uniform("bloodFade", 0.f), flags);
+            state->addUniform(new osg::Uniform("bloodDry", 0.f), flags);
             mResourceSystem->getSceneManager()->setUpNormalsRTForStateSet(state, false);
             mResourceSystem->getSceneManager()->recreateShaders(geometry, "blooddecal");
             // Override the source's program as well as its material state.
@@ -918,5 +928,462 @@ namespace MWRender
             for (const auto& geometry : replacements[side])
                 group->addChild(geometry);
         }
+    }
+
+    namespace
+    {
+        // The equipped right-hand melee weapon: its instance key and type.
+        struct HeldWeapon
+        {
+            MWWorld::Ptr item;
+            int type = -1;
+        };
+
+        HeldWeapon heldMeleeWeapon(const MWWorld::Ptr& actor, bool left)
+        {
+            HeldWeapon result;
+            if (actor.isEmpty() || !actor.getClass().hasInventoryStore(actor))
+                return result;
+            auto& inventory = actor.getClass().getInventoryStore(actor);
+            const auto it = inventory.getSlot(
+                left ? MWWorld::InventoryStore::Slot_CarriedLeft : MWWorld::InventoryStore::Slot_CarriedRight);
+            if (it == inventory.end() || it->getType() != ESM::Weapon::sRecordId)
+                return result;
+            const int type = it->get<ESM::Weapon>()->mBase->mData.mType;
+            if (type < ESM::Weapon::ShortBladeOneHand || type > ESM::Weapon::AxeTwoHand)
+                return result;
+            result.item = *it;
+            result.type = type;
+            return result;
+        }
+
+        bool bluntHead(int type)
+        {
+            return type == ESM::Weapon::BluntOneHand || type == ESM::Weapon::BluntTwoClose
+                || type == ESM::Weapon::BluntTwoWide || type == ESM::Weapon::AxeOneHand
+                || type == ESM::Weapon::AxeTwoHand;
+        }
+
+        // Where the blade is: the attached model extends along its local +Y.
+        struct BladeFrame
+        {
+            osg::Vec3f hilt, axis;
+            float length = 0;
+        };
+
+        std::optional<BladeFrame> bladeFrame(osg::Node* part, const std::vector<osg::ref_ptr<osg::Geometry>>& posed)
+        {
+            if (!part || part->getParentalNodePaths().empty())
+                return std::nullopt;
+            const osg::Matrixf matrix = osg::computeLocalToWorld(part->getParentalNodePaths().front());
+            BladeFrame frame;
+            frame.hilt = matrix.getTrans();
+            frame.axis = osg::Matrixf::transform3x3(osg::Vec3f(0, 1, 0), matrix);
+            if (frame.axis.normalize() < 1e-4f)
+                return std::nullopt;
+            for (const auto& geometry : posed)
+                if (const auto* vertices = dynamic_cast<const osg::Vec3Array*>(geometry->getVertexArray()))
+                    for (const auto& v : *vertices)
+                        frame.length = std::max(frame.length, (v - frame.hilt) * frame.axis);
+            if (!std::isfinite(frame.length) || frame.length < 4.f || frame.length > 400.f)
+                return std::nullopt;
+            return frame;
+        }
+
+        struct WeaponLooks
+        {
+            std::vector<const osg::StateSet*> states;
+            bool operator==(const WeaponLooks&) const = default;
+        };
+    }
+
+    struct NpcAnimation::WeaponBloodView
+    {
+        struct Hand
+        {
+            ESM::RefNum key;
+            unsigned revision = ~0u;
+            const osg::Node* part = nullptr;
+            WeaponLooks looks;
+            std::size_t attached = 0;
+            float nextDrip = 0;
+        };
+        std::array<Hand, 2> hands;
+        std::uint64_t drips = 0, rebuilds = 0, rejected = 0;
+        double lastLength = 0, lastThickness = 0, lastWidth = 0;
+        std::size_t lastSides = 0, lastMarks = 0;
+    };
+
+    std::optional<std::pair<osg::Vec3f, osg::Vec3f>> NpcAnimation::getWeaponBladeForBlood(bool left) const
+    {
+        // A left-hand weapon is attached as the shield part.
+        const int partIndex = left ? ESM::PRT_Shield : ESM::PRT_Weapon;
+        if (!mObjectParts[partIndex])
+            return std::nullopt;
+        osg::Node* part = mObjectParts[partIndex]->getNode();
+        std::vector<Surface> surfaces;
+        SurfacesVisitor visitor(surfaces, partIndex, mPartModels[partIndex]);
+        visitor.collect(part, mPtr.getRefData().getBaseNode());
+        std::vector<osg::ref_ptr<osg::Geometry>> posedSurfaces;
+        const auto bones = [](std::string_view) { return std::optional<osg::Matrixf>(); };
+        for (auto& surface : surfaces)
+            if (auto geometry = posed(surface, bones))
+                posedSurfaces.push_back(geometry);
+        const auto frame = bladeFrame(part, posedSurfaces);
+        if (!frame)
+            return std::nullopt;
+        return std::make_pair(frame->hilt, frame->hilt + frame->axis * frame->length);
+    }
+
+    bool NpcAnimation::addWeaponBlood(const osg::Vec3f& contact, std::string_view kind, bool power, bool left)
+    {
+        auto* store = BrutalBlood::get();
+        const int partIndex = left ? ESM::PRT_Shield : ESM::PRT_Weapon;
+        if (!store || !Settings::game().mBrutalEnabled || !Settings::game().mBrutalWeaponBlood || mBodyAwareness
+            || !mObjectParts[partIndex] || !store->hasStyle(BrutalBlood::Style_Slash))
+            return false;
+        const auto held = heldMeleeWeapon(mPtr, left);
+        if (held.item.isEmpty())
+            return false;
+        if (!mWeaponBloodView)
+            mWeaponBloodView = std::make_shared<WeaponBloodView>();
+        auto& view = *mWeaponBloodView;
+        try
+        {
+            osg::Node* part = mObjectParts[partIndex]->getNode();
+            std::vector<Surface> surfaces;
+            SurfacesVisitor visitor(surfaces, partIndex, mPartModels[partIndex]);
+            visitor.collect(part, mPtr.getRefData().getBaseNode());
+            const auto bones = [](std::string_view) { return std::optional<osg::Matrixf>(); };
+            std::vector<osg::ref_ptr<osg::Geometry>> posedSurfaces(surfaces.size());
+            std::vector<osg::ref_ptr<osg::Geometry>> valid;
+            for (std::size_t i = 0; i < surfaces.size(); ++i)
+                if ((posedSurfaces[i] = posed(surfaces[i], bones)))
+                    valid.push_back(posedSurfaces[i]);
+            const auto frame = bladeFrame(part, valid);
+            if (!frame)
+            {
+                ++view.rejected;
+                return false;
+            }
+            const float length = frame->length;
+            view.lastLength = length;
+            const bool thrust = kind == "thrust";
+            const bool head = bluntHead(held.type);
+            float t = (contact - frame->hilt) * frame->axis;
+            if (thrust || held.type == ESM::Weapon::SpearTwoWide)
+                t = length * (.84f + .1f * store->random01());
+            else if (head)
+                t = length * (.8f + .1f * store->random01());
+            else if (!std::isfinite(t))
+                t = length * .65f;
+            t = std::clamp(t + (store->random01() - .5f) * .1f * length, .3f * length, .93f * length);
+            const osg::Vec3f centre = frame->hilt + frame->axis * t;
+
+            // The blade's flat faces: the thinnest direction across the blade here.
+            osg::Vec3f e1 = frame->axis ^ osg::Vec3f(0, 0, 1);
+            if (e1.normalize() < 1e-3f)
+                e1 = frame->axis ^ osg::Vec3f(1, 0, 0), e1.normalize();
+            osg::Vec3f e2 = frame->axis ^ e1;
+            e2.normalize();
+            double c11 = 0, c12 = 0, c22 = 0;
+            float extentA = 0, extentB = 0;
+            std::size_t count = 0;
+            osg::Vec3f mean;
+            // Cross-section of the blade here: where triangle edges cross the plane
+            // across the blade. Low-poly blades have no vertices mid-length.
+            std::vector<osg::Vec3f> nearby;
+            for (std::size_t i = 0; i < surfaces.size(); ++i)
+            {
+                if (!posedSurfaces[i])
+                    continue;
+                const auto* vertices = dynamic_cast<const osg::Vec3Array*>(posedSurfaces[i]->getVertexArray());
+                if (!vertices)
+                    continue;
+                for (const auto& triangle : surfaces[i].triangles)
+                    for (unsigned e = 0; e < 3; ++e)
+                    {
+                        if (triangle[e] >= vertices->size() || triangle[(e + 1) % 3] >= vertices->size())
+                            continue;
+                        const osg::Vec3f& a = (*vertices)[triangle[e]];
+                        const osg::Vec3f& b = (*vertices)[triangle[(e + 1) % 3]];
+                        const float da = (a - centre) * frame->axis, db = (b - centre) * frame->axis;
+                        if ((da < 0) != (db < 0) && std::abs(da - db) > 1e-6f)
+                            nearby.push_back(a + (b - a) * (da / (da - db)));
+                    }
+            }
+            for (const auto& v : nearby)
+                mean += v;
+            count = nearby.size();
+            if (count)
+                mean /= float(count);
+            else
+                mean = centre;
+            for (const auto& v : nearby)
+            {
+                const double a = (v - mean) * e1, b = (v - mean) * e2;
+                c11 += a * a;
+                c12 += a * b;
+                c22 += b * b;
+            }
+            // Smallest-variance direction of the 2x2 covariance.
+            const double trace = c11 + c22, det = c11 * c22 - c12 * c12;
+            const double small = trace / 2 - std::sqrt(std::max(0., trace * trace / 4 - det));
+            osg::Vec3f flat = std::abs(c12) > 1e-9 ? e1 * float(c12) + e2 * float(small - c11)
+                                                    : (c11 <= c22 ? e1 : e2);
+            if (flat.normalize() < 1e-4f)
+                flat = e1;
+            osg::Vec3f across = frame->axis ^ flat;
+            across.normalize();
+            for (const auto& v : nearby)
+            {
+                extentA = std::max(extentA, std::abs((v - mean) * flat));
+                extentB = std::max(extentB, std::abs((v - mean) * across));
+            }
+            const osg::Vec3f middle = mean - frame->axis * ((mean - centre) * frame->axis);
+
+            unsigned style = BrutalBlood::Style_Slash;
+            float along = std::clamp(.4f * length, 8.f, 34.f);
+            if (thrust || head)
+            {
+                style = BrutalBlood::Style_World + store->random() % 6;
+                if (!store->hasStyle(style))
+                    style = store->hasStyle(BrutalBlood::Style_Small) ? BrutalBlood::Style_Small
+                                                                       : BrutalBlood::Style_Slash;
+                along = std::clamp((head ? .35f : .3f) * length, 6.f, 24.f);
+            }
+            if (power)
+                along *= 1.3f;
+            const float height = std::clamp(2.4f * extentB, 3.f, head ? 22.f : 14.f);
+
+            // Both flat faces, and for blades both edges too: a blade seen edge-on,
+            // as a first-person sword mostly is, still shows the blood.
+            struct Side
+            {
+                osg::Vec3f outward;
+                float offset, height, depth;
+            };
+            std::vector<Side> sides{ { flat, extentA, height, std::max(2.f, 2.f * extentA + 1.f) },
+                { -flat, extentA, height, std::max(2.f, 2.f * extentA + 1.f) } };
+            if (!head && extentB > 2.f * extentA)
+            {
+                const float edge = std::clamp(2.5f * extentA + 1.f, 1.5f, 5.f);
+                sides.push_back({ across, extentB, edge, std::max(2.f, .5f * extentB) });
+                sides.push_back({ -across, extentB, edge, std::max(2.f, .5f * extentB) });
+            }
+            view.lastThickness = extentA;
+            view.lastWidth = extentB;
+            view.lastSides = sides.size();
+            std::vector<BrutalBlood::WeaponMark> marks;
+            for (const auto& side : sides)
+            {
+                const osg::Vec3f outward = side.outward;
+                SceneUtil::DecalProjector::Result best;
+                Surface* selected = nullptr;
+                for (std::size_t i = 0; i < surfaces.size(); ++i)
+                {
+                    if (!posedSurfaces[i])
+                        continue;
+                    const auto* vertices = dynamic_cast<const osg::Vec3Array*>(posedSurfaces[i]->getVertexArray());
+                    if (!vertices)
+                        continue;
+                    std::vector<osg::Vec3d> world(vertices->begin(), vertices->end());
+                    auto projection = SceneUtil::DecalProjector::project(world, surfaces[i].triangles,
+                        osg::Vec3d(middle + outward * (side.offset + 1.f)), osg::Vec3d(outward),
+                        osg::Vec3d(frame->axis), along, side.height, side.depth, side.offset + 6.0);
+                    if (!projection.vertices.empty() && projection.distance < best.distance)
+                    {
+                        best = std::move(projection);
+                        selected = &surfaces[i];
+                    }
+                }
+                if (!selected)
+                    continue;
+                BrutalBlood::WeaponMark mark;
+                mark.style = style;
+                mark.model = selected->model;
+                mark.ordinal = selected->ordinal;
+                mark.fingerprint = selected->fingerprint;
+                mark.anchors = std::move(best.vertices);
+                mark.hour = store->now();
+                marks.push_back(std::move(mark));
+            }
+            view.lastMarks = marks.size();
+            if (marks.empty())
+            {
+                ++view.rejected;
+                return false;
+            }
+            // Generated reference numbers are saved with the item, also in inventories.
+            if (!held.item.getCellRef().getRefNum().isSet())
+                MWBase::Environment::get().getWorldModel()->registerPtr(held.item);
+            const ESM::RefNum key = held.item.getCellRef().getRefNum();
+            if (!key.isSet())
+                return false;
+            auto& blood = store->createItem(key);
+            for (auto& mark : marks)
+                blood.marks.push_back(std::move(mark));
+            while (blood.marks.size() > BrutalBlood::MaxWeaponMarks)
+                blood.marks.erase(blood.marks.begin());
+            blood.revision = store->nextRevision();
+            blood.dripUntil = store->realTime() + (power ? 4.f : 2.5f);
+            store->noteWeaponAdd();
+            return true;
+        }
+        catch (const std::exception& error)
+        {
+            ++view.rejected;
+            Log(Debug::Warning) << "Weapon blood projection rejected: " << error.what();
+            return false;
+        }
+    }
+
+    void NpcAnimation::updateWeaponBlood(float dt)
+    {
+        auto* store = BrutalBlood::get();
+        if (!store || mBodyAwareness)
+            return;
+        const bool enabled = Settings::game().mBrutalEnabled && Settings::game().mBrutalWeaponBlood;
+        const auto world = MWBase::Environment::get().getWorld();
+        for (const bool left : { false, true })
+        {
+            const int partIndex = left ? ESM::PRT_Shield : ESM::PRT_Weapon;
+            const auto held = heldMeleeWeapon(mPtr, left);
+            const ESM::RefNum key = held.item.isEmpty() ? ESM::RefNum{} : held.item.getCellRef().getRefNum();
+            auto* blood = enabled ? store->item(key) : nullptr;
+
+            // Water and rain. A sheathed weapon gets as wet as a drawn one.
+            if (blood && !blood->marks.empty() && mPtr.isInCell())
+            {
+                if (world->isSwimming(mPtr) || world->isUnderwater(MWWorld::ConstPtr(mPtr), .75f))
+                    store->clearItem(key);
+                else
+                {
+                    const auto* cell = mPtr.getCell()->getCell();
+                    const int weather = world->getCurrentWeatherScriptId();
+                    if ((cell->isExterior() || cell->isQuasiExterior()) && (weather == 4 || weather == 5))
+                        // About an hour of rain washes a blade clean.
+                        store->addWear(key, store->elapsedHours() * BrutalBlood::WeaponLifetimeHours);
+                }
+            }
+
+            osg::Node* part = mObjectParts[partIndex] ? mObjectParts[partIndex]->getNode().get() : nullptr;
+            if (!mWeaponBloodView)
+            {
+                if (!blood || !part)
+                    continue;
+                mWeaponBloodView = std::make_shared<WeaponBloodView>();
+            }
+            auto& view = mWeaponBloodView->hands[left];
+            if (!part)
+            {
+                view = WeaponBloodView::Hand{};
+                continue;
+            }
+
+            WeaponLooks looks;
+            const double now = store->now();
+            if (blood)
+                for (const auto& mark : blood->marks)
+                {
+                    const double age = now - mark.hour + blood->wash;
+                    looks.states.push_back(
+                        store->state(mark.style, BrutalBlood::markFade(age), BrutalBlood::markDry(age)));
+                }
+            const unsigned revision = blood ? blood->revision : ~0u - 1;
+            if (part != view.part || key != view.key || revision != view.revision || !(looks == view.looks))
+            {
+                // A shield in the left hand is never marked: only its surfaces' own marks are cleared.
+                std::vector<Surface> surfaces;
+                SurfacesVisitor visitor(surfaces, partIndex, mPartModels[partIndex]);
+                visitor.collect(part, mPtr.getRefData().getBaseNode());
+                for (auto& surface : surfaces)
+                    if (auto* marks = surface.marks())
+                        marks->clear();
+                view.attached = 0;
+                if (blood)
+                    for (std::size_t i = 0; i < blood->marks.size(); ++i)
+                    {
+                        const auto& mark = blood->marks[i];
+                        if (!looks.states[i])
+                            continue;
+                        for (auto& surface : surfaces)
+                            if (surface.ordinal == mark.ordinal && surface.model == mark.model
+                                && surface.fingerprint == mark.fingerprint)
+                            {
+                                if (auto* marks = surface.attach())
+                                    if (marks->addPatch(mark.anchors,
+                                            const_cast<osg::StateSet*>(looks.states[i]), Mask_Effect))
+                                        ++view.attached;
+                                break;
+                            }
+                    }
+                view.part = part;
+                view.key = key;
+                view.revision = revision;
+                view.looks = std::move(looks);
+                ++mWeaponBloodView->rebuilds;
+            }
+
+            // Fresh blood runs off the blade for a few seconds.
+            if (blood && blood->dripUntil > store->realTime() && view.attached
+                && Settings::game().mBrutalBloodEffects && store->effects())
+            {
+                view.nextDrip -= dt;
+                if (view.nextDrip <= 0.f)
+                {
+                    view.nextDrip = .2f + .35f * store->random01();
+                    if (const auto blade = getWeaponBladeForBlood(left))
+                    {
+                        const osg::Vec3f tip = blade->first + (blade->second - blade->first) * .95f;
+                        store->effects()->queueCutBlood("cutdrop", tip, osg::Vec3f(0, 0, -1), .9f);
+                        ++mWeaponBloodView->drips;
+                        // Some drops reach the floor and stay there.
+                        if (Settings::game().mBrutalWorldBlood && store->random01() < .3f && mPtr.isInCell())
+                        {
+                            const auto* cell = mPtr.getCell()->getCell();
+                            store->dropUnder(tip, 6.f + 6.f * store->random01(),
+                                cell->getWorldSpace().serializeText(), cell->isExterior() || cell->isQuasiExterior());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    std::map<std::string, double> NpcAnimation::getWeaponBloodStats() const
+    {
+        std::map<std::string, double> result{ { "attached", 0 }, { "rebuilds", 0 }, { "drips", 0 },
+            { "rejected", 0 }, { "marks", 0 }, { "length", 0 }, { "hasPart", mObjectParts[ESM::PRT_Weapon] ? 1. : 0. } };
+        if (mWeaponBloodView)
+        {
+            const auto& view = *mWeaponBloodView;
+            result["attached"] = double(view.hands[0].attached);
+            result["attachedLeft"] = double(view.hands[1].attached);
+            result["rebuilds"] = double(view.rebuilds);
+            result["drips"] = double(view.drips);
+            result["rejected"] = double(view.rejected);
+            result["length"] = view.lastLength;
+            result["halfThickness"] = view.lastThickness;
+            result["halfWidth"] = view.lastWidth;
+            result["sides"] = double(view.lastSides);
+            result["sideMarks"] = double(view.lastMarks);
+        }
+        if (auto* store = BrutalBlood::get())
+        {
+            const auto held = heldMeleeWeapon(mPtr, false);
+            if (!held.item.isEmpty())
+                if (const auto* blood = store->item(held.item.getCellRef().getRefNum()))
+                {
+                    result["marks"] = double(blood->marks.size());
+                    result["wash"] = blood->wash;
+                    double newest = -1e9;
+                    for (const auto& mark : blood->marks)
+                        newest = std::max(newest, mark.hour);
+                    if (!blood->marks.empty())
+                        result["age"] = store->now() - newest + blood->wash;
+                }
+        }
+        return result;
     }
 }

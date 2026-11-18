@@ -44,6 +44,8 @@ local DEFAULTS={
     bloodEffects=true,
     sparkEffects=true,
     bloodDecals=true,
+    weaponBlood=true,
+    worldBlood=true,
     combatSounds=true,
     adrenalineHudEnabled=true,
     adrenalineFxEnabled=true,
@@ -60,7 +62,7 @@ local DARK_MESSIAH_KEYS={'firstPersonBody','cameraMotionMovement','dualWieldEnab
     'kickEnabled','kickAlwaysRagdoll','superKickEnabled','slideEnabled','slideFxEnabled','activeBlockEnabled',
     'shieldBashEnabled','parryEnabled','clinchEnabled','clinchFxEnabled','attackCombosEnabled',
     'fastAttacksEnabled','wallBounceEnabled','adrenalineEnabled','finisherEnabled','groundFinisherEnabled','bloodEffects',
-    'sparkEffects','bloodDecals','combatSounds'}
+    'sparkEffects','bloodDecals','weaponBlood','worldBlood','combatSounds'}
 local darkMessiahData=vfs.fileExists('animations/brutal_npc/brutal_hit.kf')
     and vfs.fileExists('animations/brutal_fp/brutal_blockhit1.kf')
     and vfs.fileExists('sound/brutal_dm/armor_heavy_01.wav')

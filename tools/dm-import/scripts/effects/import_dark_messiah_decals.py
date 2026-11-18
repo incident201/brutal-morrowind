@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Import model blood decals from the user's Dark Messiah VPKs.
+"""Import blood decals from the user's Dark Messiah VPKs.
+
+Model decals mark bodies and weapons; the world decals mark floors and walls.
 
 RGBA bytes and material metadata are kept as they are; neutral-grey
 multiplicative blending is implemented by the engine.
@@ -24,6 +26,7 @@ from pins import pinned_commit  # noqa: E402
 PIN = '6deac3176bf0e8dd2a50038cfa1066abfa58c1f9'
 MATERIALS = {'slash': 'decals/flesh/blood4', 'small': 'decals/flesh/blood2',
              'big': 'decals/flesh/blood1', 'tiny': 'decals/flesh/blood3'}
+WORLD = {str(n): f'decals/blood{n}' for n in range(1, 7)}
 
 
 def main():
@@ -53,7 +56,9 @@ def main():
                              sha256=hashlib.sha256(data).hexdigest())
         return data
 
-    for name, material in MATERIALS.items():
+    jobs = [(f'model_blood_{name}', name, material) for name, material in MATERIALS.items()]
+    jobs += [(f'world_blood_{name}', f'world_{name}', material) for name, material in WORLD.items()]
+    for stem, name, material in jobs:
         vmt_path = f'mm/materials/{material}.vmt'
         vmt = re.sub(r'//[^\n]*', '', read(vmt_path).decode('cp1252'))
         props = dict(re.findall(r'"(\$[^\"]+)"\s+"?([^\s"{}]+)"?', vmt))
@@ -70,7 +75,7 @@ def main():
         data = buffer.getvalue()
         if Image.open(io.BytesIO(data)).convert('RGBA').tobytes() != frames[0]:
             raise ValueError('PNG round trip failed')
-        relative = f'textures/brutal_dm/model_blood_{name}.png'
+        relative = f'textures/brutal_dm/{stem}.png'
         path = args.output / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)

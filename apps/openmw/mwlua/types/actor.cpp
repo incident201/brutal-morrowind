@@ -485,6 +485,7 @@ namespace MWLua
                 {"ragdollLimbResponse", g.mRagdollLimbResponse}, {"ragdollSelfCollision", g.mRagdollSelfCollision}, {"dynamicProps", g.mBrutalDynamicProps},
                 {"equipmentPhysics", g.mBrutalEquipmentPhysics}, {"meleeGeometry", g.mBrutalMeleeGeometry},
                 {"impactEffects", g.mBrutalImpactEffects}, {"bloodDecals", g.mNpcBloodDecals},
+                {"weaponBlood", g.mBrutalWeaponBlood}, {"worldBlood", g.mBrutalWorldBlood},
                 {"kineticMovement", g.mKineticPlayerMovement}, {"activeBlocking", g.mPlayerActiveShieldBlock},
                 {"swordParry", g.mDarkMessiahSwordParry}, {"comboAttacks", g.mDarkMessiahComboAttacks},
                 {"npcStagger", g.mNpcHurtHealthFraction > 0.f}, {"hitRecovery", !g.mPlayerHitRecovery},
@@ -562,6 +563,8 @@ namespace MWLua
                 g.mBrutalBloodEffects.set(on("bloodEffects"));
                 g.mBrutalSparkEffects.set(on("sparkEffects"));
                 g.mNpcBloodDecals.set(on("bloodDecals"));
+                g.mBrutalWeaponBlood.set(on("weaponBlood"));
+                g.mBrutalWorldBlood.set(on("worldBlood"));
                 g.mKineticPlayerMovement.set(on("kineticMovement"));
                 g.mPlayerActiveShieldBlock.set(on("activeBlocking"));
                 g.mDarkMessiahSwordParry.set(on("swordParry"));

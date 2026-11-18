@@ -48,6 +48,8 @@ namespace Settings
         SettingValue<bool> mMeleeContactAlwaysHits{ mIndex, "Game", "melee contact always hits" };
         SettingValue<bool> mBrutalImpactEffects{ mIndex, "Game", "brutal impact effects" };
         SettingValue<bool> mNpcBloodDecals{ mIndex, "Game", "npc blood decals" };
+        SettingValue<bool> mBrutalWeaponBlood{ mIndex, "Game", "brutal weapon blood" };
+        SettingValue<bool> mBrutalWorldBlood{ mIndex, "Game", "brutal world blood" };
         SettingValue<bool> mKineticPlayerMovement{ mIndex, "Game", "kinetic player movement" };
         SettingValue<float> mNpcHurtHealthFraction{ mIndex, "Game", "npc hurt health fraction",
             makeClampSanitizerFloat(0, 1) };

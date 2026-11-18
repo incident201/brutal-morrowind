@@ -161,6 +161,16 @@ interface.onHit = function(attack)
         if (healthDamage > 0 or attack.brutalBlocked) and metal(hitArmor) then
             burst('sparks', attack.hitPos, attack)
         end
+        if healthDamage > 0 and not attack.brutalBlocked and attack.weapon and attack.attacker
+            and attack.attacker:isValid() and (settings.get('weaponBlood') or settings.get('worldBlood')) then
+            -- Blood that stays: on the weapon, and flung or dripping onto the floor and walls.
+            core.sendGlobalEvent('BrutalWeaponBlood', {
+                attacker = attack.attacker, victim = self, weapon = attack.weapon,
+                position = attack.hitPos or (self.position + util.vector3(0, 0, 80)),
+                direction = direction(attack), kind = attack.brutalAttackType or '',
+                power = attack.brutalPowered or false,
+            })
+        end
         if settings.get('finisherEnabled') and settings.get('adrenalineEnabled') and attack.brutalPowered and healthDamage > 0 and not types.Actor.isDead(self) then
             -- This is a physical recoil on the existing actor, not extra damage.
             types.Actor.addExternalVelocity(self, direction(attack) * 420 + util.vector3(0, 0, 70))

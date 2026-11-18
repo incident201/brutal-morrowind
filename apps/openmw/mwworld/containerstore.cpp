@@ -16,6 +16,7 @@
 #include "../mwbase/windowmanager.hpp"
 #include "../mwbase/world.hpp"
 
+#include "../mwrender/brutalblood.hpp"
 #include "../mwmechanics/levelledlist.hpp"
 #include "../mwmechanics/recharge.hpp"
 #include "../mwmechanics/spellutil.hpp"
@@ -363,6 +364,15 @@ MWWorld::ContainerStoreIterator MWWorld::ContainerStore::restack(const MWWorld::
     return retval;
 }
 
+namespace
+{
+    bool bloody(const MWWorld::ConstPtr& ptr)
+    {
+        const auto* blood = MWRender::BrutalBlood::get();
+        return blood && blood->isBloody(ptr.getCellRef().getRefNum());
+    }
+}
+
 bool MWWorld::ContainerStore::stacks(const ConstPtr& ptr1, const ConstPtr& ptr2) const
 {
     const MWWorld::Class& cls1 = ptr1.getClass();
@@ -393,6 +403,9 @@ bool MWWorld::ContainerStore::stacks(const ConstPtr& ptr1, const ConstPtr& ptr2)
         // Items with scripts never stack
         && cls1.getScript(ptr1).empty()
         && cls2.getScript(ptr2).empty()
+
+        // a weapon with blood on it keeps its own blood
+        && !bloody(ptr1) && !bloody(ptr2)
 
         // item that is already partly used up never stacks
         && (!cls1.hasItemHealth(ptr1)

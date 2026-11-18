@@ -1,8 +1,10 @@
 #include "renderingmanager.hpp"
+#include "brutalblood.hpp"
 #include "swordsegmentintersector.hpp"
 
 #include <cstdlib>
 #include <limits>
+#include <set>
 
 #include <osg/ClipControl>
 #include <osg/ComputeBoundsVisitor>
@@ -15,6 +17,8 @@
 #include <osg/UserDataContainer>
 
 #include <osgUtil/LineSegmentIntersector>
+#include <osgUtil/PolytopeIntersector>
+#include <osg/TriangleIndexFunctor>
 
 #include <osgViewer/Viewer>
 
@@ -50,6 +54,7 @@
 #include <components/terrain/terraingrid.hpp>
 
 #include <components/esm3/loadcell.hpp>
+#include <components/esm3/loadstat.hpp>
 #include <components/esm4/loadcell.hpp>
 
 #include <components/debug/debugdraw.hpp>
@@ -57,6 +62,7 @@
 #include <components/detournavigator/navmeshcacheitem.hpp>
 
 #include "../mwworld/cellstore.hpp"
+#include "../mwphysics/raycasting.hpp"
 #include "../mwworld/class.hpp"
 #include "../mwworld/groundcoverstore.hpp"
 #include "../mwworld/scene.hpp"
@@ -264,6 +270,15 @@ namespace MWRender
         mResourceSystem->getSceneManager()->setIncrementalCompileOperation(mViewer->getIncrementalCompileOperation());
 
         mEffectManager = std::make_unique<EffectManager>(sceneRoot, mResourceSystem);
+        BrutalBlood::SceneAccess bloodAccess;
+        bloodAccess.castStatic = [this](const osg::Vec3f& origin, const osg::Vec3f& end) {
+            return castBloodSurface(origin, end);
+        };
+        bloodAccess.collectStatic = [this](const osg::Vec3f& center, float radius, std::vector<osg::Vec3d>& positions,
+                                        std::vector<std::array<unsigned, 3>>& triangles) {
+            collectBloodSurfaces(center, radius, positions, triangles);
+        };
+        mBrutalBlood = std::make_unique<BrutalBlood>(mResourceSystem, sceneRoot, mEffectManager.get(), bloodAccess);
 
         const std::string& normalMapPattern = Settings::shaders().mNormalMapPattern;
         const std::string& heightMapPattern = Settings::shaders().mNormalHeightMapPattern;
@@ -690,6 +705,15 @@ namespace MWRender
 
             const MWWorld::Ptr& player = mPlayerAnimation->getPtr();
             osg::Vec3f playerPos(player.getRefData().getPosition().asVec3());
+            if (player.isInCell())
+            {
+                const auto* cell = player.getCell()->getCell();
+                const bool exterior = cell->isExterior() || cell->isQuasiExterior();
+                const int weather = MWBase::Environment::get().getWorld()->getCurrentWeatherScriptId();
+                // Rain and thunderstorm; ash, blight and snow do not wash blood.
+                mBrutalBlood->update(dt, playerPos, cell->getWorldSpace().serializeText(), exterior,
+                    weather == 4 || weather == 5);
+            }
 
             float windSpeed = mSky->getBaseWindSpeed();
             mSharedUniformStateUpdater->setWindSpeed(windSpeed);
@@ -1015,6 +1039,134 @@ namespace MWRender
         return mIntersectionVisitor;
     }
 
+    namespace
+    {
+        // Only surfaces that never move keep blood: statics, merged static
+        // chunks and terrain. Doors, containers, items and actors are skipped.
+        constexpr unsigned BloodSurfaceMask = ~0u
+            & ~(Mask_RenderToTexture | Mask_Sky | Mask_Debug | Mask_Effect | Mask_Water | Mask_SimpleWater
+                | Mask_Groundcover | Mask_Actor | Mask_Player | Mask_FirstPerson | Mask_Object
+                | Mask_ParticleSystem | Mask_WeatherParticles | Mask_Sun);
+
+        struct BloodTriangles
+        {
+            std::vector<std::array<unsigned, 3>> triangles;
+            void operator()(unsigned a, unsigned b, unsigned c) { triangles.push_back({ a, b, c }); }
+        };
+    }
+
+    std::optional<std::pair<osg::Vec3f, osg::Vec3f>> RenderingManager::castBloodSurface(
+        const osg::Vec3f& origin, const osg::Vec3f& end)
+    {
+        // Physics finds statics and terrain without rebuilding any terrain view.
+        const auto hit = MWBase::Environment::get().getWorld()->getRayCasting()->castRay(
+            origin, end, MWPhysics::CollisionType_World | MWPhysics::CollisionType_HeightMap);
+        if (!hit.mHit)
+            return std::nullopt;
+        // Doors, containers and other objects that can move or vanish keep no blood.
+        if (!hit.mHitObject.isEmpty() && hit.mHitObject.getType() != ESM::Static::sRecordId)
+            return std::nullopt;
+        osg::Vec3f normal = hit.mHitNormal;
+        if (normal.normalize() < 1e-3f)
+            return std::nullopt;
+        // A ray can graze a surface from behind; blood lands on the side it comes from.
+        if (normal * (end - origin) > 0.f)
+            normal = -normal;
+        return std::make_pair(hit.mHitPos, normal);
+    }
+
+    void RenderingManager::collectBloodSurfaces(const osg::Vec3f& center, float radius,
+        std::vector<osg::Vec3d>& positions, std::vector<std::array<unsigned, 3>>& triangles)
+    {
+        const osg::Vec3f extent(radius, radius, radius);
+        const osg::BoundingBox box(center - extent, center + extent);
+        osg::Polytope polytope;
+        polytope.setToBoundingBox(box);
+        osg::ref_ptr<osgUtil::PolytopeIntersector> intersector(
+            new osgUtil::PolytopeIntersector(osgUtil::Intersector::MODEL, polytope));
+        intersector->setPrimitiveMask(osgUtil::PolytopeIntersector::TRIANGLE_PRIMITIVES);
+        intersector->setIntersectionLimit(osgUtil::Intersector::NO_LIMIT);
+        auto visitor = getIntersectionVisitor(intersector, true, true);
+        // Terrain is sampled from its heights below: an intersection pass over the
+        // terrain quad tree would build a new set of terrain chunks for every point.
+        visitor->setTraversalMask(BloodSurfaceMask & ~Mask_Terrain);
+        mRootNode->accept(*visitor);
+        const MWWorld::Ptr player = mPlayerAnimation->getPtr();
+        if (player.isInCell() && (player.getCell()->getCell()->isExterior()))
+        {
+            const ESM::RefId worldspace = player.getCell()->getCell()->getWorldSpace();
+            const auto world = MWBase::Environment::get().getWorld();
+            const float step = std::clamp(radius / 5.f, 8.f, 32.f);
+            const int n = int(std::ceil(radius / step));
+            const unsigned first = unsigned(positions.size());
+            bool near = false;
+            for (int y = -n; y <= n; ++y)
+                for (int x = -n; x <= n; ++x)
+                {
+                    osg::Vec3f p = center + osg::Vec3f(x * step, y * step, 0.f);
+                    p.z() = world->getTerrainHeightAt(p, worldspace) + .3f;
+                    near |= std::abs(p.z() - center.z()) < radius;
+                    positions.push_back(osg::Vec3d(p));
+                }
+            if (!near)
+                positions.resize(first);
+            else
+            {
+                const unsigned side = unsigned(2 * n + 1);
+                for (unsigned y = 0; y + 1 < side; ++y)
+                    for (unsigned x = 0; x + 1 < side; ++x)
+                    {
+                        const unsigned a = first + y * side + x;
+                        triangles.push_back({ a, a + 1, a + side + 1 });
+                        triangles.push_back({ a, a + side + 1, a + side });
+                    }
+            }
+        }
+        std::set<std::pair<const osg::Drawable*, const osg::RefMatrix*>> seen;
+        for (const auto& hit : intersector->getIntersections())
+        {
+            if (!hit.drawable || !seen.emplace(hit.drawable.get(), hit.matrix.get()).second)
+                continue;
+            const auto* geometry = hit.drawable->asGeometry();
+            if (!geometry)
+                continue;
+            const auto* vertices = dynamic_cast<const osg::Vec3Array*>(geometry->getVertexArray());
+            if (!vertices || vertices->empty())
+                continue;
+            osg::TriangleIndexFunctor<BloodTriangles> functor;
+            const_cast<osg::Geometry*>(geometry)->accept(functor);
+            const osg::Matrixd matrix = hit.matrix ? osg::Matrixd(*hit.matrix) : osg::Matrixd();
+            std::vector<int> remap(vertices->size(), -1);
+            for (const auto& t : functor.triangles)
+            {
+                if (t[0] >= vertices->size() || t[1] >= vertices->size() || t[2] >= vertices->size())
+                    continue;
+                osg::BoundingBox triangleBox;
+                std::array<osg::Vec3d, 3> world;
+                for (unsigned k = 0; k < 3; ++k)
+                {
+                    world[k] = osg::Vec3d((*vertices)[t[k]]) * matrix;
+                    triangleBox.expandBy(osg::Vec3f(world[k]));
+                }
+                if (!triangleBox.intersects(box))
+                    continue;
+                std::array<unsigned, 3> output;
+                for (unsigned k = 0; k < 3; ++k)
+                {
+                    if (remap[t[k]] < 0)
+                    {
+                        remap[t[k]] = int(positions.size());
+                        positions.push_back(world[k]);
+                    }
+                    output[k] = unsigned(remap[t[k]]);
+                }
+                triangles.push_back(output);
+                if (triangles.size() > 60000)
+                    return;
+            }
+        }
+    }
+
     RenderingManager::RayResult RenderingManager::castRay(const osg::Vec3f& origin, const osg::Vec3f& dest,
         bool ignorePlayer, bool ignoreActors, std::span<const MWWorld::Ptr> ignoreList, bool melee)
     {
@@ -1140,6 +1292,7 @@ namespace MWRender
     void RenderingManager::notifyWorldSpaceChanged()
     {
         mEffectManager->clear();
+        mBrutalBlood->unloadSplats();
         mWater->clearRipples();
     }
 
@@ -1149,6 +1302,7 @@ namespace MWRender
         mSky->setMoonColour(false);
 
         notifyWorldSpaceChanged();
+        mBrutalBlood->clear();
         if (mObjectPaging)
             mObjectPaging->clear();
     }

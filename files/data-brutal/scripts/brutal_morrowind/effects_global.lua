@@ -10,7 +10,30 @@ local function available()
     -- Combat scripts cache this capability and must resume after re-enabling.
     return state.bloodAvailable == true and state.sparksAvailable == true
 end
-return {eventHandlers = {
+local function setBloodData(data)
+    if type(world.setBrutalBloodData) == 'function' then world.setBrutalBloodData(data or '') end
+end
+return {
+engineHandlers = {
+    onInit = function() setBloodData('') end,
+    onSave = function()
+        return {blood = type(world.getBrutalBloodData) == 'function' and world.getBrutalBloodData() or ''}
+    end,
+    onLoad = function(data) setBloodData(type(data) == 'table' and type(data.blood) == 'string' and data.blood or '') end,
+},
+eventHandlers = {
+    BrutalWeaponBlood = function(data)
+        if not (settings.get('weaponBlood') or settings.get('worldBlood'))
+            or type(world.addBrutalWeaponBlood) ~= 'function' then return end
+        local attacker, victim, player = data.attacker, data.victim, world.players[1]
+        if not attacker or not attacker:isValid() or not victim or not victim:isValid() or not victim.cell
+            or not player or not player.cell or not data.position then return end
+        local connected = victim.cell == player.cell or (victim.cell.isExterior and player.cell.isExterior)
+        if not connected or (victim.position - player.position):length() > 6000 then return end
+        world.addBrutalWeaponBlood(attacker, victim, data.position, {
+            kind = data.kind, power = data.power == true, direction = data.direction, weapon = data.weapon,
+        })
+    end,
     BrutalRestoreBloodDecals = function(data)
         if not settings.get('bloodDecals') then return end
         if type(world.restoreNpcBloodDecals) == 'function' and data.actor and data.actor:isValid()

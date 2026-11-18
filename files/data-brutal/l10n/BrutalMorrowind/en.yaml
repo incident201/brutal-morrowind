@@ -69,6 +69,10 @@ sparkEffects: Impact sparks
 sparkEffectsDescription: "Sparks on metal and scenery impacts."
 bloodDecals: Blood marks
 bloodDecalsDescription: "Blood marks on bodies and surfaces."
+weaponBlood: Blood on weapons
+weaponBloodDescription: "Melee weapons keep the blood of those they strike. It dries, washes off in rain or water, is cleaned by repair and wears away after a day."
+worldBlood: Blood on floors and walls
+worldBloodDescription: "Hits on living flesh leave splatters on nearby floors and walls."
 combatSounds: Dark Messiah sounds
 combatSoundsDescription: "Weapon, impact, kick, adrenaline, footstep, jump and landing sounds from Dark Messiah. Off: Morrowind sounds."
 adrenalineHudEnabled: Adrenaline gauge

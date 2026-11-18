@@ -29,7 +29,13 @@ a ground finisher. Its first-person camera follows the strike's animation. The
 Brutal Morrowind settings let you turn ground finishers off or change the health
 threshold, which defaults to strictly below 30%.
 
-This branch uses **Dark Messiah import recipe 10**. Its launcher asks to reimport
+Melee weapons keep the blood of the people and creatures they strike. It dries
+over a few hours, washes off in water or rain, is cleaned by a repair and wears
+away within a game day. Blood also splatters onto nearby floors and walls, using
+Dark Messiah's decals; outdoors the rain washes it away. Both have switches in
+the Brutal Morrowind settings.
+
+This branch uses **Dark Messiah import recipe 11**. Its launcher asks to reimport
 older data. See `CHANGELOG.md` for the other unreleased changes.
 
 ## Requirements

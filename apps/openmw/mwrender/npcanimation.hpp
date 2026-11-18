@@ -164,6 +164,9 @@ namespace MWRender
         std::shared_ptr<BloodDecals> mBloodDecals;
         struct CutBloodFlow;
         std::shared_ptr<CutBloodFlow> mCutBloodFlow;
+        struct WeaponBloodView;
+        std::shared_ptr<WeaponBloodView> mWeaponBloodView;
+        void updateWeaponBlood(float dt);
         void updateCutBloodFlow(float dt);
         void emitCutBloodFlow(osg::NodeVisitor& visitor);
         void clearCutBloodFlow();
@@ -412,6 +415,11 @@ namespace MWRender
         std::string getBloodDecalData() const;
         bool restoreBloodDecals(std::string_view data);
         std::map<std::string, double> getBloodDecalStats() const;
+        // Blood left on a held melee weapon by a hit at this world point.
+        bool addWeaponBlood(const osg::Vec3f& contact, std::string_view kind, bool power, bool left = false);
+        // Hilt and tip of a drawn melee weapon in world space.
+        std::optional<std::pair<osg::Vec3f, osg::Vec3f>> getWeaponBladeForBlood(bool left = false) const;
+        std::map<std::string, double> getWeaponBloodStats() const;
         void startCutBloodFlow();
         void startBisectionBloodFlow();
         void startLimbSeveringBloodFlow();

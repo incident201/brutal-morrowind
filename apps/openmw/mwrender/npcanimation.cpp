@@ -2345,6 +2345,7 @@ namespace MWRender
         restoreTransientPose();
         prewarmBloodDecals();
         updateCutBloodFlow(timepassed);
+        updateWeaponBlood(timepassed);
         if(mDecapitationRenderPrewarm)
         {
             mDecapitationRenderPrewarm->update();
