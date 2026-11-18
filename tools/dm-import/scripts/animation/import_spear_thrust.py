@@ -113,6 +113,7 @@ class ThrustPose(NamedTuple):
     direction: tuple[float, float, float]
     roll: float
     shoulder: float
+    elbow: float | None = None
 
 
 class Spear:
@@ -271,11 +272,19 @@ class Spear:
         rear = (self.camera @ np.r_[pose.wrist, 1.])[:3]
         right_grip = inverse(rest) @ guard.world(right.names[-1])
         # Morrowind's one-handed thrust curls each finger around the shaft.
-        # Keep its complete hand-to-weapon rotation and radial anchor together.
+        # Retain the donor curl and radial anchor while changing carry position.
         # Only the station along the haft changes when the two-handed grip opens.
-        station = right_grip[1, 3] + 15.
+        station = right_grip[1, 3] + 38.
         right_grip = self.single_grip.copy()
         right_grip[1, 3] = station
+        # Let the haft sit at a shallow diagonal across the closed palm.
+        # Pivot at the contact so the fingers stay wrapped as the arm extends.
+        palm = right_grip[:3, :3] @ right.palm_along
+        tangent = unit(palm - palm[1]*np.array((0., 1., 0.)))
+        slope = np.radians(17.)
+        turn = swing(palm, np.cos(slope)*tangent + np.array((0., np.sin(slope), 0.)))
+        pivot = np.array((0., station, 0.))
+        right_grip = matrix(turn @ right_grip[:3, :3], pivot + turn @ (right_grip[:3, 3]-pivot))
         item = matrix(rotation, rear - rotation @ right_grip[:3, 3])
         result = self.guard.copy()
         # Measure the contact frames on the actual skinned guard. Transport the
@@ -308,6 +317,8 @@ class Spear:
             # the closed hand faces the camera. Let the elbow settle below
             # the wrist across the full one-handed range.
             swivels = np.radians(np.linspace(-145., 145., 19)) if side == 'R' else np.array((-.18, 0., .18))
+            if side == 'R' and pose.elbow is not None:
+                swivels = np.radians(pose.elbow + np.array((-8., 0., 8.)))
             solver = self.carrying_arm if side == 'R' else grasp
             arm, _ = solver.fit(inverse(offset) @ hand @ inverse(solver.grip), elbow, swivels)
             if free:
@@ -476,16 +487,16 @@ def build(arms, native_skeleton, native_animation):
         wrist = np.array(chamber.wrist) + unit(np.array(chamber.direction))*distance
         return chamber._replace(wrist=tuple(wrist), shoulder=drive)
 
-    ready = ThrustPose((10., -6., -30.), (-.27, .14, -.95), -105., .42)
-    drawn = ThrustPose((13.4, -1.5, -16.), (-.37, -.08, -.926), -120., -.08)
-    deep = along(drawn, -6., -.2)
-    extended = along(deep, 29., 1.)
-    charged = [(0., deep), (.038, deep), (.222, extended), (.425, extended),
+    deep = ThrustPose((22., 2., -8.5), (-.44, -.11, -.891), -150., -.20, 10.)
+    extended = along(deep, 32., 1.)
+    charged = [(0., deep), (.038, deep), (.225, extended), (.427, extended),
                (.67, along(deep, 12., .32)), (.88, guard)]
     segments = []
     labels = []
+    thrust_sections = set()
 
     def section(name, start, length, motion, events):
+        thrust_sections.add(start)
         segments.append((start, start + length, motion))
         labels.extend((start + t, 'weapononehand: ' + name + ' ' + event) for t, event in events)
 
@@ -511,32 +522,28 @@ def build(arms, native_skeleton, native_animation):
         # duration, back of draw, end of drive, end of fixation, travel
         ('a', .56, .17, .31, .412, 25.,
          ThrustPose((16.5, -7.2, -15.), (-.32, .095, -.944), -105., -.08)),
-        ('b', .57, .178, .335, .435, 25.,
-         ThrustPose((12.5, -10., -15.), (-.21, .35, -.913), -75., -.08)),
+        ('b', .58, .175, .343, .448, 29.,
+         ThrustPose((23., -13., -11.3), (-.43, .14, -.892), -105., -.08)),
         ('c', .61, .18, .352, .463, 26.,
-         ThrustPose((23., 3., -12.), (-.48, -.15, -.865), -135., -.06)),
-        ('d', .67, .205, .398, .515, 24.,
-         ThrustPose((-3., -10.4, -14.), (.105, .18, -.978), -135., -.16)),
+         ThrustPose((23., 3., -12.), (-.48, -.15, -.865), -155., -.06, 10.)),
+        ('d', .68, .215, .403, .532, 32.,
+         ThrustPose((24.8, -3.8, -7.5), (-.48, .045, -.875), -150., -.16, 10.)),
     ]
-    # Each preceding recovery crosses into the next lane while the arm is
-    # travelling back. D starts inside the centre line after the high C.
-    links = [ready,
-             ThrustPose((10., -5., -30.), (-.24, .27, -.93), -87., .4),
-             ThrustPose((13., -2., -27.), (-.36, .05, -.93), -106., .4),
-             ThrustPose((1., -4., -29.), (-.07, .06, -.996), -135., .41)]
+    # Each recovery changes lane before the next draw. Its final frame is
+    # already on the next stroke's axis, leaving the whole draw longitudinal.
+    links = [along(chamber, 17., .45) for *_, chamber in attacks]
     cursor = max(float(t) for t, _ in text.keys) + .2
     for i, (letter, duration, draw, impact, fixed, distance, chamber) in enumerate(attacks):
         point = along(chamber, distance, .85 if letter != 'd' else 1.)
-        aligned = along(chamber, 13., .45)
         finish = links[(i+1) % len(links)]
-        path = [(0., links[i]), (draw*.30, aligned), (draw, chamber), (draw+.033, chamber),
+        path = [(0., links[i]), (draw, chamber), (draw+.033, chamber),
                 (impact, point), (fixed, point), (duration, finish)]
         sections = [('fast'+letter, path, 0.)]
         if letter == 'a':
             # The first release and withdrawal are one gesture. Going via an
             # already extended ready pose here would look like a false hit.
             pickup = .085
-            entry = [(0., guard)] + [(pickup+t, pose) for t,pose in path[2:]]
+            entry = [(0., guard)] + [(pickup+t, pose) for t,pose in path[1:]]
             sections = [('fasta', entry, pickup), ('fastloopa', path, 0.)]
         for name, motion, pickup in sections:
             length = duration+pickup
@@ -600,7 +607,8 @@ def build(arms, native_skeleton, native_animation):
     text.keys = np.array(labels, dtype=text.keys.dtype)
     samples = {}
     for begin, stop, fn in segments:
-        times = np.linspace(begin, stop, max(2, int(np.ceil((stop - begin) * 60)) + 1))
+        rate = 120 if begin in thrust_sections else 60
+        times = np.linspace(begin, stop, max(2, int(np.ceil((stop - begin) * rate)) + 1))
         for t in times:
             samples[float(t)] = fn(float(t - begin))
     times = np.array(sorted(samples))
