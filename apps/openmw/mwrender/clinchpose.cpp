@@ -123,7 +123,12 @@ namespace MWRender
                 // Exclude pommel, grip, guard and the unstable tip. The interval
                 // scales with the actual equipped mesh, including short swords.
                 if (visitor.tip >= 8.f && visitor.tip <= 250.f)
-                    mClinchBladeRange = osg::Vec3f(std::max(3.f, visitor.tip * .25f), visitor.tip * .75f, visitor.tip);
+                {
+                    // The lower blade of a claymore is long enough to meet a
+                    // shortsword without bringing the hilt back into the body.
+                    const float start = mViewmodelSet == BrutalViewmodel_Paired ? .14f : .25f;
+                    mClinchBladeRange = osg::Vec3f(std::max(3.f, visitor.tip * start), visitor.tip * .75f, visitor.tip);
+                }
             }
         }
         return mClinchBladeRange;
@@ -304,8 +309,13 @@ namespace MWRender
             std::array<GripArm, 2> arms;
             osg::Matrixf fitted;
             const auto local = [](osg::MatrixTransform* bone) { return osg::Matrixf(bone->getMatrix()); };
-            if (!solveSharedGripArms(getNodeMap(), osg::Matrixf::translate(correction), {}, local, arms, fitted,
-                    osg::DegreesToRadians(25.f)))
+            const float yaw = mPtr.getRefData().getPosition().rot[2];
+            // Keep the support elbow farther forward so its forearm and sleeve
+            // follow the grip through the ordinary first-person frustum.
+            const GripArmLimits limits{ osg::DegreesToRadians(25.f), osg::Vec3f(std::sin(yaw), std::cos(yaw), .6f),
+                osg::DegreesToRadians(42.f) * audit.weight };
+            if (!solveSharedGripArms(
+                    getNodeMap(), osg::Matrixf::translate(correction), {}, local, arms, fitted, limits))
                 return;
             for (const auto& arm : arms)
             {

@@ -25,6 +25,13 @@ namespace MWRender
         osg::Matrixf clavicleSource, clavicleResult;
     };
 
+    struct GripArmLimits
+    {
+        float clavicleTurn = 0.f;
+        osg::Vec3f leftElbowGuide;
+        float leftElbowTurn = 0.f;
+    };
+
     // Rotate the clavicle about its own neck attachment to gain a little
     // reach, keeping that attachment and the three arm segments intact.
     inline osg::Vec3f turnGripClavicle(GripArm& arm, const osg::Vec3f& shoulder, const osg::Vec3f& wrist, float reach,
@@ -66,7 +73,7 @@ namespace MWRender
     // Nothing is modified; `arms` receives the local results.
     inline bool solveGripArms(const Animation::NodeMap& nodes, const osg::Matrixf& total,
         const std::function<osg::Matrixf(osg::MatrixTransform*)>& sourceLocal, std::array<GripArm, 2>& arms,
-        float& maxClamp, float maximumClavicleTurn = 0.f)
+        float& maxClamp, const GripArmLimits& limits = {})
     {
         unsigned side = 0;
         // The shaft follows the right hand; any safety clamp moves both goals.
@@ -109,7 +116,7 @@ namespace MWRender
             if (upperLength < .001f || foreLength < .001f)
                 return false;
             const osg::Vec3f shoulder = turnGripClavicle(
-                arm, oldShoulder, requested, upperLength + foreLength - .05f, maximumClavicleTurn, sourceLocal);
+                arm, oldShoulder, requested, upperLength + foreLength - .05f, limits.clavicleTurn, sourceLocal);
             osg::Vec3f axis = requested - shoulder;
             const float distance = axis.normalize();
             if (distance < .001f)
@@ -147,6 +154,15 @@ namespace MWRender
                 transport.makeRotate(oldAxis, axis);
                 bend = transport * sourceBend;
             }
+            if (&arm == &arms.back() && limits.leftElbowTurn > 0.f)
+            {
+                osg::Vec3f guide = limits.leftElbowGuide - axis * (limits.leftElbowGuide * axis);
+                if (guide.normalize() > .001f)
+                {
+                    const float swivel = std::atan2(axis * (bend ^ guide), bend * guide);
+                    bend = osg::Quat(std::clamp(swivel, -limits.leftElbowTurn, limits.leftElbowTurn), axis) * bend;
+                }
+            }
             const float along = (upperLength * upperLength - foreLength * foreLength + reach * reach)
                 / (2.f * reach);
             const osg::Vec3f elbow = shoulder + axis * along
@@ -173,12 +189,12 @@ namespace MWRender
     // hands do not receive different reach clamps at the end of their chains.
     inline bool solveSharedGripArms(const Animation::NodeMap& nodes, const osg::Matrixf& correction,
         const osg::Vec3f& pivot, const std::function<osg::Matrixf(osg::MatrixTransform*)>& sourceLocal,
-        std::array<GripArm, 2>& arms, osg::Matrixf& applied, float maximumClavicleTurn = 0.f)
+        std::array<GripArm, 2>& arms, osg::Matrixf& applied, const GripArmLimits& limits = {})
     {
         constexpr float tolerance = .005f;
         float clamp = 0.f;
         applied = correction;
-        if (!solveGripArms(nodes, correction, sourceLocal, arms, clamp, maximumClavicleTurn))
+        if (!solveGripArms(nodes, correction, sourceLocal, arms, clamp, limits))
             return false;
         if (clamp <= tolerance)
             return true;
@@ -194,14 +210,13 @@ namespace MWRender
         for (int i = 0; i < 8; ++i)
         {
             const float weight = (lower + upper) * .5f;
-            if (solveGripArms(nodes, scaled(weight), sourceLocal, trial, clamp, maximumClavicleTurn)
-                && clamp <= tolerance)
+            if (solveGripArms(nodes, scaled(weight), sourceLocal, trial, clamp, limits) && clamp <= tolerance)
                 lower = weight;
             else
                 upper = weight;
         }
         applied = scaled(lower);
-        return solveGripArms(nodes, applied, sourceLocal, arms, clamp, maximumClavicleTurn) && clamp <= tolerance;
+        return solveGripArms(nodes, applied, sourceLocal, arms, clamp, limits) && clamp <= tolerance;
     }
 }
 

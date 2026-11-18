@@ -31,12 +31,16 @@ local function headClips()
         local kind=types.Weapon.record(weapon).type
         if (kind==types.Weapon.TYPE.SpearTwoWide or kind==types.Weapon.TYPE.BluntTwoWide) and head.staff then return head.staff end
         if kind==types.Weapon.TYPE.ShortBladeOneHand and head.dagger then return head.dagger end
+        local paired=kind==types.Weapon.TYPE.LongBladeTwoHand or kind==types.Weapon.TYPE.AxeTwoHand
+            or kind==types.Weapon.TYPE.BluntTwoClose
+        return head, paired
     end
     return head
 end
 local function headMotion(state)
     if not headLoaded or camera.getMode()~=camera.MODE.FirstPerson then return end
-    local clip=headClips()[state.group]
+    local clips,paired=headClips()
+    local clip=clips[state.group]
     if not clip or not clip.frames or #clip.frames<1 then return end
     local position=state.phase=='align' and 0 or math.max(0,math.min(#clip.frames-1,state.elapsed*clip.fps))
     local lo=math.floor(position)+1
@@ -45,7 +49,16 @@ local function headMotion(state)
     -- The ordinary camera update clears extra angles before this onFrame.
     -- Add the source head track after its usual bob/roll, without rotating the
     -- physical body or applying a cumulative offset from the previous frame.
-    camera.setExtraPitch(camera.getExtraPitch()+a[1]+(b[1]-a[1])*f)
+    local pairedPitch=0
+    if paired then
+        -- The two-handed grip is lower in the frame. Follow it during the
+        -- contest and ease back into the authored camera on either exit.
+        local t=state.group=='brutal_clinch' and (state.phase=='align' and 0 or state.elapsed/.22)
+            or 1-state.elapsed/.5
+        t=math.max(0,math.min(1,t))
+        pairedPitch=.24*t*t*(3-2*t)
+    end
+    camera.setExtraPitch(camera.getExtraPitch()+a[1]+(b[1]-a[1])*f+pairedPitch)
     camera.setExtraYaw(camera.getExtraYaw()+a[2]+(b[2]-a[2])*f)
     camera.setExtraRoll(camera.getExtraRoll()+a[3]+(b[3]-a[3])*f)
 end
