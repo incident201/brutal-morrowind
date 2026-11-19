@@ -20,6 +20,11 @@ First-person claymores, battle axes and warhammers use adapted Dark Messiah
 sword motion with both hands on the grip. They support directional charged
 attacks, quick strikes, weapon parries, wall recoil and timed-parry clinches.
 
+First-person spears and halberds hold a forward guard and thrust with Dark
+Messiah's straight staff jab: each quick thrust strikes a little off the last,
+a charged attack thrusts standing still or stepping forward or back, and the
+staff's side swings start and end in the same guard.
+
 Incoming damage and critical health use the original Dark Messiah vignette.
 Damage determines how long the flash lasts, and the critical-health layer
 starts below 5 HP.
@@ -35,7 +40,7 @@ away within a game day. Blood also splatters onto nearby floors and walls, using
 Dark Messiah's decals; outdoors the rain washes it away. Both have switches in
 the Brutal Morrowind settings.
 
-This branch uses **Dark Messiah import recipe 12**. Its launcher asks to reimport
+This branch uses **Dark Messiah import recipe 13**. Its launcher asks to reimport
 older data. See `CHANGELOG.md` for the other unreleased changes.
 
 ## Requirements

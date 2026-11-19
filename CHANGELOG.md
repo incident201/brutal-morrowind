@@ -16,6 +16,7 @@ Brutal Morrowind (unreleased)
     Combat: Release a fully charged melee attack while aiming at a downed enemy to perform a ground finisher with matching first-person camera motion. Its switch and default 30% health threshold are available in Brutal Morrowind settings.
     Animations: Restore beast-race locomotion, improve clinches on uneven ground and import Dark Messiah camera motion.
     Ragdolls: Fix delayed corpse cuts and impulses after looting, and support open armor contours in waist cuts.
+    Animations: First-person spears and halberds thrust from a forward guard with Dark Messiah's straight staff jab. Quick thrusts vary their aim, a charged attack thrusts standing still, and side swings, drawing and sheathing join the guard without sweeping the haft across the view. Recipe 13 requires reimporting the Dark Messiah assets.
     Effects: Melee weapons of the player and NPCs keep the blood of living targets. It dries, washes off in water or rain, is cleaned by repair and wears away within a game day. Hits leave Dark Messiah blood splatters on nearby floors and walls; outdoors the rain washes them away. Recipe 11 requires reimporting the Dark Messiah assets.
 
 Brutal Morrowind 0.2.1
