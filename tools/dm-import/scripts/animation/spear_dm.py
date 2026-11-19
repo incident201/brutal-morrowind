@@ -19,8 +19,12 @@ import numpy as np
 from import_two_hand_viewmodel import keys, load, native_starts
 from audit_staff_mesh_grip import nif
 
-# spear stroke -> DM quick staff stroke used for it
-STROKES = {'a': 'b', 'b': 'd', 'c': 'b', 'd': 'd'}
+# Spear stroke -> DM source. Like the staff, the series opens with a quick
+# stroke: A is the one-handed first jab of DM's charged staff thrust (0.26 s
+# from start to contact). B, C, D are DM's quick staff thrusts with their
+# wide regrip windups (0.85-0.91 s, as on the staff).
+STROKES = {'a': 'jab', 'b': 'b', 'c': 'd', 'd': 'b'}
+JAB_BEFORE, JAB_AFTER = .26, .23
 GAP = .2
 
 
@@ -47,13 +51,20 @@ def build(arms, body=None):
         cursor += (src_stop - src_start) + GAP
 
     for spear, dm in STROKES.items():
-        s0, sw, hit, s1 = (marks[f'fast{dm} ' + k] for k in ('start', 'swing', 'thrust hit', 'stop'))
+        if dm == 'jab':
+            hit = marks['thrust hit']
+            s0, s1 = hit - JAB_BEFORE, hit + JAB_AFTER
+            sw = hit - .12
+            end_source = 'a'
+        else:
+            s0, sw, hit, s1 = (marks[f'fast{dm} ' + k] for k in ('start', 'swing', 'thrust hit', 'stop'))
+            end_source = dm
         events = [(s0, 'start'), (sw - .04, 'plant'), (sw, 'swing'), (hit, 'thrust hit'),
                   (hit + .035, 'weight forward'), (min(hit + .07, s1), 'settle end'), (s1, 'stop')]
         for name in (('fasta', 'fastloopa') if spear == 'a' else ('fast' + spear,)):
             copy(s0, s1, name, events)
-        if f'fastend{dm} start' in marks:
-            e0, e1 = marks[f'fastend{dm} start'], marks[f'fastend{dm} stop']
+        if f'fastend{end_source} start' in marks:
+            e0, e1 = marks[f'fastend{end_source} start'], marks[f'fastend{end_source} stop']
         else:
             # DM's stroke D already ends in guard: its return is its last frames.
             e0, e1 = s1 - .05, s1
@@ -102,7 +113,7 @@ def build(arms, body=None):
     manifest = json.loads(manifest_path.read_text())
     for path in sorted(target.iterdir()):
         manifest['outputs'][path.relative_to(arms).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
-    manifest['spear'] = {'base': 'brutal_fp_staff', 'quick': {k: 'dm fast' + v for k, v in STROKES.items()},
+    manifest['spear'] = {'base': 'brutal_fp_staff', 'quick': {k: ('dm charged first jab' if v == 'jab' else 'dm fast' + v) for k, v in STROKES.items()},
                          'charged': 'dm staff charged jab'}
     manifest_path.write_text(json.dumps(manifest, indent=1) + '\n')
 
