@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""Spear set made of Dark Messiah's own staff thrusts.
+"""Spear thrusts made of Dark Messiah's one straight staff jab.
 
-The spear keeps the staff's guard, transitions and swings. Its quick strokes
-A, B, C, D become DM's quick staff thrusts (B, D, B, D) and its charged attack
-stays DM's charged staff jab (one-handed thrust, then two-handed thrust). The
-authored arm, finger and regrip motion is copied unchanged; only the labels
-that name the strokes change, plus phase keys (plant, weight forward, settle
-end) that the head-motion and footwork layers read.
+Every DM staff stroke that is labelled a thrust starts with an overhead swing,
+except one: the second jab of the charged staff attack. There the haft keeps
+pointing forward, the rear fist draws it back about 29 units while the left
+hand regrips, then drives it 50 units forward in 0.15 s to the crosshair and
+holds. Each stroke starts in that drawn chamber, so a series reads as
+thrust, draw back, thrust. This module builds the spear's quick strokes and its charged thrust
+from that jab. The guard, the staff swings and every transition stay the
+staff's. The returns to guard are short blends instead of DM's overhead
+recovery. Arms, fingers and regrips inside the jab are the artists'.
 """
 import argparse
 import hashlib
@@ -16,16 +19,15 @@ from pathlib import Path
 
 import numpy as np
 
-from import_two_hand_viewmodel import keys, load, native_starts
+from import_two_hand_viewmodel import ITEM, Pose, Rig, keys, load, matrix_quat, tracks
+from import_spear_thrust import blend, ease
 from audit_staff_mesh_grip import nif
 
-# Spear stroke -> DM source. Like the staff, the series opens with a quick
-# stroke: A is the one-handed first jab of DM's charged staff thrust (0.26 s
-# from start to contact). B, C, D are DM's quick staff thrusts with their
-# wide regrip windups (0.85-0.91 s, as on the staff).
-STROKES = {'a': 'jab', 'b': 'b', 'c': 'd', 'd': 'b'}
-JAB_BEFORE, JAB_AFTER = .26, .23
-GAP = .2
+# The straight jab inside DM's charged staff attack, relative to its hit2 key.
+JAB_CHAMBER, JAB_END = -.19, .26   # deepest draw (both hands on the haft), end of the hold
+SETTLE = .12          # each stroke holds the chamber while the engine blends into it
+RETURN = .30          # blend from the held thrust back to the staff guard
+RATE = 60.
 
 
 def build(arms, body=None):
@@ -37,75 +39,148 @@ def build(arms, body=None):
     text = keys(stream)
     marks = {line.removeprefix('weapononehand: '): float(t)
              for t, label in text.keys for line in label.splitlines()}
+    channels = tracks(source)               # original data, sampled below
+    rig = Rig(arms / 'meshes/brutal_fp/xbase_anim.1st.nif')
     names = [e.string_data for e in stream.root.extra_datas if isinstance(e, nif.NiStringExtraData)]
     controllers = dict(zip(names, stream.root.controllers))
+    animated = [n for n in names if n in channels]
+
+    hit2 = marks['thrust hit2']
+    chamber, jab1 = hit2 + JAB_CHAMBER, hit2 + JAB_END
+    # The spear's guard is the jab's drawn chamber: haft forward, both hands
+    # on it. Thrusts start and end there without sweeping across the view.
+
+    def at(t):
+        pose = Pose(rig, channels, t)
+        return {n: pose.local(n) for n in animated}
+
+    guard_local = at(chamber)
+
+    segments = []          # (start, stop, fn(elapsed) -> local transforms)
+    labels = []
+
+    def section(start, length, fn, name, events):
+        segments.append((start, start + length, fn))
+        labels.extend((start + t, 'weapononehand: ' + name + ' ' + e) for t, e in events)
+
+    def back_to_guard(end_pose):
+        return lambda e: {n: blend(end_pose[n], guard_local[n], ease(e / RETURN)) for n in animated}
+
+    end_local = at(jab1)
+    drive = jab1 - chamber
+
+    def returning(e):
+        # Draw the haft back along the same line: DM's own drive, reversed.
+        return at(jab1 - drive * ease(min(1., e / RETURN)))
+
+    def jab(elapsed):
+        # Each stroke starts and ends in the guard (the drawn chamber), so a
+        # series chains without the engine blending between far-apart poses:
+        # settle, DM's drive and held extension, then draw back to guard.
+        if elapsed <= SETTLE:
+            return guard_local
+        if elapsed <= SETTLE + drive:
+            return at(chamber + elapsed - SETTLE)
+        return returning(elapsed - SETTLE - drive)
 
     cursor = max(float(t) for t, _ in text.keys) + 1.
-    copies, labels = [], []
+    hit = SETTLE + hit2 - chamber
+    length = SETTLE + drive + RETURN
+    events = [(0., 'start'), (SETTLE - .04, 'plant'), (SETTLE, 'swing'),
+              (hit, 'thrust hit'), (hit + .035, 'weight forward'), (hit + .07, 'settle end'), (length, 'stop')]
+    for letter in 'abcd':
+        for name in (('fasta', 'fastloopa') if letter == 'a' else ('fast' + letter,)):
+            section(cursor, length, jab, name, events)
+            cursor += length + .2
+        section(cursor, .05, lambda e: guard_local, 'fastend' + letter, [(0., 'start'), (.05, 'stop')])
+        cursor += .25
 
-    def copy(src_start, src_stop, name, events):
-        nonlocal cursor
-        offset = cursor - src_start
-        copies.append((src_start, src_stop, offset))
-        labels.extend((t + offset, 'weapononehand: ' + name + ' ' + e) for t, e in events)
-        cursor += (src_stop - src_start) + GAP
+    # Charged thrust: draw into the jab's chamber and hold it; release drives it.
+    start, maximum, release = (marks['thrust ' + k] for k in ('start', 'max attack', 'min hit'))
+    chamber_local = at(chamber)
+    section(start, maximum - start,
+            lambda e: {n: blend(guard_local[n], chamber_local[n], ease(e / (maximum - start))) for n in animated},
+            'thrust', [(0., 'start'), (marks['thrust min attack'] - start, 'min attack'),
+                       (maximum - start, 'max attack')])
+    hold, hold_stop = marks['thrust hold start'], marks['thrust hold stop']
+    section(hold, hold_stop - hold, lambda e: chamber_local, 'thrust hold',
+            [(0., 'start'), (0., 'loop start'), (hold_stop - hold, 'loop stop'), (hold_stop - hold, 'stop')])
+    total = drive + RETURN + .25
+    ret = returning
+    section(release, total,
+            lambda e: at(chamber + e) if e <= drive else ret(e - drive),
+            'thrust', [(0., 'min hit'), (0., 'plant'), (hit2 - chamber, 'hit'),
+                       (hit2 - chamber + .035, 'weight forward'), (hit2 - chamber + .07, 'settle end'),
+                       (drive + .1, 'chain')] +
+            [(t, size + ' follow ' + edge) for t, edge in ((hit2 - chamber + .001, 'start'), (total, 'stop'))
+             for size in ('small', 'medium', 'large')])
 
-    for spear, dm in STROKES.items():
-        if dm == 'jab':
-            hit = marks['thrust hit']
-            s0, s1 = hit - JAB_BEFORE, hit + JAB_AFTER
-            sw = hit - .12
-            end_source = 'a'
-        else:
-            s0, sw, hit, s1 = (marks[f'fast{dm} ' + k] for k in ('start', 'swing', 'thrust hit', 'stop'))
-            end_source = dm
-        events = [(s0, 'start'), (sw - .04, 'plant'), (sw, 'swing'), (hit, 'thrust hit'),
-                  (hit + .035, 'weight forward'), (min(hit + .07, s1), 'settle end'), (s1, 'stop')]
-        for name in (('fasta', 'fastloopa') if spear == 'a' else ('fast' + spear,)):
-            copy(s0, s1, name, events)
-        if f'fastend{end_source} start' in marks:
-            e0, e1 = marks[f'fastend{end_source} start'], marks[f'fastend{end_source} stop']
-        else:
-            # DM's stroke D already ends in guard: its return is its last frames.
-            e0, e1 = s1 - .05, s1
-        copy(e0, e1, 'fastend' + spear, [(e0, 'start'), (e1, 'stop')])
-    # Phase keys of the charged jab for the head motion and footwork.
-    labels += [(marks['thrust min hit'], 'weapononehand: thrust plant'),
-               (marks['thrust hit'] + .035, 'weapononehand: thrust weight forward'),
-               (marks['thrust hit'] + .07, 'weapononehand: thrust settle end')]
-
-    # Append the copied key ranges for every controller.
-    for name, controller in controllers.items():
-        for field in (controller.data.rotations, controller.data.translations):
+    # Sample and merge: replace keys inside every authored interval.
+    samples = {}
+    for begin, stop, fn in segments:
+        for t in np.linspace(begin, stop, max(2, int(np.ceil((stop - begin) * RATE)) + 1)):
+            samples[float(t)] = fn(float(t - begin))
+    times = np.array(sorted(samples))
+    for name in animated:
+        controller = controllers[name]
+        for index, field in enumerate((controller.data.rotations, controller.data.translations)):
             old = field.keys
             if old is None or not len(old):
                 continue
-            extra = []
-            for start, stop, offset in copies:
-                inside = old[(old[:, 0] >= start - 1e-5) & (old[:, 0] <= stop + 1e-5)].copy()
-                inside[:, 0] += offset
-                extra.append(inside)
-            merged = np.vstack([old] + extra).astype(np.float32)
+            keep = np.ones(len(old), dtype=bool)
+            for begin, stop, _ in segments:
+                keep &= (old[:, 0] < begin - 1e-5) | (old[:, 0] > stop + 1e-5)
+            values = [matrix_quat(samples[t][name][:3, :3]) if index == 0 else samples[t][name][:3, 3]
+                      for t in times]
+            merged = np.vstack((old[keep], np.column_stack((times, values)))).astype(np.float32)
             merged = merged[np.argsort(merged[:, 0], kind='stable')]
+            if index == 0:
+                for i in range(1, len(merged)):
+                    if merged[i - 1, 1:] @ merged[i, 1:] < 0.:
+                        merged[i, 1:] *= -1
             field.keys = merged
         controller.stop_time = max(controller.stop_time, cursor)
 
-    replaced = ('fasta ', 'fastb ', 'fastc ', 'fastd ', 'fastend', 'fastloopa ')
+    replaced = ('fasta ', 'fastb ', 'fastc ', 'fastd ', 'fastend', 'fastloopa ', 'thrust ')
     kept = []
     for t, label in text.keys:
-        lines = [l for l in label.splitlines() if not l.removeprefix('weapononehand: ').startswith(replaced)]
+        lines = [l for l in label.splitlines()
+                 if not l.removeprefix('weapononehand: ').startswith(replaced)
+                 and not (hold <= t <= hold_stop and l in ('weapononehand: loop start', 'weapononehand: loop stop'))]
         if lines:
             kept.append((float(t), '\r\n'.join(lines)))
-    kept += labels + [(0., 'weapononehand: brutal spear grip')]
+    kept += labels + [(hold, 'weapononehand: loop start'), (hold_stop, 'weapononehand: loop stop'),
+                      (0., 'weapononehand: brutal spear grip')]
     kept.sort(key=lambda p: p[0])
     text.keys = np.array(kept, dtype=text.keys.dtype)
     stream.save(target / source.name)
-    shutil.copyfile(source.with_suffix('.yaml'), target / 'weapononehand.yaml')
+    # Strokes start where the previous one ended: keep only a short blend.
+    import re
+    rules = source.with_suffix('.yaml').read_text()
+    rules = re.sub(r"(to: 'weapononehand:fast(?:end)?[abcd] start'\s+easing: linear\s+duration: )0\.2[0-9]*",
+                   r"\g<1>0.045", rules)
+    rules += "  - from: '*'\n    to: 'weapononehand:fastloopa start'\n    easing: linear\n    duration: 0.045\n"
+    (target / 'weapononehand.yaml').write_text(rules)
+    # Idle and gait: hold the spear guard in the arms and on the weapon; the
+    # gait's own trunk, head and camera motion stay.
+    arm_bones = [n for n in animated if n == ITEM or ((' L ' in n or ' R ' in n) and not n.endswith(('Thigh', 'Calf', 'Foot', 'Toe0')))]
     for path in sorted(folder.glob('*1h.kf')):
-        if path.stem.startswith(('idle', 'walk', 'run', 'sneak', 'jump', 'brutal_sprint')):
-            shutil.copyfile(path, target / path.name)
-            if path.with_suffix('.yaml').exists():
-                shutil.copyfile(path.with_suffix('.yaml'), target / path.with_suffix('.yaml').name)
+        if not path.stem.startswith(('idle', 'walk', 'run', 'sneak', 'jump', 'brutal_sprint')):
+            continue
+        gait = load(path)
+        gait_names = [e.string_data for e in gait.root.extra_datas if isinstance(e, nif.NiStringExtraData)]
+        for name, controller in zip(gait_names, gait.root.controllers):
+            if name not in arm_bones or name not in guard_local:
+                continue
+            for index, field in enumerate((controller.data.rotations, controller.data.translations)):
+                old = field.keys
+                if old is None or not len(old):
+                    continue
+                value = matrix_quat(guard_local[name][:3, :3]) if index == 0 else guard_local[name][:3, 3]
+                field.keys = np.column_stack((old[:, 0], np.tile(value, (len(old), 1)))).astype(np.float32)
+        gait.save(target / path.name)
+        if path.with_suffix('.yaml').exists():
+            shutil.copyfile(path.with_suffix('.yaml'), target / path.with_suffix('.yaml').name)
     if body is not None:
         from import_spear_thrust import body_footwork
         body_footwork(body, target / source.name)
@@ -113,8 +188,8 @@ def build(arms, body=None):
     manifest = json.loads(manifest_path.read_text())
     for path in sorted(target.iterdir()):
         manifest['outputs'][path.relative_to(arms).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
-    manifest['spear'] = {'base': 'brutal_fp_staff', 'quick': {k: ('dm charged first jab' if v == 'jab' else 'dm fast' + v) for k, v in STROKES.items()},
-                         'charged': 'dm staff charged jab'}
+    manifest['spear'] = {'base': 'brutal_fp_staff', 'jab': 'dm staff charged attack, second jab',
+                         'chamber': JAB_CHAMBER, 'end': JAB_END, 'settle': SETTLE, 'return': RETURN}
     manifest_path.write_text(json.dumps(manifest, indent=1) + '\n')
 
 
