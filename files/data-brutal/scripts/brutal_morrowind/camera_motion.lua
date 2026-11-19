@@ -39,7 +39,10 @@ local ZERO={0,0,0,0,0,0}
 -- The eye offset stays zero: the arm KF already carries the eye and the arms
 -- together on the lunge, and moving the eye alone toward the arms pushes the
 -- front hand below the bottom edge of the view. The pitch never looks up for
--- the same reason.
+-- the same reason. Pitch and yaw stay small (2-4 and 1-2 degrees): the arms do
+-- not follow these camera extras, so a large pitch or yaw lifts the front hand
+-- and swings the point off the aim on screen. Roll turns about the line of
+-- sight, keeps the point on the aim and carries most of the impact.
 local function addSpearHeadMotion(set, clips)
     local function add(group, from, to, a, b, shape)
         local name='spear_'..group..'_'..from
@@ -60,10 +63,10 @@ local function addSpearHeadMotion(set, clips)
     end
     -- Quick strokes: chamber, drive, kick, rebound, settle.
     local quick={
-        fasta={cock={0.5,-2.5,3.5,0,0,0},drive={7.5,3.5,-7,0,0,0},kick={9.5,4.5,-9.5,0,0,0},rebound={0.5,-1.5,1.5,0,0,0}},
-        fastb={cock={0.5,-2,3,0,0,0},drive={5.5,3,-6,0,0,0},kick={7.5,4,-8,0,0,0},rebound={0.5,-1.2,1,0,0,0}},
-        fastc={cock={0.5,-3,4,0,0,0},drive={9.5,4,-7.5,0,0,0},kick={12,5,-10,0,0,0},rebound={0.5,-1.8,2,0,0,0}},
-        fastd={cock={0.5,-4.5,5.5,0,0,0},drive={10.5,6,-11,0,0,0},kick={13.5,7,-14,0,0,0},rebound={0.5,-3,3,0,0,0}},
+        fasta={cock={0.5,-0.62,1.93,0,0,0},drive={2.25,0.88,-3.85,0,0,0},kick={2.85,1.12,-5.22,0,0,0},rebound={0.5,-0.38,0.82,0,0,0}},
+        fastb={cock={0.5,-0.5,1.65,0,0,0},drive={1.65,0.75,-3.3,0,0,0},kick={2.25,1,-4.4,0,0,0},rebound={0.5,-0.3,0.55,0,0,0}},
+        fastc={cock={0.5,-0.75,2.2,0,0,0},drive={2.85,1,-4.12,0,0,0},kick={3.6,1.25,-5.5,0,0,0},rebound={0.5,-0.45,1.1,0,0,0}},
+        fastd={cock={0.5,-1.12,3.02,0,0,0},drive={3.15,1.5,-6.05,0,0,0},kick={4,1.75,-7.7,0,0,0},rebound={0.5,-0.75,1.65,0,0,0}},
     }
     quick.fastloopa=quick.fasta
     for _,group in ipairs({'fasta','fastloopa','fastb','fastc','fastd'}) do
@@ -75,11 +78,11 @@ local function addSpearHeadMotion(set, clips)
         add(group,'settle end','stop',q.rebound,ZERO)
     end
     -- Charged: a long cock-back held while charging, then DM's staff lunge.
-    local charged={0.5,-6,7,0,0,0}
-    local inhale={0.5,-6.8,7.8,0,0,0}
-    local drive={8,7.5,-14,0,0,0}
-    local kick={10,8.5,-17,0,0,0}
-    local rebound={0.5,-5,-5,0,0,0}
+    local charged={0.5,-1.5,3.85,0,0,0}
+    local inhale={0.5,-1.7,4.29,0,0,0}
+    local drive={2.4,1.88,-7.7,0,0,0}
+    local kick={3,2.12,-9.35,0,0,0}
+    local rebound={0.5,-1.25,-2.75,0,0,0}
     add('thrust','start','max attack',ZERO,charged)
     add('thrust hold','start','breath',charged,inhale)
     add('thrust hold','breath','stop',inhale,charged)
