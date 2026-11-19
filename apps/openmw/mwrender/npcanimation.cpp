@@ -1241,15 +1241,25 @@ namespace MWRender
     class OverrideFieldOfViewCallback : public osg::NodeCallback
     {
     public:
-        OverrideFieldOfViewCallback(float fov, RenderingManager* renderingManager)
+        OverrideFieldOfViewCallback(float fov, RenderingManager* renderingManager, bool heldObject = false)
             : mFov(fov)
             , mRenderingManager(renderingManager)
         {
+            if (heldObject)
+            {
+                mHeldState = new osg::StateSet;
+                mHeldState->setRenderBinDetails(
+                    RenderBin_FirstPerson, "DepthClear", osg::StateSet::OVERRIDE_RENDERBIN_DETAILS);
+            }
         }
 
         void operator()(osg::Node* node, osg::NodeVisitor* nv) override
         {
             osgUtil::CullVisitor* cv = static_cast<osgUtil::CullVisitor*>(nv);
+            if (mHeldState && !(cv->getTraversalMask() & Mask_FirstPerson))
+                return;
+            if (mHeldState)
+                cv->pushStateSet(mHeldState);
             float fov, aspect, zNear, zFar;
             if (cv->getProjectionMatrix()->getPerspective(fov, aspect, zNear, zFar) && std::abs(fov - mFov) > 0.001)
             {
@@ -1276,12 +1286,22 @@ namespace MWRender
             }
             else
                 traverse(node, nv);
+            if (mHeldState)
+                cv->popStateSet();
         }
 
     private:
         float mFov;
         RenderingManager* mRenderingManager;
+        osg::ref_ptr<osg::StateSet> mHeldState;
     };
+
+    osg::ref_ptr<osg::Callback> NpcAnimation::makeHeldObjectCullCallback() const
+    {
+        return new OverrideFieldOfViewCallback(
+            mFirstPersonFieldOfView, MWBase::Environment::get().getWorld()->getRenderingManager(),
+            !useFullBodyFirstPerson());
+    }
 
     void NpcAnimation::setRenderBin()
     {

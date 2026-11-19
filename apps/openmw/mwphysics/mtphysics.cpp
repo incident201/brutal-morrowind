@@ -932,41 +932,15 @@ namespace MWPhysics
             world->addRigidBody(body, sGrabHeldGroup, mask);
         }
 
-        struct GrabPenetrationCallback final : btCollisionWorld::ContactResultCallback
+        void restoreGrabDynamics(btDiscreteDynamicsWorld* world, btRigidBody* body, float mass)
         {
-            const btRigidBody* mSelf;
-            btScalar mMinDepth;
-            std::vector<const btCollisionObject*> mOthers;
-
-            GrabPenetrationCallback(const btRigidBody* self, btScalar minDepth)
-                : mSelf(self)
-                , mMinDepth(minDepth)
-            {
-                m_collisionFilterGroup = CollisionType_Dynamic;
-                m_collisionFilterMask = CollisionType_World | CollisionType_Door | CollisionType_HeightMap | CollisionType_Dynamic;
-            }
-
-            bool needsCollision(btBroadphaseProxy* proxy0) const override
-            {
-                if (!btCollisionWorld::ContactResultCallback::needsCollision(proxy0))
-                    return false;
-                const auto* obj = static_cast<const btCollisionObject*>(proxy0->m_clientObject);
-                return obj && obj != mSelf
-                    && (proxy0->m_collisionFilterGroup & (CollisionType_World | CollisionType_Door | CollisionType_HeightMap)) != 0;
-            }
-
-            btScalar addSingleResult(btManifoldPoint& cp, const btCollisionObjectWrapper* colObj0Wrap, int, int,
-                const btCollisionObjectWrapper* colObj1Wrap, int, int) override
-            {
-                if (cp.getDistance() > -mMinDepth)
-                    return 1.f;
-                const auto* other = colObj0Wrap->getCollisionObject() == mSelf ? colObj1Wrap->getCollisionObject()
-                                                                               : colObj0Wrap->getCollisionObject();
-                if (other && other != mSelf && std::find(mOthers.begin(), mOthers.end(), other) == mOthers.end())
-                    mOthers.push_back(other);
-                return 1.f;
-            }
-        };
+            btVector3 inertia(0, 0, 0);
+            body->getCollisionShape()->calculateLocalInertia(mass, inertia);
+            body->setMassProps(mass, inertia);
+            body->updateInertiaTensor();
+            body->setCollisionFlags(body->getCollisionFlags() & ~btCollisionObject::CF_KINEMATIC_OBJECT);
+            setDynamicBodyCollisionMask(world, body, sGrabHeldMask);
+        }
 
         struct FlyingActorContactCallback final : btCollisionWorld::ContactResultCallback
         {
@@ -1060,6 +1034,9 @@ namespace MWPhysics
         }
         if (oldHeldBody && oldHeldBody != object->getCollisionObject())
         {
+            const auto* oldObject = static_cast<const Object*>(oldHeldBody->getUserPointer());
+            restoreGrabDynamics(world, oldHeldBody, oldObject->getDynamicMass());
+            oldHeldBody->forceActivationState(ACTIVE_TAG);
             oldHeldBody->setGravity(world->getGravity());
             oldHeldBody->setDamping(.05f, .15f);
             mActorIgnoreTimers[oldHeldBody] = ActorIgnoreEntry{ .3f, oldHeldOwner };
@@ -1082,7 +1059,10 @@ namespace MWPhysics
         mActorIgnoreTimers.erase(body);
         std::erase_if(mFlyingObjects, [body](const FlyingObjectState& f) { return f.body == body; });
         mCollisionObjects.insert(body);
-        setDynamicBodyCollisionMask(world, body, sGrabHeldMask);
+        body->setMassProps(0, btVector3(0, 0, 0));
+        body->setCollisionFlags((body->getCollisionFlags() & ~btCollisionObject::CF_STATIC_OBJECT)
+            | btCollisionObject::CF_KINEMATIC_OBJECT);
+        setDynamicBodyCollisionMask(world, body, 0);
         body->setGravity(btVector3(0, 0, 0));
         body->setDamping(.25f, .35f);
         body->setLinearVelocity(btVector3(0, 0, 0));
@@ -1099,27 +1079,46 @@ namespace MWPhysics
             mDynamicObjects.push_back(object);
         mDynamicTransforms.insert_or_assign(body, DynamicTransformHistory(body->getWorldTransform()));
         resetDynamicObjectHistory(*object);
-        freeWedgedObjectUnsafe(body);
-
         {
             std::lock_guard holdLock(mHoldStateMutex);
-            mHeldState.body = body;
-            mHeldState.owner = owner;
-            mHeldState.targetOrigin = body->getWorldTransform().getOrigin();
-            mHeldState.targetRotation = body->getWorldTransform().getRotation();
-            mHeldState.hasTarget = false;
+            mHeldState = { body, owner };
         }
     }
 
-    void PhysicsTaskScheduler::setHoldTarget(const osg::Vec3f& center, const osg::Quat& rotation, float maxSpeed)
+    void PhysicsTaskScheduler::setHeldPose(const Object& object, const osg::Vec3f& origin, const osg::Quat& rotation)
     {
+        MaybeExclusiveLock lock(mCollisionWorldMutex, mLockingPolicy);
         std::lock_guard holdLock(mHoldStateMutex);
-        if (!mHeldState.body)
+        auto* body = mHeldState.body;
+        if (!body || body != object.getCollisionObject())
             return;
-        mHeldState.targetOrigin = Misc::Convert::toBullet(center);
-        mHeldState.targetRotation = Misc::Convert::toBullet(rotation);
-        mHeldState.maxSpeed = std::clamp(maxSpeed, 200.f, 2000.f);
-        mHeldState.hasTarget = true;
+        const btTransform pose(Misc::Convert::toBullet(rotation),
+            Misc::Convert::toBullet(origin) + object.getDynamicCenterWorldOffset(rotation));
+        body->setCenterOfMassTransform(pose);
+        body->setInterpolationWorldTransform(pose);
+        body->setLinearVelocity(btVector3(0, 0, 0));
+        body->setAngularVelocity(btVector3(0, 0, 0));
+        mCollisionWorld->updateSingleAabb(body);
+        resetDynamicObjectHistory(object);
+    }
+
+    float PhysicsTaskScheduler::sweepHeldPose(const Object& object, const osg::Vec3f& from, const osg::Vec3f& to,
+        const osg::Quat& rotation) const
+    {
+        MaybeSharedLock lock(mCollisionWorldMutex, mLockingPolicy);
+        const auto* shape = object.getCollisionObject()->getCollisionShape();
+        if (!shape->isConvex())
+            return 1.f;
+        const auto offset = object.getDynamicCenterWorldOffset(rotation);
+        const auto start = Misc::Convert::toBullet(from) + offset;
+        const auto end = Misc::Convert::toBullet(to) + offset;
+        const auto orientation = Misc::Convert::toBullet(rotation);
+        btCollisionWorld::ClosestConvexResultCallback hit(start, end);
+        hit.m_collisionFilterGroup = CollisionType_Dynamic;
+        hit.m_collisionFilterMask = CollisionType_World | CollisionType_Door | CollisionType_HeightMap;
+        mCollisionWorld->convexSweepTest(static_cast<const btConvexShape*>(shape), btTransform(orientation, start),
+            btTransform(orientation, end), hit);
+        return hit.m_closestHitFraction;
     }
 
     void PhysicsTaskScheduler::releaseHeldObject(const btCollisionObject* owner, const osg::Vec3f& linearVelocity,
@@ -1137,6 +1136,7 @@ namespace MWPhysics
         }
         if (!world || !body || !body->isInWorld())
             return;
+        restoreGrabDynamics(world, body, mass);
         body->forceActivationState(ACTIVE_TAG);
         body->activate(true);
         body->setGravity(world->getGravity());
@@ -1186,47 +1186,6 @@ namespace MWPhysics
         return std::exchange(mDynamicImpacts, {});
     }
 
-    void PhysicsTaskScheduler::freeWedgedObjectUnsafe(btRigidBody* body)
-    {
-        if (!body)
-            return;
-        GrabPenetrationCallback penetrating(body, .5f);
-        ContactTestWrapper::contactTest(mCollisionWorld, body, penetrating);
-        if (penetrating.mOthers.empty())
-            return;
-        auto& ignored = mWedgedIn[body];
-        for (const auto* other : penetrating.mOthers)
-        {
-            if (std::find(ignored.begin(), ignored.end(), other) != ignored.end())
-                continue;
-            body->setIgnoreCollisionCheck(other, true);
-            ignored.push_back(other);
-        }
-    }
-
-    void PhysicsTaskScheduler::updateWedgedObjectsUnsafe()
-    {
-        for (auto it = mWedgedIn.begin(); it != mWedgedIn.end();)
-        {
-            btRigidBody* body = it->first;
-            auto& ignored = it->second;
-            std::erase_if(ignored, [&](const btCollisionObject* other) {
-                if (!other || !mCollisionObjects.contains(other))
-                    return true;
-                GrabPenetrationCallback overlap(body, 0.f);
-                mCollisionWorld->contactPairTest(body, const_cast<btCollisionObject*>(other), overlap);
-                if (!overlap.mOthers.empty())
-                    return false;
-                body->setIgnoreCollisionCheck(other, false);
-                return true;
-            });
-            if (ignored.empty())
-                it = mWedgedIn.erase(it);
-            else
-                ++it;
-        }
-    }
-
     void PhysicsTaskScheduler::clearObjectTrackingUnsafe(btCollisionObject* collisionObject)
     {
         if (!collisionObject)
@@ -1248,53 +1207,10 @@ namespace MWPhysics
         {
             mActorIgnoreTimers.erase(body);
             mImpactSoundCooldowns.erase(body);
-            mWedgedIn.erase(body);
         }
-        for (auto& [rb, ignored] : mWedgedIn)
-            std::erase(ignored, collisionObject);
         for (auto& [rb, entry] : mActorIgnoreTimers)
             if (entry.owner == collisionObject)
                 entry.owner = nullptr;
-    }
-
-    void PhysicsTaskScheduler::steerHeldObjectUnsafe(btScalar dt)
-    {
-        btRigidBody* body = nullptr;
-        btVector3 targetOrigin(0, 0, 0);
-        btQuaternion targetRotation(0, 0, 0, 1);
-        float maxSpeed = 1400.f;
-        bool hasTarget = false;
-        {
-            std::lock_guard holdLock(mHoldStateMutex);
-            body = mHeldState.body;
-            targetOrigin = mHeldState.targetOrigin;
-            targetRotation = mHeldState.targetRotation;
-            maxSpeed = mHeldState.maxSpeed;
-            hasTarget = mHeldState.hasTarget;
-        }
-        if (!body || !hasTarget)
-            return;
-        body->activate(true);
-        const btTransform current = body->getWorldTransform();
-        const btVector3 delta = targetOrigin - current.getOrigin();
-        const btScalar responseTime = std::max<btScalar>(dt * 2.5f, btScalar(0.032));
-        btVector3 linear = delta / responseTime;
-        const btScalar speed2 = linear.length2();
-        if (speed2 > btScalar(maxSpeed * maxSpeed))
-            linear *= btScalar(maxSpeed) / btSqrt(speed2);
-        body->setLinearVelocity(linear);
-
-        btQuaternion err = targetRotation * current.getRotation().inverse();
-        if (err.getW() < 0)
-            err = -err;
-        const btScalar angle = err.getAngle();
-        btVector3 angular(0, 0, 0);
-        if (angle > btScalar(1e-4))
-        {
-            const btScalar angSpeed = std::min<btScalar>(angle / std::max<btScalar>(dt * 2.5f, btScalar(0.04)), btScalar(16));
-            angular = err.getAxis() * angSpeed;
-        }
-        body->setAngularVelocity(angular);
     }
 
     void PhysicsTaskScheduler::updateFlyingObjectsUnsafe(btScalar dt)
@@ -2526,8 +2442,6 @@ namespace MWPhysics
             for (int i = 0; i < substeps; ++i)
             {
                 updateReleasedGripPairs();
-                updateWedgedObjectsUnsafe();
-                steerHeldObjectUnsafe(subDt);
                 for (btActionInterface* action : mRagdollActions)
                     static_cast<RagdollStepAction*>(action)->beforeStep(subDt);
                 beforeSuperKickStep();

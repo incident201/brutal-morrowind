@@ -147,8 +147,12 @@ namespace MWRender
     {
         restoreNpcGuardPose();
         restoreNpcTwoHandGuardPose();
-        if (mClinchSourcePose.empty() && mSwordWallSourcePose.empty())
+        if (mClinchSourcePose.empty() && mSwordWallSourcePose.empty() && mHeldGripSourcePose.empty())
             return;
+        for (const auto& [node, source] : mHeldGripSourcePose)
+            if (node.valid())
+                node->setMatrix(source);
+        mHeldGripSourcePose.clear();
         for (const auto& [node, source] : mSwordWallSourcePose)
             if (node.valid())
                 node->setMatrix(source);

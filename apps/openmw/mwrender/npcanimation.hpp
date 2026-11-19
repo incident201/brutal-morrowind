@@ -11,6 +11,7 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <osg/observer_ptr>
 
@@ -24,6 +25,11 @@ namespace ESM
 namespace MWSound
 {
     class Sound;
+}
+
+namespace MWPhysics
+{
+    struct HeldObjectGrip;
 }
 
 namespace MWRender
@@ -283,6 +289,7 @@ namespace MWRender
         };
         std::array<WallWeaponState, 2> mWallWeapons;
         unsigned mWallStruckMount = 0;
+        std::vector<std::pair<osg::observer_ptr<osg::MatrixTransform>, osg::Matrixf>> mHeldGripSourcePose;
         std::string mSwordWallGroup, mSwordWallKey;
         std::vector<std::pair<osg::observer_ptr<osg::MatrixTransform>, osg::Matrixf>> mSwordWallSourcePose;
         bool mSwordWallStruck = false;
@@ -464,6 +471,10 @@ namespace MWRender
         std::optional<NpcGuardRigAudit> getNpcGuardRigForAudit() const;
 
         void configureSwordWallSweep(std::uint64_t swing, std::string_view group, std::string_view key);
+        bool fitHeldObjectGrip(const MWPhysics::HeldObjectGrip& grip, const osg::Vec3f& eye,
+            const osg::Quat& view, const std::function<float(const osg::Vec3f&, const osg::Vec3f&, const osg::Quat&)>& sweep,
+            const osg::FrameStamp& frameStamp, osg::Vec3f& position, osg::Quat& rotation);
+        osg::ref_ptr<osg::Callback> makeHeldObjectCullCallback() const;
         bool sampleSwordWallContact(float duration, const osg::FrameStamp& frameStamp);
         bool consumeSwordWallContact(std::uint64_t swing, std::string& key);
         const SwordWallContact& getSwordWallContactForAudit() const { return mSwordWallContact; }

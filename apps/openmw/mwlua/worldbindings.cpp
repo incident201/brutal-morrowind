@@ -846,16 +846,6 @@ namespace MWLua
                 });
             }, "HoldObject");
         };
-        api["setHoldView"] = [context](const GObject& holder, Misc::FiniteVec3f eyePos, Misc::FiniteVec3f aimDir,
-                                 Misc::FiniteFloat pullback, Misc::FiniteFloat raiseOffset, bool dualGrip) {
-            const float p = pullback;
-            const float r = raiseOffset;
-            context.mLuaManager->addAction([holder, eyePos, aimDir, p, r, dualGrip] {
-                const auto ptr = holder.ptrOrEmpty();
-                if (!ptr.isEmpty())
-                    MWBase::Environment::get().getWorld()->setHoldView(ptr, eyePos, aimDir, p, r, dualGrip);
-            }, "SetHoldView");
-        };
         api["releaseHeldObject"] = [context](const GObject& holder, Misc::FiniteVec3f eyePos,
                                        Misc::FiniteVec3f throwDir, Misc::FiniteFloat throwSpeed, bool adrenaline) {
             const float speed = std::clamp(float(throwSpeed), 0.f, 2000.f);

@@ -37,11 +37,6 @@ return {
         if not item or not item:isValid() or not player or not player:isValid()
             or item.cell ~= player.cell or types.Actor.isDead(player) then return end
         world.holdObject(item, player)
-    end, BrutalGrabUpdateView = function(data)
-        if type(world.setHoldView) ~= 'function' then return end
-        local player = data.player
-        if not player or not player:isValid() or not data.eyePos or not data.aimDir then return end
-        world.setHoldView(player, data.eyePos, data.aimDir, data.pullback or 0, data.raiseOffset or 0, data.dualGrip == true)
     end, BrutalGrabRelease = function(data)
         if type(world.releaseHeldObject) ~= 'function' then return end
         local player = data.player

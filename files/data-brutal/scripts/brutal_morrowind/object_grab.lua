@@ -184,7 +184,7 @@ local function startDrop(immediate)
 end
 
 local function startThrow()
-    if state ~= 'holding' and state ~= 'raising' and state ~= 'picking' then return false end
+    if not heldItem or (state ~= 'holding' and state ~= 'raising' and state ~= 'picking') then return false end
     local adren = I.BrutalAdrenaline and I.BrutalAdrenaline.spendThrow and I.BrutalAdrenaline.spendThrow() == true or false
     throwAdrenaline = adren
     releaseFired = false
@@ -192,7 +192,9 @@ local function startThrow()
     state, stateTime = 'throwing', 0
     stats.throws = stats.throws + 1
     if adren then stats.adrenalineThrows = stats.adrenalineThrows + 1 end
+    local hasClip = useDmAnims()
     playSection(throwGroup(), 'start', 'stop', 0, false)
+    if hasClip then fireRelease(dualGrip and 920 or 1060, throwAdrenaline) end
     return true
 end
 
@@ -247,7 +249,7 @@ local function onUseChanged(down)
     if down == useDown then return end
     useDown = down
     if down then
-        if (state == 'picking' or state == 'holding') and canAct() then
+        if heldItem and (state == 'picking' or state == 'holding') and canAct() then
             beginThrowWindup()
         end
     else
@@ -269,23 +271,19 @@ local function onUpdate(dt)
         if stateTime >= dur then restoreStance() end
         return
     end
+    if not canAct() then
+        startDrop(true)
+        return
+    end
 
     if state == 'throwing' then
         local tg = throwGroup()
         local relT = textKeyDuration(tg, 'start', 'release', dualGrip and 0.2667 or 0.1333)
         local recT = textKeyDuration(tg, 'start', 'recover', dualGrip and 0.96 or 0.72)
-        if not releaseFired then
-            local eyePos, forward = aimVectors()
-            local u = math.min(1, stateTime / math.max(0.04, relT))
-            core.sendGlobalEvent('BrutalGrabUpdateView', {
-                player = self, eyePos = eyePos, aimDir = forward,
-                pullback = 7 - 15 * u, raiseOffset = 4 * (1 - u), dualGrip = dualGrip,
-            })
-        end
         if not releaseFired and stateTime >= relT then
             releaseFired = true
             self:sendEvent('BrutalObjectGrabSound', { kind = 'throw', adrenaline = throwAdrenaline })
-            fireRelease(dualGrip and 920 or 1060, throwAdrenaline)
+            if not useDmAnims() then fireRelease(dualGrip and 920 or 1060, throwAdrenaline) end
             heldItem = nil
             if (not useDmAnims() or settings.get('firstPersonAnimations') ~= 'darkMessiah')
                 and I.BrutalCameraMotion and I.BrutalCameraMotion.pulse then
@@ -296,22 +294,15 @@ local function onUpdate(dt)
         return
     end
 
-    -- Picking, holding, or raising: safety checks and hold target tracking.
-    if not canAct() then
-        startDrop(true)
-        return
-    end
+    -- Picking, holding, or raising: the engine publishes the evaluated grip.
     local target = heldItem or requestedItem
     if not target or not target:isValid() or not target.enabled or target.cell ~= self.cell then
         startDrop(true)
         return
     end
 
-    local pullback, raiseOffset = 0, 0
     if state == 'picking' then
         local pickDur = textKeyDuration(grabGroup(), 'pickup start', 'pickup stop', dualGrip and 0.30 or 0.25)
-        local u = math.min(1, stateTime / math.max(0.05, pickDur))
-        raiseOffset = -4 * (1 - u)
         if heldItem and stateTime >= pickDur then
             state, stateTime = 'holding', 0
             playSection(grabGroup(), 'hold start', 'hold stop', 100000, false)
@@ -322,22 +313,13 @@ local function onUpdate(dt)
         end
     elseif state == 'raising' then
         local raiseDur = textKeyDuration(grabGroup(), 'raise start', 'raise stop', dualGrip and 0.24 or 0.20)
-        local u = math.min(1, stateTime / math.max(0.04, raiseDur))
-        pullback = 7 * u
-        raiseOffset = 4 * u
         if throwQueued and stateTime >= raiseDur then
             startThrow()
             return
         end
     end
 
-    if heldItem then
-        local eyePos, forward = aimVectors()
-        core.sendGlobalEvent('BrutalGrabUpdateView', {
-            player = self, eyePos = eyePos, aimDir = forward,
-            pullback = pullback, raiseOffset = raiseOffset, dualGrip = dualGrip,
-        })
-    end
+
 end
 
 return {

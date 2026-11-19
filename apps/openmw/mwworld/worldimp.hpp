@@ -1,8 +1,11 @@
 #ifndef GAME_MWWORLD_WORLDIMP_H
 #define GAME_MWWORLD_WORLDIMP_H
 #include <map>
+#include <optional>
 
+#include <osg/Node>
 #include <osg/Timer>
+#include <osg/observer_ptr>
 #include <osg/ref_ptr>
 
 #include <components/debug/debuglog.hpp>
@@ -102,6 +105,19 @@ namespace MWWorld
 
         std::unique_ptr<MWWorld::Player> mPlayer;
         std::unique_ptr<MWPhysics::PhysicsSystem> mPhysics;
+        struct HeldThrow
+        {
+            Ptr item;
+            osg::Vec3f eye, direction;
+            float speed;
+            bool adrenaline;
+            float wait = 0.f;
+        };
+        std::optional<HeldThrow> mHeldThrow;
+        osg::observer_ptr<osg::Node> mHeldVisual;
+        osg::ref_ptr<osg::Callback> mHeldVisualCull;
+        unsigned mHeldVisualMask = 0;
+        void clearHeldVisual();
         std::unique_ptr<DetourNavigator::Navigator> mNavigator;
         std::unique_ptr<MWRender::RenderingManager> mRendering;
         std::unique_ptr<MWWorld::Scene> mWorldScene;
@@ -421,8 +437,6 @@ namespace MWWorld
         void applyObjectImpulse(const Ptr& ptr, const osg::Vec3f& impulse, float mass) override;
         bool canHoldObject(const ConstPtr& ptr) const override;
         bool holdObject(const Ptr& ptr, const Ptr& holder, MWPhysics::HeldObjectInfo* info = nullptr) override;
-        bool setHoldView(const Ptr& holder, const osg::Vec3f& eyePos, const osg::Vec3f& aimDir,
-            float pullback, float raiseOffset, bool dualGrip) override;
         bool releaseHeldObject(const Ptr& holder, const osg::Vec3f& eyePos, const osg::Vec3f& throwDir,
             float throwSpeed, bool adrenaline) override;
         Ptr getHeldObject() const override;
@@ -459,6 +473,7 @@ namespace MWWorld
 
         void update(float duration, bool paused);
         void sampleNpcRagdollAnimation(float duration);
+        void samplePlayerObjectGrip(float duration, const osg::FrameStamp& frameStamp);
         void samplePlayerSwordWallContact(float duration, const osg::FrameStamp& frameStamp);
         void updatePhysics(
             float duration, bool paused, osg::Timer_t frameStart, unsigned int frameNumber, osg::Stats& stats);

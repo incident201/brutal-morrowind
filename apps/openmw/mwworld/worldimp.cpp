@@ -359,6 +359,8 @@ namespace MWWorld
 
     void World::clear()
     {
+        clearHeldVisual();
+        mHeldThrow.reset();
         mRagdollDroppedItems.clear();
         mWeatherManager->clear();
         mRendering->clear();
@@ -1956,25 +1958,25 @@ namespace MWWorld
 
     bool World::holdObject(const Ptr& ptr, const Ptr& holder, MWPhysics::HeldObjectInfo* info)
     {
-        if (!mPhysics || !ptr.isInCell() || !ptr.getRefData().getBaseNode() || !ptr.getRefData().isEnabled())
+        if (!mPhysics || holder != getPlayerPtr() || mPhysics->hasHeldObject()
+            || !ptr.isInCell() || !ptr.getRefData().getBaseNode() || !ptr.getRefData().isEnabled())
             return false;
+        mHeldThrow.reset();
         return mPhysics->holdObject(ptr, holder, info);
-    }
-
-    bool World::setHoldView(const Ptr& holder, const osg::Vec3f& eyePos, const osg::Vec3f& aimDir,
-        float pullback, float raiseOffset, bool dualGrip)
-    {
-        if (!mPhysics || holder.isEmpty() || !holder.isInCell())
-            return false;
-        const osg::Quat holderYaw(-holder.getRefData().getPosition().rot[2], osg::Vec3f(0, 0, 1));
-        return mPhysics->setHoldView(eyePos, aimDir, holderYaw, pullback, raiseOffset, dualGrip);
     }
 
     bool World::releaseHeldObject(const Ptr& holder, const osg::Vec3f& eyePos, const osg::Vec3f& throwDir,
         float throwSpeed, bool adrenaline)
     {
-        if (!mPhysics)
+        if (!mPhysics || holder != getPlayerPtr() || !mPhysics->hasHeldObject())
             return false;
+        if (throwSpeed > 0.f)
+        {
+            mHeldThrow = HeldThrow{ mPhysics->getHeldObject(), eyePos, throwDir, throwSpeed, adrenaline };
+            return true;
+        }
+        mHeldThrow.reset();
+        clearHeldVisual();
         return mPhysics->releaseHeldObject(holder, eyePos, throwDir, throwSpeed, adrenaline);
     }
 
@@ -2270,6 +2272,86 @@ namespace MWWorld
     void World::sampleNpcRagdollAnimation(float duration)
     {
         mPhysics->sampleNpcRagdollAnimation(mTimeManager->isPaused() ? 0.f : duration);
+    }
+
+    void World::clearHeldVisual()
+    {
+        if (mHeldVisual.valid())
+        {
+            mHeldVisual->setNodeMask(mHeldVisualMask);
+            mHeldVisual->removeCullCallback(mHeldVisualCull);
+        }
+        mHeldVisual = nullptr;
+        mHeldVisualCull = nullptr;
+    }
+
+    void World::samplePlayerObjectGrip(float duration, const osg::FrameStamp& frameStamp)
+    {
+        const Ptr item = mPhysics->getHeldObject();
+        if (item.isEmpty())
+        {
+            clearHeldVisual();
+            mHeldThrow.reset();
+            return;
+        }
+        const Ptr player = getPlayerPtr();
+        auto* animation = dynamic_cast<MWRender::NpcAnimation*>(getAnimation(player));
+        const auto* camera = mRendering->getCamera();
+        auto* node = item.getRefData().getBaseNode();
+        if (!node || !item.getRefData().isEnabled() || !item.isInCell() || !player.isInCell()
+            || item.getCell() != player.getCell() || !isFirstPerson())
+        {
+            clearHeldVisual();
+            mHeldThrow.reset();
+            mPhysics->releaseHeldObject(player, camera->getPosition(), camera->getOrient() * osg::Vec3f(0, 1, 0), 0.f, false);
+            return;
+        }
+        if (animation)
+        {
+            osg::Vec3f position;
+            osg::Quat rotation;
+            const osg::Vec3f eye = osg::Matrixf::inverse(camera->getViewMatrix()).getTrans();
+            const auto sweep = [&](const osg::Vec3f& from, const osg::Vec3f& to, const osg::Quat& orientation) {
+                return mPhysics->sweepHeldObject(from, to, orientation);
+            };
+            if (animation->fitHeldObjectGrip(mPhysics->getHeldGrip(), eye, camera->getOrient(),
+                    sweep, frameStamp, position, rotation))
+            {
+                mPhysics->placeHeldObject(position, rotation, mTimeManager->isPaused() ? 0.f : duration);
+                mRendering->moveObject(item, position);
+                mRendering->rotateObject(item, rotation);
+                if (mHeldVisual.get() != node)
+                {
+                    clearHeldVisual();
+                    mHeldVisual = node;
+                    mHeldVisualMask = node->getNodeMask();
+                    node->setNodeMask(MWRender::Mask_Player);
+                    mHeldVisualCull = animation->makeHeldObjectCullCallback();
+                    node->addCullCallback(mHeldVisualCull);
+                }
+            }
+        }
+        if (!mHeldThrow || mHeldThrow->item != item)
+        {
+            mHeldThrow.reset();
+            return;
+        }
+        const std::string group = mPhysics->getHeldGrip().dual ? "brutal_throw_dual" : "brutal_throw_solo";
+        const float release = animation ? animation->getTextKeyTime(group + ": release") : -1.f;
+        const float time = animation ? animation->getCurrentTime(group) : -1.f;
+        const bool atRelease = release >= 0.f && time + .0001f >= release;
+        if (mTimeManager->isPaused())
+            return;
+        mHeldThrow->wait += duration;
+        if (release >= 0.f && !atRelease && mHeldThrow->wait < .45f)
+            return;
+        clearHeldVisual();
+        const auto aim = osg::Quat(camera->getPitch(), osg::Vec3f(1, 0, 0))
+            * osg::Quat(camera->getYaw(), osg::Vec3f(0, 0, 1));
+        mPhysics->releaseHeldObject(player, mHeldThrow->eye,
+            atRelease ? aim * osg::Vec3f(0, 1, 0) : mHeldThrow->direction,
+            mHeldThrow->speed, mHeldThrow->adrenaline);
+        mHeldThrow.reset();
     }
 
     void World::samplePlayerSwordWallContact(float duration, const osg::FrameStamp& frameStamp)

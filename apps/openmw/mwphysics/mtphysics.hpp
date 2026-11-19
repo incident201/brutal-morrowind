@@ -163,7 +163,9 @@ namespace MWPhysics
         void disableDynamicObjects(bool props, bool equipment);
         void holdObject(const std::shared_ptr<Object>& object, const std::vector<osg::Vec3f>& vertices,
             float mass, const btCollisionObject* owner);
-        void setHoldTarget(const osg::Vec3f& center, const osg::Quat& rotation, float maxSpeed = 1400.f);
+        void setHeldPose(const Object& object, const osg::Vec3f& origin, const osg::Quat& rotation);
+        float sweepHeldPose(const Object& object, const osg::Vec3f& from, const osg::Vec3f& to,
+            const osg::Quat& rotation) const;
         void releaseHeldObject(const btCollisionObject* owner, const osg::Vec3f& linearVelocity,
             const osg::Vec3f& angularVelocity, bool thrown, bool adrenaline, float mass);
         bool hasHeldObject() const;
@@ -272,10 +274,6 @@ namespace MWPhysics
         {
             btRigidBody* body = nullptr;
             const btCollisionObject* owner = nullptr;
-            btVector3 targetOrigin{ 0, 0, 0 };
-            btQuaternion targetRotation{ 0, 0, 0, 1 };
-            float maxSpeed = 1400.f;
-            bool hasTarget = false;
         };
         mutable std::mutex mHoldStateMutex;
         HeldState mHeldState;
@@ -295,14 +293,10 @@ namespace MWPhysics
             const btCollisionObject* owner = nullptr;
         };
         std::unordered_map<const btRigidBody*, ActorIgnoreEntry> mActorIgnoreTimers;
-        std::unordered_map<btRigidBody*, std::vector<const btCollisionObject*>> mWedgedIn;
         std::unordered_map<const btRigidBody*, float> mImpactSoundCooldowns;
         mutable std::mutex mImpactQueueMutex;
         std::vector<FlyingObjectHit> mFlyingHits;
         std::vector<DynamicObjectImpact> mDynamicImpacts;
-        void freeWedgedObjectUnsafe(btRigidBody* body);
-        void updateWedgedObjectsUnsafe();
-        void steerHeldObjectUnsafe(btScalar dt);
         void updateFlyingObjectsUnsafe(btScalar dt);
         void collectDynamicImpactsUnsafe(btScalar dt);
         void clearObjectTrackingUnsafe(btCollisionObject* collisionObject);

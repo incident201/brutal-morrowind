@@ -340,8 +340,6 @@ namespace MWBase
         virtual void applyObjectImpulse(const MWWorld::Ptr& ptr, const osg::Vec3f& impulse, float mass) = 0;
         virtual bool canHoldObject(const MWWorld::ConstPtr& ptr) const = 0;
         virtual bool holdObject(const MWWorld::Ptr& ptr, const MWWorld::Ptr& holder, MWPhysics::HeldObjectInfo* info = nullptr) = 0;
-        virtual bool setHoldView(const MWWorld::Ptr& holder, const osg::Vec3f& eyePos, const osg::Vec3f& aimDir,
-            float pullback, float raiseOffset, bool dualGrip) = 0;
         virtual bool releaseHeldObject(const MWWorld::Ptr& holder, const osg::Vec3f& eyePos, const osg::Vec3f& throwDir,
             float throwSpeed, bool adrenaline) = 0;
         virtual MWWorld::Ptr getHeldObject() const = 0;

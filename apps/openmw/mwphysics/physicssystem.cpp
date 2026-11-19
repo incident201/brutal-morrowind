@@ -1851,20 +1851,14 @@ namespace MWPhysics
                 mMatrix = prev;
             }
 
-            void apply(osg::Geode& geode) override
+            void apply(osg::Geometry& geometry) override
             {
-                if (geode.getNodeMask() == 0)
+                const auto* vertices = dynamic_cast<const osg::Vec3Array*>(geometry.getVertexArray());
+                if (!vertices || vertices->empty())
                     return;
-                for (unsigned i = 0; i < geode.getNumDrawables(); ++i)
-                {
-                    const auto* geom = geode.getDrawable(i) ? geode.getDrawable(i)->asGeometry() : nullptr;
-                    const auto* verts = geom ? dynamic_cast<const osg::Vec3Array*>(geom->getVertexArray()) : nullptr;
-                    if (!verts || verts->empty())
-                        continue;
-                    const std::size_t step = verts->size() > 8192 ? (verts->size() / 8192) + 1 : 1;
-                    for (std::size_t v = 0; v < verts->size() && mVertices.size() < 65536; v += step)
-                        mVertices.push_back((*verts)[v] * mMatrix);
-                }
+                const std::size_t step = vertices->size() > 8192 ? (vertices->size() / 8192) + 1 : 1;
+                for (std::size_t v = 0; v < vertices->size() && mVertices.size() < 65536; v += step)
+                    mVertices.push_back((*vertices)[v] * mMatrix);
             }
         };
 
@@ -1952,7 +1946,110 @@ namespace MWPhysics
         const osg::Vec3f half = object->getDynamicHalfExtents();
         const float radius = half.length();
         const bool dualGrip = weight >= 6.f || radius >= 18.f;
-        mHeldDualGrip = dualGrip;
+        mHeldPoseReady = false;
+        mHeldVelocity = {};
+        mHeldGrip = {};
+        auto& grip = mHeldGrip;
+        grip.dual = dualGrip;
+        const float scale = ptr.getCellRef().getScale();
+        osg::BoundingBox bounds;
+        for (const auto& vertex : visitor.mVertices)
+            bounds.expandBy(vertex * scale);
+        grip.center = bounds.valid() ? bounds.center() : osg::Vec3f();
+        grip.half = bounds.valid() ? (bounds._max - bounds._min) * .5f : half;
+        grip.contact = grip.center;
+        const auto largest = [&](int a, int b) { return grip.half[a] >= grip.half[b] ? a : b; };
+        const auto section = [&](int axis, float fraction, float band) {
+            const float along = grip.center[axis] + fraction * grip.half[axis];
+            osg::BoundingBox slice;
+            for (const auto& vertex : visitor.mVertices)
+            {
+                const auto point = vertex * scale;
+                if (std::abs(point[axis] - along) <= grip.half[axis] * band)
+                    slice.expandBy(point);
+            }
+            return slice;
+        };
+        grip.lengthAxis = largest(largest(0, 1), 2);
+        if (dualGrip)
+        {
+            grip.depthAxis = grip.half[0] < grip.half[1] ? 0 : 1;
+            if (grip.half[2] < grip.half[grip.depthAxis])
+                grip.depthAxis = 2;
+            // A flat prop spans its broad horizontal axis; a long prop spans its shaft.
+            grip.lengthAxis = grip.depthAxis == 0 ? 1 : 0;
+            const int other = 3 - grip.depthAxis - grip.lengthAxis;
+            if (grip.half[other] > grip.half[grip.lengthAxis] * 1.4f)
+                grip.lengthAxis = other;
+            const int length = grip.lengthAxis, width = 3 - length - grip.depthAxis;
+            grip.span = grip.half[length];
+            // On a long prop, prefer the visibly narrower portion of its axis
+            // rather than placing one hand on the heavy head.
+            if (grip.span > grip.half[width] * 1.9f)
+            {
+                float bestWidth = grip.half[width];
+                for (const float end : { -.48f, .48f })
+                {
+                    const auto slice = section(length, end, .50f);
+                    if (!slice.valid())
+                        continue;
+                    const auto size = slice._max - slice._min;
+                    const float sectionWidth = std::max(size[width], size[grip.depthAxis]) * .5f;
+                    if (sectionWidth < .65f || sectionWidth >= bestWidth)
+                        continue;
+                    bestWidth = sectionWidth;
+                    grip.shaft = true;
+                    grip.contact = slice.center();
+                    grip.contact[length] = grip.center[length] + end * .56f * grip.half[length];
+                    grip.span = grip.half[length] * .38f;
+                    grip.thickness = sectionWidth;
+                }
+            }
+        }
+        else
+        {
+            const int axis = grip.lengthAxis;
+            const int a = (axis + 1) % 3, b = (axis + 2) % 3;
+            const float halfLength = grip.half[axis];
+            grip.thickness = std::max(grip.half[a], grip.half[b]);
+            if (halfLength > std::max(4.f, grip.thickness * 1.35f))
+            {
+                float bestFit = grip.thickness * .84f;
+                for (const float fraction : { -.85f, -.60f, .60f, .85f })
+                {
+                    const float along = grip.center[axis] + fraction * halfLength;
+                    const auto slice = section(axis, fraction, .25f);
+                    if (!slice.valid())
+                        continue;
+                    const auto size = slice._max - slice._min;
+                    const float width = std::max(size[a], size[b]) * .5f;
+                    // Leave room on either side of the palm instead of grabbing
+                    // the very end of a bottle or a narrow decorative cap.
+                    const float fit = width + (std::abs(fraction) > .8f ? .65f : 0.f);
+                    if (width >= .65f && fit < bestFit)
+                    {
+                        bestFit = fit;
+                        grip.contact = slice.center();
+                        grip.contact[axis] = std::clamp(along, slice._min[axis], slice._max[axis]);
+                        grip.thickness = width;
+                        grip.narrowEnd = true;
+                    }
+                }
+            }
+            if (grip.narrowEnd)
+                grip.depthAxis = a;
+            else
+            {
+                grip.depthAxis = 2;
+                grip.lengthAxis = largest(0, 1);
+                const auto base = section(2, -.9f, .30f);
+                if (base.valid())
+                    grip.contact = base.center();
+                grip.contact.z() = grip.center.z();
+                grip.contact.z() -= grip.half.z();
+                grip.thickness = std::max(grip.half.x(), grip.half.y());
+            }
+        }
         if (info)
         {
             info->halfExtents = half;
@@ -1963,68 +2060,32 @@ namespace MWPhysics
         return true;
     }
 
-    bool PhysicsSystem::setHoldView(const osg::Vec3f& eyePos, const osg::Vec3f& aimDir, const osg::Quat& viewOrient,
-        float pullback, float raiseOffset, bool dualGrip)
+    void PhysicsSystem::placeHeldObject(const osg::Vec3f& origin, const osg::Quat& rotation, float duration)
     {
-        if (mHeldObject.isEmpty() || !mHeldObject.isInCell() || !mHeldObject.getRefData().isEnabled()
-            || !mTaskScheduler->hasHeldObject())
+        if (const auto* object = getObject(mHeldObject))
         {
-            mHeldObject = MWWorld::Ptr();
-            return false;
+            const osg::Vec3f center
+                = origin + Misc::Convert::toOsg(object->getDynamicCenterWorldOffset(rotation));
+            if (mHeldPoseReady && duration > 0.f)
+            {
+                auto velocity = (center - mHeldLastCenter) / duration;
+                const float speed = velocity.length();
+                if (speed > 650.f)
+                    velocity *= 650.f / speed;
+                const float blend = 1.f - std::exp(-duration * 40.f);
+                mHeldVelocity += (velocity - mHeldVelocity) * blend;
+            }
+            mHeldLastCenter = center;
+            mHeldPoseReady = true;
+            mTaskScheduler->setHeldPose(*object, origin, rotation);
         }
-        const Object* heldObj = getObject(mHeldObject);
-        if (!heldObj)
-        {
-            mHeldObject = MWWorld::Ptr();
-            return false;
-        }
-        osg::Vec3f forward = aimDir;
-        if (forward.normalize() < 1e-4f)
-            return false;
-        osg::Vec3f right = forward ^ osg::Vec3f(0, 0, 1);
-        if (right.normalize() < 1e-4f)
-        {
-            right = viewOrient * osg::Vec3f(1, 0, 0);
-            right.z() = 0.f;
-            if (right.normalize() < 1e-4f)
-                right = osg::Vec3f(1, 0, 0);
-        }
-        osg::Vec3f up = right ^ forward;
-        up.normalize();
+    }
 
-        const osg::Vec3f half = heldObj->getDynamicHalfExtents();
-        const float objRadius = std::clamp(half.length(), 3.f, 55.f);
-        float forwardDist = 0.f, rightOffset = 0.f, upOffset = 0.f;
-        if (dualGrip)
-        {
-            forwardDist = std::clamp(35.f + objRadius * .85f, 36.f, 70.f) - pullback;
-            rightOffset = 0.f;
-            upOffset = -13.f + raiseOffset;
-        }
-        else
-        {
-            forwardDist = std::clamp(29.f + objRadius * .78f, 30.f, 58.f) - pullback;
-            rightOffset = 4.5f + std::min(half.x(), 6.f) * .2f;
-            upOffset = -7.5f + raiseOffset;
-        }
-        osg::Vec3f desiredCenter = eyePos + forward * forwardDist + right * rightOffset + up * upOffset;
-        const int wallMask = CollisionType_World | CollisionType_Door | CollisionType_HeightMap;
-        const auto wallHit = castRay(eyePos, eyePos + (desiredCenter - eyePos) * 1.15f,
-            { mHeldObject, MWMechanics::getPlayer() }, {}, wallMask, CollisionType_Actor);
-        if (wallHit.mHit)
-        {
-            const osg::Vec3f toDesired = desiredCenter - eyePos;
-            const float desiredLen = toDesired.length();
-            const float hitDist = (wallHit.mHitPos - eyePos).length();
-            const float safeDist = std::max(14.f, std::min(desiredLen, hitDist - std::min(objRadius * .55f, 12.f)));
-            if (desiredLen > 1e-3f)
-                desiredCenter = eyePos + toDesired * (safeDist / desiredLen);
-        }
-        const float yaw = std::atan2(forward.x(), forward.y());
-        const float pitchTilt = std::clamp(std::asin(std::clamp(forward.z(), -1.f, 1.f)) * .35f, -.35f, .35f);
-        const osg::Quat targetRot = osg::Quat(-pitchTilt, osg::Vec3f(1, 0, 0)) * osg::Quat(-yaw, osg::Vec3f(0, 0, 1));
-        mTaskScheduler->setHoldTarget(desiredCenter, targetRot, dualGrip ? 1150.f : 1450.f);
-        return true;
+    float PhysicsSystem::sweepHeldObject(const osg::Vec3f& from, const osg::Vec3f& to, const osg::Quat& rotation) const
+    {
+        if (const auto* object = getObject(mHeldObject))
+            return mTaskScheduler->sweepHeldPose(*object, from, to, rotation);
+        return 1.f;
     }
 
     bool PhysicsSystem::releaseHeldObject(const MWWorld::Ptr& holder, const osg::Vec3f& eyePos,
@@ -2071,6 +2132,10 @@ namespace MWPhysics
                 const float speed = std::clamp(throwSpeed * massFactor, 650.f, 1300.f);
                 vel = launchDir * speed + osg::Vec3f(0, 0, 55.f);
             }
+            // Keep the aimed flight predictable while transferring the actual hand motion.
+            const float along = mHeldVelocity * launchDir;
+            vel += launchDir * std::clamp(along * .35f, -110.f, 150.f)
+                + (mHeldVelocity - launchDir * along) * .10f;
             osg::Vec3f right = launchDir ^ osg::Vec3f(0, 0, 1);
             if (right.normalize() < 1e-4f)
                 right = osg::Vec3f(1, 0, 0);

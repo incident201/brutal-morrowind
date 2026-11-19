@@ -379,6 +379,7 @@ bool OMW::Engine::frame(unsigned frameNumber, float frametime)
     {
         mWorld->sampleNpcRagdollAnimation(frametime);
         mWorld->samplePlayerSwordWallContact(frametime, *mViewer->getFrameStamp());
+        mWorld->samplePlayerObjectGrip(frametime, *mViewer->getFrameStamp());
     }
 
     // update focus object for GUI

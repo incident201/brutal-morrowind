@@ -33,6 +33,8 @@ namespace MWRender
             float turn = 0.f;
         };
         float clavicleTurn = 0.f;
+        float minElbowBend = 0.f;
+        float maxElbowBend = osg::PI;
         std::array<Elbow, 2> elbows;
     };
 
@@ -77,12 +79,15 @@ namespace MWRender
     // Nothing is modified; `arms` receives the local results.
     inline bool solveGripArms(const Animation::NodeMap& nodes, const osg::Matrixf& total,
         const std::function<osg::Matrixf(osg::MatrixTransform*)>& sourceLocal, std::array<GripArm, 2>& arms,
-        float& maxClamp, const GripArmLimits& limits = {})
+        float& maxClamp, const GripArmLimits& limits = {},
+        const std::array<osg::Matrixf, 2>* separate = nullptr, unsigned count = 2)
     {
         unsigned side = 0;
         // The shaft follows the right hand; any safety clamp moves both goals.
         for (const char* prefix : { "Bip01 R ", "Bip01 L " })
         {
+            if (side == count)
+                break;
             auto& arm = arms[side++];
             unsigned joint = 0;
             for (const char* suffix : { "UpperArm", "Forearm", "Hand" })
@@ -107,13 +112,15 @@ namespace MWRender
         }
         osg::Vec3f clampOffset;
         maxClamp = 0.f;
-        const osg::Quat turn = total.getRotate();
-        for (auto& arm : arms)
+        for (unsigned i = 0; i < count; ++i)
         {
+            auto& arm = arms[i];
+            const osg::Matrixf& correction = separate ? (*separate)[i] : total;
+            const osg::Quat turn = correction.getRotate();
             const osg::Vec3f oldShoulder = arm.world[0].getTrans();
             const osg::Vec3f oldElbow = arm.world[1].getTrans();
             const osg::Vec3f oldWrist = arm.world[2].getTrans();
-            osg::Matrixf hand = arm.world[2] * total * osg::Matrixf::translate(clampOffset);
+            osg::Matrixf hand = arm.world[2] * correction * osg::Matrixf::translate(clampOffset);
             const osg::Vec3f requested = hand.getTrans();
             const float upperLength = (oldElbow - oldShoulder).length();
             const float foreLength = (oldWrist - oldElbow).length();
@@ -125,12 +132,17 @@ namespace MWRender
             const float distance = axis.normalize();
             if (distance < .001f)
                 return false;
-            const float reach = std::clamp(distance, std::abs(upperLength - foreLength) + .001f,
-                upperLength + foreLength - .001f);
+            const auto elbowReach = [&](float bend) {
+                return std::sqrt(std::max(0.f, upperLength * upperLength + foreLength * foreLength
+                    + 2.f * upperLength * foreLength * std::cos(bend)));
+            };
+            const float reach = std::clamp(distance,
+                std::max(std::abs(upperLength - foreLength) + .001f, elbowReach(limits.maxElbowBend)),
+                std::min(upperLength + foreLength - .001f, elbowReach(limits.minElbowBend)));
             const osg::Vec3f target = shoulder + axis * reach;
             const osg::Vec3f offset = target - requested;
             maxClamp = std::max(maxClamp, offset.length());
-            if (&arm == &arms.front())
+            if (i == 0 && !separate)
                 clampOffset = offset;
             hand.setTrans(target);
             osg::Vec3f oldAxis = oldWrist - oldShoulder;
@@ -158,7 +170,7 @@ namespace MWRender
                 transport.makeRotate(oldAxis, axis);
                 bend = transport * sourceBend;
             }
-            const auto& elbowLimit = limits.elbows[&arm == &arms.front() ? 0 : 1];
+            const auto& elbowLimit = limits.elbows[i];
             if (elbowLimit.turn > 0.f)
             {
                 osg::Vec3f guide = elbowLimit.guide - axis * (elbowLimit.guide * axis);

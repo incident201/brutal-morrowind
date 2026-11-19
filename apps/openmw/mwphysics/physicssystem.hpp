@@ -151,6 +151,18 @@ namespace MWPhysics
         bool dualGrip = false;
     };
 
+    struct HeldObjectGrip
+    {
+        osg::Vec3f center, half, contact;
+        int lengthAxis = 0;
+        int depthAxis = 2;
+        float span = 0.f;
+        float thickness = 0.f;
+        bool narrowEnd = false;
+        bool dual = false;
+        bool shaft = false;
+    };
+
     struct ThrownObjectHit
     {
         MWWorld::Ptr item;
@@ -243,8 +255,9 @@ namespace MWPhysics
 
         bool canHoldObject(const MWWorld::ConstPtr& ptr) const;
         bool holdObject(const MWWorld::Ptr& ptr, const MWWorld::Ptr& holder, HeldObjectInfo* info = nullptr);
-        bool setHoldView(const osg::Vec3f& eyePos, const osg::Vec3f& aimDir, const osg::Quat& viewOrient,
-            float pullback = 0.f, float raiseOffset = 0.f, bool dualGrip = false);
+        const HeldObjectGrip& getHeldGrip() const { return mHeldGrip; }
+        void placeHeldObject(const osg::Vec3f& origin, const osg::Quat& rotation, float duration);
+        float sweepHeldObject(const osg::Vec3f& from, const osg::Vec3f& to, const osg::Quat& rotation) const;
         bool releaseHeldObject(const MWWorld::Ptr& holder, const osg::Vec3f& eyePos, const osg::Vec3f& throwDir,
             float throwSpeed, bool adrenaline);
         bool hasHeldObject() const;
@@ -477,7 +490,9 @@ namespace MWPhysics
         std::array<std::vector<Simulation>, 2> mSimulations;
         std::vector<std::pair<MWWorld::Ptr, osg::Vec3f>> mActorsPositions;
         MWWorld::Ptr mHeldObject;
-        bool mHeldDualGrip = false;
+        HeldObjectGrip mHeldGrip;
+        osg::Vec3f mHeldLastCenter, mHeldVelocity;
+        bool mHeldPoseReady = false;
 
         std::string chooseThrownReaction(const MWWorld::Ptr& ptr, const MWWorld::Ptr& attacker,
             const osg::Vec3f& hitPos, const osg::Vec3f& direction, float mass) const;
