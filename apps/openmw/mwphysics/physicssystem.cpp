@@ -32,6 +32,7 @@
 #include <components/esm3/loadarmo.hpp>
 #include <components/esm3/loadgmst.hpp>
 #include <components/esm3/loadligh.hpp>
+#include <components/esm3/loadweap.hpp>
 #include <components/esm3/loadmgef.hpp>
 #include <components/misc/convert.hpp>
 #include <components/misc/rng.hpp>
@@ -2149,6 +2150,11 @@ namespace MWPhysics
                     grip.span = grip.half[length] * .38f;
                     grip.thickness = sectionWidth;
                 }
+            }
+            if (grip.shaft && ptr.getType() == ESM::REC_WEAP)
+            {
+                const auto type = ptr.get<ESM::Weapon>()->mBase->mData.mType;
+                grip.uprightShaft = type == ESM::Weapon::BluntTwoClose || type == ESM::Weapon::BluntTwoWide;
             }
         }
         else

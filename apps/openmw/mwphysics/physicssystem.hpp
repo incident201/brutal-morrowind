@@ -166,6 +166,7 @@ namespace MWPhysics
         bool narrowEnd = false;
         bool dual = false;
         bool shaft = false;
+        bool uprightShaft = false;
         bool shield = false;
         bool shieldStraps = false;
     };

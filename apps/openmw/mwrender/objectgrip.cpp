@@ -246,6 +246,28 @@ namespace MWRender
             hand.setTrans(wrist);
             return hand;
         }
+
+        osg::Matrixf fitPalmToUprightShaft(const osg::Matrixf& authoredHand, const osg::Matrixf& forearm,
+            const Palm& palm, const osg::Vec3f& shaft)
+        {
+            const osg::Vec3f wrist = authoredHand.getTrans();
+            auto forward = wrist - osg::Vec3f(forearm.getTrans());
+            auto normal = shaft ^ forward;
+            if (forward.normalize() < .001f || normal.normalize() < .001f)
+                return authoredHand;
+
+            // A neutral wrist can turn about the forearm to put its palm across the shaft.
+            osg::Quat align;
+            align.makeRotate(direction(palm.forward, authoredHand), forward);
+            auto hand = authoredHand * osg::Matrixf::rotate(align);
+            const auto authoredNormal = direction(palm.normal, hand);
+            if (normal * authoredNormal < 0.f)
+                normal = -normal;
+            const float twist = std::atan2(forward * (authoredNormal ^ normal), authoredNormal * normal);
+            hand *= osg::Matrixf::rotate(std::clamp(twist, -.99f, .99f), forward);
+            hand.setTrans(wrist);
+            return hand;
+        }
     }
 
     bool NpcAnimation::fitHeldObjectGrip(const MWPhysics::HeldObjectGrip& grip, const osg::Vec3f& eye,
@@ -266,7 +288,9 @@ namespace MWRender
         const auto& nodes = getNodeMap();
         const bool wrapsShaft = grip.narrowEnd || grip.shaft;
         const bool fists = grip.shaft || grip.shieldStraps;
-        const float shaftOffset = grip.shaft ? grip.thickness + 1.21f : 0.f;
+        const float shaftOffset = grip.shaft ? grip.thickness + (grip.uprightShaft ? .65f : 1.21f) : 0.f;
+        const float shaftSign = grip.uprightShaft && grip.contact[grip.lengthAxis] > grip.center[grip.lengthAxis]
+            ? -1.f : 1.f;
         const float shieldOffset = grip.shield && !grip.shieldStraps ? grip.shieldDepth + 1.65f : 0.f;
         const auto& strapRadius = grip.shieldGripRadii;
         const auto shieldCenter = (grip.shieldGrips[0] + grip.shieldGrips[1]) * .5f;
@@ -307,8 +331,9 @@ namespace MWRender
                 lateral = screenRight;
             if (grip.shaft)
             {
-                const auto carryAxis = screenRight + up * .26f + ahead * .16f;
-                lateral += (carryAxis - lateral) * (.82f * holdWeight);
+                const auto carryAxis = grip.uprightShaft ? screenRight * .58f + up * .81f + ahead * .22f
+                                                        : screenRight + up * .26f + ahead * .16f;
+                lateral += (carryAxis - lateral) * ((grip.uprightShaft ? .94f : .82f) * holdWeight);
                 lateral.normalize();
             }
             depth = ahead;
@@ -316,12 +341,17 @@ namespace MWRender
                 depth = up;
             if (grip.shieldStraps)
                 depth -= up * (.72f * holdWeight);
-            rotation = alignObject(grip, lateral, depth);
+            rotation = alignObject(grip, lateral * shaftSign, depth);
             const int widthAxis = 3 - grip.lengthAxis - grip.depthAxis;
             center = (right + left) * .5f;
-            center += (ahead * 12.f - up * (grip.shaft ? 4.f : 7.f + grip.half[widthAxis] * .24f)) * holdWeight;
-            if (grip.shaft)
-                center -= screenRight * (3.7f * holdWeight);
+            if (grip.uprightShaft)
+                center += (ahead * 12.f + screenRight * 2.5f - up * 1.8f) * holdWeight;
+            else
+            {
+                center += (ahead * 12.f - up * (grip.shaft ? 4.f : 7.f + grip.half[widthAxis] * .24f)) * holdWeight;
+                if (grip.shaft)
+                    center -= screenRight * (3.7f * holdWeight);
+            }
             position = center + depth * (shaftOffset + shieldOffset) - rotation * pivot;
         }
         else
@@ -366,7 +396,14 @@ namespace MWRender
                 }
                 else if (grip.shaft)
                 {
-                    const auto support = i == 0 ? ahead * .85f - up * .3f : up * .82f + ahead * .53f;
+                    auto across = up;
+                    if (grip.uprightShaft)
+                    {
+                        across = lateral ^ ahead;
+                        if (across.normalize() < .001f)
+                            across = up;
+                    }
+                    const auto support = i == 0 ? ahead * .85f - across * .3f : across * .82f + ahead * .53f;
                     goals[i] = turnPalmAroundHandle(original[i], palms[i], lateral, support, ahead);
                 }
                 else
@@ -415,7 +452,8 @@ namespace MWRender
                 const osg::Matrixf authoredHand = arm.source[2] * forearm;
                 auto desired = goals[i];
                 desired.setTrans(authoredHand.getTrans());
-                hands[i] = limitGripWrist(desired, forearm, authoredHand, palms[i], grip.shieldStraps);
+                hands[i] = grip.uprightShaft ? fitPalmToUprightShaft(authoredHand, forearm, palms[i], lateral)
+                                            : limitGripWrist(desired, forearm, authoredHand, palms[i], grip.shieldStraps);
                 arm.result[2] = hands[i] * osg::Matrixf::inverse(forearm);
                 arm.result[2].setTrans(arm.source[2].getTrans());
             }
@@ -467,7 +505,7 @@ namespace MWRender
                 {
                     if ((span ^ depth).length2() < .01f)
                         depth = std::abs(span * up) < .9f ? up : ahead;
-                    rotation = alignObject(grip, span, depth);
+                    rotation = alignObject(grip, span * shaftSign, depth);
                 }
             }
             else
