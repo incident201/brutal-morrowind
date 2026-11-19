@@ -112,7 +112,8 @@ def out(x):
 
 
 class LungeSpear(Spear):
-    AIM = (5., 0., -115.)         # one line for every thrust, from the lower right
+    AIM = (3., -14., -115.)       # one line for every thrust: the opponent's chest
+    EYE_DROP, EYE_FORWARD = 6., 1.   # lowered fighting stance (guard camera units)
     REAR_STATION = -50.          # the rear fist sits at the butt cap (long thrust grip)
     SHAFT = (-53., 53.)
     # Visible body envelope in the guard camera frame. The body contract puts
@@ -122,12 +123,13 @@ class LungeSpear(Spear):
     POLES = {'R': (.35, -1., .45), 'L': (-.3, -1., .1)}   # elbows hang below and behind
     PHIS = np.radians(np.linspace(-50., 50., 21))
     TWIST_LIMIT, BEND_LIMIT = 115., 50.   # vanilla's own spear thrust twists the right wrist 92-108
-    GUARD_REAR = (14., -34., -6.)
-    FRONT_PALM = (8., -14.5, -23.)
+    GUARD_REAR = (8.0, -26.72, -9.17)   # 22 units behind the front palm on the chest line
+    FRONT_PALM = (6., -24.1, -31.)
 
     def __init__(self, rig, source, marks, native, fist, profile, single):
         self._ready = False
         self.native_rig = native.rig
+        self.native_pose, self.fist_pose = native, fist
         super().__init__(rig, source, marks, native, fist, profile, single)
         left = self.grasps[1]
         # Both hands use the skin-calibrated power grip of the staff import
@@ -155,11 +157,11 @@ class LungeSpear(Spear):
         self.open_fingers = {n: blend(self.front_fingers[n], self.open_hand.local(n), .6) for n in left.fingers}
         self.binds = {'R': self.bind_wrist, 'L': self.left_bind_wrist}
         self.idle_guard = LocalPose(self.rig, {n: self.idle.local(n) for n in self.names})
-        self.GUARD = self.between(self.GUARD_REAR, self.FRONT_PALM, turn=-22.)
+        self.GUARD = self.between(self.GUARD_REAR, self.FRONT_PALM, turn=-28.)
         self.hand_grips = {'R': self.base_grips['R'], 'L': self.base_grips['L']}
         self._ready = True
         self.choose_grips()
-        self.GUARD = self.fit_rolls(self.GUARD, spin=150.)
+        self.GUARD = self.fit_rolls(self.GUARD, span=180., step=5., spin=1e9)
         self.keypose.cache_clear()
         self.guard = self.solve(self.GUARD).transforms
 
@@ -231,6 +233,9 @@ class LungeSpear(Spear):
         keep = b @ turn_about((0, 1, 0), pose.turn * (1. - pose.look)) \
             @ turn_about((1, 0, 0), -pose.lean * (1. - pose.look) + pose.nod) @ b.T
         head[:3, :3] = keep @ guard.world(HEAD)[:3, :3]
+        # Spear fighting stance: the head sinks toward the shoulders, so the
+        # eye is lower relative to the arms and the front hand shows in view.
+        head[:3, 3] += b @ np.array((0., -self.EYE_DROP, -self.EYE_FORWARD))
         result[HEAD] = inverse(torso @ guard.world(self.rig.parents[HEAD])) @ head
         return result
 
@@ -288,9 +293,9 @@ class LungeSpear(Spear):
         return (clavicle, upper, fore, hand), report
 
     # Oblique grips, measured offline against wrist limits over guard, chamber
-    # and contact (lunge/t34, t35, t37): the haft crosses each palm at 45
-    # degrees, the front palm cradles it from below.
-    GRIPS = {'R': (0., -45.), 'L': (0., 45.)}     # (thumb flip, tilt in the palm plane)
+    # and contact in the lowered stance (lunge/t43): the haft crosses the rear
+    # palm at 45 and the front palm at 60 degrees; the front palm cradles it.
+    GRIPS = {'R': (180., 45.), 'L': (0., 60.)}    # (thumb flip, tilt in the palm plane)
 
     def oblique(self, side, flip, tilt):
         """The calibrated grip turned within the palm plane, about the palm
@@ -313,8 +318,32 @@ class LungeSpear(Spear):
             fingers, clearance = fit_fingers({n: straight.local(n) for n in self.hand_fingers[side]},
                                              self.hand_fingers[side], side, (inside @ np.r_[0., 0., 0., 1.])[:3],
                                              inside[:3, :3] @ np.array((0., 1., 0.)))
+            # The thumb has its own joint axes: curling it like a finger
+            # dislocates it. Use a natural thumb from an existing pose (the
+            # calibrated fist, Morrowind's staff hold or clenched fist) whose
+            # tip comes closest to the haft without entering it.
+            point = (inside @ np.r_[0., 0., 0., 1.])[:3]
+            axis = inside[:3, :3] @ np.array((0., 1., 0.))
+            names = [f'Bip01 {side} Finger0{s}' for s in ('', '1', '2')]
+            def thumb_gaps(source):
+                world, gaps = np.eye(4), []
+                for n in names:
+                    world = world @ source[n]
+                    gaps.append(world[:3, 3])
+                gaps.append((world @ np.r_[source[names[-1]][:3, 3] * .8, 1.])[:3])
+                return [np.linalg.norm((g - point) - axis * ((g - point) @ axis)) - 1.72 for g in gaps]
+            thumbs = []
+            for label, source in (('calibrated fist', self.hand_fingers[side]),
+                                  ('staff hold', {n: self.native_pose.local(n) for n in names}),
+                                  ('clenched fist', {n: self.fist_pose.local(n) for n in names})):
+                gaps = thumb_gaps(source)
+                if min(gaps[1:]) >= -.05:
+                    thumbs.append((abs(gaps[-1]), label, source))
+            _, thumb_label, thumb = min(thumbs, key=lambda x: x[0])
+            for n in names:
+                fingers[n] = thumb[n].copy()
             self.hand_grips[side] = grip
-            self.grip_choice[side] = ('profile oblique', flip, tilt)
+            self.grip_choice[side] = ('profile oblique', flip, tilt, 'thumb: ' + thumb_label)
             self.finger_clearance[side] = clearance
             if side == 'R':
                 self.rear_fingers = fingers
@@ -457,33 +486,37 @@ def author(spear):
     fit = lambda pose: S.fit_rolls(pose._replace(rolls=guard.rolls), around=guard.rolls)
     H = lambda *a, **k: fit(S.held(*a, **k))
     B = lambda *a, **k: fit(S.between(*a, **k))
-    # Every thrust runs on one line, from the lower right to the aim point.
-    # The front palm stays at the bottom edge of the view throughout: in the
-    # chamber only the rear fist draws back to the hip and the haft slides
-    # through the cradling palm; on the drive the palm moves a little forward
-    # with the haft while the rear fist and the trunk deliver it.
-    def chamber(depth=1., turn=-26.):
-        rear = lerp(np.array(S.GUARD_REAR), np.array((16., -37., 0.)), depth)
-        front = lerp(np.array(S.FRONT_PALM), np.array((8., -15., -22.)), depth)
-        return B(tuple(rear), tuple(front), turn=turn, lean=-3. * depth,
+    # Every thrust runs on one line, toward the opponent's chest. The front
+    # palm is a guide at the bottom edge of the view: it barely moves (2.5
+    # units forward on contact) while the rear fist draws the haft back
+    # through it and drives it forward again; the trunk turns and the body
+    # steps into the thrust.
+    def slide(pose, rear_travel, front_travel=0., **changes):
+        axis = S.axis(pose)
+        rear = np.array(pose.rear) + axis * rear_travel
+        return fit(pose._replace(rear=tuple(rear), aim=tuple(np.array(pose.aim) + axis * rear_travel),
+                                 front=pose.front - rear_travel + front_travel, **changes))
+
+    def chamber(depth=1., turn=-34.):
+        # The rear fist draws back to the right hip; the haft pivots in the
+        # front palm, which stays put, so the point lifts a little.
+        rear = np.array(S.GUARD_REAR) + np.array((6., -7., 5.)) * depth
+        return B(tuple(rear), S.FRONT_PALM, turn=lerp(guard.turn, turn, depth), lean=-3. * depth,
                  carrier=(0., -2.5 * depth, .6 * depth), nod=1.5 * depth)
 
-    def extension(front, station, turn, lean, step, nod):
-        return H(front, S.AIM, station, turn=turn, lean=lean, carrier=(0., step, -.25 * step), nod=nod)
-
     quick = {}
-    for letter, (draw_t, hit_t, settle_t, recoil_t, stop_t, depth, front, station, turn, lean, step, nod) in {
-            'a': (.13, .24, .31, .40, .56, .55, (9., -21., -32.), 19., -14., 10., 6., -2.),
-            'b': (.12, .23, .30, .39, .54, .50, (8.5, -20.5, -31.5), 19., -16., 9., 5., -1.),
-            'c': (.14, .25, .32, .41, .57, .60, (9.5, -21.5, -31.), 19.5, -12., 12., 6., -3.),
-            'd': (.17, .29, .38, .48, .66, .85, (8., -20.5, -33.), 18., -10., 14., 11., -3.5),
+    for letter, (draw_t, hit_t, settle_t, recoil_t, stop_t, depth, push, turn, lean, step, nod) in {
+            'a': (.13, .24, .31, .40, .56, .55, 8., -16., 10., 6., -2.),
+            'b': (.12, .23, .30, .39, .54, .50, 7.5, -18., 9., 5., -1.),
+            'c': (.14, .25, .32, .41, .57, .60, 8., -14., 12., 6., -3.),
+            'd': (.17, .29, .38, .48, .66, .85, 9., -12., 14., 11., -3.5),
     }.items():
-        hit = extension(front, station, turn, lean, step, nod)
+        hit = slide(guard, push, 2.5, turn=turn, lean=lean, carrier=(0., step, -.25 * step), nod=nod)
         over = S.along(hit, 1.2)
         settle = S.along(hit, -.6)
         back = S.mix(hit, guard, .55)
         path = [(0., guard, ease, 0.),
-                (draw_t, chamber(depth, -22. - 6. * depth), out, .3),
+                (draw_t, chamber(depth, -28. - 6. * depth), out, .3),
                 (hit_t - .02, over, snap, .35),
                 (hit_t, hit, out, 0.),
                 (settle_t, settle, ease, 0.),
@@ -491,13 +524,12 @@ def author(spear):
                 (stop_t, guard, ease, -.25)]
         quick[letter] = dict(path=path, draw=draw_t, hit=hit_t, settle=settle_t, stop=stop_t)
 
-    deep = chamber(1., -28.)
-    breath = B((16.3, -37.5, .6), (8.1, -15.3, -21.6), turn=-28.5, lean=-3.4,
-               carrier=(0., -2.7, .65), nod=1.8)
-    lunge = H((8., -20.5, -33.), S.AIM, 18., turn=-10., lean=15.,
-              carrier=(0., 13., -3.4), nod=-4.)
+    deep = chamber(.8, -33.)
+    breath = B(tuple(np.array(S.GUARD_REAR) + np.array((5.1, -5.9, 4.3))), S.FRONT_PALM, turn=-33.5,
+               lean=-3.4, carrier=(0., -2.7, .65), nod=1.8)
+    lunge = slide(guard, 9., 3., turn=-10., lean=15., carrier=(0., 13., -3.4), nod=-4.)
     charged = dict(
-        prepare=[(0., guard, ease, 0.), (.40, chamber(.75, -26.), out, .3), (.667, deep, ease, 0.)],
+        prepare=[(0., guard, ease, 0.), (.40, chamber(.6, -31.), out, .3), (.667, deep, ease, 0.)],
         release=[(0., deep, ease, 0.), (.185, S.along(lunge, 1.5), snap, .35), (.20, lunge, out, 0.),
                  (.30, S.along(lunge, -.8), ease, 0.), (.44, S.mix(lunge, guard, .5), ease, -.2),
                  (.80, guard, ease, -.25), (.95, guard, ease, 0.)],
