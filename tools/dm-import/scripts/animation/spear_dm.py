@@ -33,9 +33,9 @@ RATE = 60.
 # degrees: z up, positive yaw to the left, positive pitch tip up, positive roll
 # clockwise from behind. The turn grows during the drive and goes back during
 # the draw, so every stroke still starts and ends in the same guard.
-AIM = {'fasta': (2.4, -1.2, -4.), 'fastb': (-2.8, .6, 5.), 'fastc': (.9, -2.6, 2.),
-       'fastd': (-1.6, -1.6, -6.), 'fastloopa': (3.1, .2, 3.), 'thrust': (0., -.6, 0.),
-       'neutral': (-.6, -.9, -2.)}
+AIM = {'fasta': (5.5, -2.2, -8.), 'fastb': (-6., 1.8, 9.), 'fastc': (1.6, -5.2, 4.),
+       'fastd': (-3.6, -3., -10.), 'fastloopa': (6.4, 1., 6.), 'thrust': (0., -.8, 0.),
+       'neutral': (-1.5, -1.5, -3.)}
 
 
 def build(arms, body=None):

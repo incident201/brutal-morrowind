@@ -3982,8 +3982,8 @@ namespace MWMechanics
 
     void CharacterController::chooseBrutalChargedAttack()
     {
-        // Spears thrust on either longitudinal step. Other sets use the source _T and _B swings.
-        // Sideways stays the established mapping that the limb cuts rely on.
+        // Spears thrust on either longitudinal step and standing still. Other sets use the
+        // source _T and _B swings. Sideways stays the established mapping that the limb cuts rely on.
         auto& stats = mPtr.getClass().getCreatureStats(mPtr);
         const float* move = mPtr.getClass().getMovementSettings(mPtr).mPosition;
         mBrutalNeutralAttack = false;
@@ -3991,6 +3991,8 @@ namespace MWMechanics
             mAttackType = move[1] > 0.f && !brutalActiveKey("brutal spear grip") ? "chop" : "thrust";
         else if (std::abs(move[0]) > std::abs(move[1]) + 0.2f)
             mAttackType = "slash";
+        else if (brutalActiveKey("brutal spear grip"))
+            mAttackType = "thrust";
         else if (brutalActiveKey("neutral start"))
         {
             mBrutalNeutralAttack = true;
