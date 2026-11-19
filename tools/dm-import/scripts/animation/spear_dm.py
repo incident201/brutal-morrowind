@@ -28,6 +28,14 @@ JAB_CHAMBER, JAB_END = -.19, .18   # deepest draw (both hands on the haft), end 
 SETTLE = .12          # each stroke holds the chamber while the engine blends into it
 RETURN = .38          # draw back from the held thrust to the guard
 RATE = 60.
+# A person never strikes the same spot twice. Each quick stroke turns both
+# arms and the spear together about the neck by its own (yaw, pitch, roll) in
+# degrees: z up, positive yaw to the left, positive pitch tip up, positive roll
+# clockwise from behind. The turn grows during the drive and goes back during
+# the draw, so every stroke still starts and ends in the same guard.
+AIM = {'fasta': (2.4, -1.2, -4.), 'fastb': (-2.8, .6, 5.), 'fastc': (.9, -2.6, 2.),
+       'fastd': (-1.6, -1.6, -6.), 'fastloopa': (3.1, .2, 3.), 'thrust': (0., -.6, 0.),
+       'neutral': (-.6, -.9, -2.)}
 
 
 def build(arms, body=None):
@@ -99,15 +107,42 @@ def build(arms, body=None):
                 pose[n] = blend(contact_pose.local(n), guard_pose.local(n), u)
         return pose
 
-    def jab(elapsed):
+    from import_two_hand_viewmodel import turn_about
+    from audit_staff_mesh_grip import matrix
+    clavicles = [n for n in animated if n.endswith('Clavicle')]
+
+    def aimed(pose, angles, weight):
+        # Turn both clavicles by one rigid motion about the neck: the arms,
+        # hands and spear move as one body and the shoulders stay seated.
+        if not weight or not any(angles):
+            return pose
+        yaw, pitch, roll = (a * weight for a in angles)
+        turn = turn_about((0., 0., 1.), yaw) @ turn_about((1., 0., 0.), pitch) @ turn_about((0., 1., 0.), roll)
+        pose = dict(pose)
+        now = LocalPose(rig, pose)
+        for name in clavicles:
+            parent = now.world(rig.parents[name])
+            pivot = now.world(rig.parents[name])[:3, 3]
+            motion = matrix(turn, pivot - turn @ pivot)
+            pose[name] = inverse(parent) @ motion @ parent @ pose[name]
+        return pose
+
+    def drawn(e):
+        # Weight of the stroke's own aim while drawing back.
+        return 1. - ease(min(1., max(0., (e - .04) / (RETURN - .04))))
+
+    def jab_for(angles):
         # Each stroke starts and ends in the guard (the drawn chamber), so a
         # series chains without the engine blending between far-apart poses:
         # settle, DM's drive and held extension, then draw back to guard.
-        if elapsed <= SETTLE:
-            return guard_local
-        if elapsed <= SETTLE + drive:
-            return at(chamber + elapsed - SETTLE)
-        return returning(elapsed - SETTLE - drive)
+        def jab(elapsed):
+            if elapsed <= SETTLE:
+                return guard_local
+            if elapsed <= SETTLE + drive:
+                return aimed(at(chamber + elapsed - SETTLE), angles, ease(min(1., (elapsed - SETTLE) / reach)))
+            e = elapsed - SETTLE - drive
+            return aimed(returning(e), angles, drawn(e))
+        return jab
 
     cursor = max(float(t) for t, _ in text.keys) + 1.
     hit = SETTLE + hit2 - chamber
@@ -116,30 +151,34 @@ def build(arms, body=None):
               (hit, 'thrust hit'), (hit + .035, 'weight forward'), (hit + .07, 'settle end'), (length, 'stop')]
     for letter in 'abcd':
         for name in (('fasta', 'fastloopa') if letter == 'a' else ('fast' + letter,)):
-            section(cursor, length, jab, name, events)
+            section(cursor, length, jab_for(AIM[name]), name, events)
             cursor += length + .2
         section(cursor, .05, lambda e: guard_local, 'fastend' + letter, [(0., 'start'), (.05, 'stop')])
         cursor += .25
 
-    # Charged thrust: draw into the jab's chamber and hold it; release drives it.
-    start, maximum, release = (marks['thrust ' + k] for k in ('start', 'max attack', 'min hit'))
+    # Charged thrust: draw into the jab's chamber and hold it; release drives
+    # it. The standing charge ("neutral") gets the same thrust: the engine
+    # starts it on every click before it knows the click is a quick stroke,
+    # and the staff's overhead start showed as a jump of the spear.
     chamber_local = at(chamber)
-    section(start, maximum - start,
-            lambda e: {n: blend(guard_local[n], chamber_local[n], ease(e / (maximum - start))) for n in animated},
-            'thrust', [(0., 'start'), (marks['thrust min attack'] - start, 'min attack'),
-                       (maximum - start, 'max attack')])
-    hold, hold_stop = marks['thrust hold start'], marks['thrust hold stop']
-    section(hold, hold_stop - hold, lambda e: chamber_local, 'thrust hold',
-            [(0., 'start'), (0., 'loop start'), (hold_stop - hold, 'loop stop'), (hold_stop - hold, 'stop')])
+    holds = []
     total = drive + RETURN + .25
-    ret = returning
-    section(release, total,
-            lambda e: at(chamber + e) if e <= drive else ret(e - drive),
-            'thrust', [(0., 'min hit'), (0., 'plant'), (hit2 - chamber, 'hit'),
+    for kind in ('thrust', 'neutral'):
+        start, maximum, release = (marks[kind + ' ' + k] for k in ('start', 'max attack', 'min hit'))
+        section(start, maximum - start,
+                lambda e, s=maximum - start: {n: blend(guard_local[n], chamber_local[n], ease(e / s)) for n in animated},
+                kind, [(0., 'start'), (marks[kind + ' min attack'] - start, 'min attack'), (maximum - start, 'max attack')])
+        hold, hold_stop = marks[kind + ' hold start'], marks[kind + ' hold stop']
+        holds.append((hold, hold_stop))
+        section(hold, hold_stop - hold, lambda e: chamber_local, kind + ' hold',
+                [(0., 'start'), (0., 'loop start'), (hold_stop - hold, 'loop stop'), (hold_stop - hold, 'stop')])
+        jab = jab_for(AIM[kind])
+        section(release, total, lambda e, jab=jab: jab(e + SETTLE),
+                kind, [(0., 'min hit'), (0., 'plant'), (hit2 - chamber, 'hit'),
                        (hit2 - chamber + .035, 'weight forward'), (hit2 - chamber + .07, 'settle end'),
                        (drive + .1, 'chain')] +
-            [(t, size + ' follow ' + edge) for t, edge in ((hit2 - chamber + .001, 'start'), (total, 'stop'))
-             for size in ('small', 'medium', 'large')])
+                [(t, size + ' follow ' + edge) for t, edge in ((hit2 - chamber + .001, 'start'), (total, 'stop'))
+                 for size in ('small', 'medium', 'large')])
 
     # Sample and merge: replace keys inside every authored interval.
     samples = {}
@@ -167,16 +206,17 @@ def build(arms, body=None):
             field.keys = merged
         controller.stop_time = max(controller.stop_time, cursor)
 
-    replaced = ('fasta ', 'fastb ', 'fastc ', 'fastd ', 'fastend', 'fastloopa ', 'thrust ')
+    replaced = ('fasta ', 'fastb ', 'fastc ', 'fastd ', 'fastend', 'fastloopa ', 'thrust ', 'neutral ')
     kept = []
     for t, label in text.keys:
         lines = [l for l in label.splitlines()
                  if not l.removeprefix('weapononehand: ').startswith(replaced)
-                 and not (hold <= t <= hold_stop and l in ('weapononehand: loop start', 'weapononehand: loop stop'))]
+                 and not (any(h <= t <= e for h, e in holds)
+                          and l in ('weapononehand: loop start', 'weapononehand: loop stop'))]
         if lines:
             kept.append((float(t), '\r\n'.join(lines)))
-    kept += labels + [(hold, 'weapononehand: loop start'), (hold_stop, 'weapononehand: loop stop'),
-                      (0., 'weapononehand: brutal spear grip')]
+    kept += labels + [(t, 'weapononehand: loop ' + edge) for h, e in holds for t, edge in ((h, 'start'), (e, 'stop'))]
+    kept.append((0., 'weapononehand: brutal spear grip'))
     kept.sort(key=lambda p: p[0])
     text.keys = np.array(kept, dtype=text.keys.dtype)
     stream.save(target / source.name)
@@ -215,7 +255,7 @@ def build(arms, body=None):
     for path in sorted(target.iterdir()):
         manifest['outputs'][path.relative_to(arms).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
     manifest['spear'] = {'base': 'brutal_fp_staff', 'jab': 'dm staff charged attack, second jab',
-                         'chamber': JAB_CHAMBER, 'end': JAB_END, 'settle': SETTLE, 'return': RETURN}
+                         'chamber': JAB_CHAMBER, 'end': JAB_END, 'settle': SETTLE, 'return': RETURN, 'aim': AIM}
     manifest_path.write_text(json.dumps(manifest, indent=1) + '\n')
 
 
