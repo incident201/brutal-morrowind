@@ -1956,13 +1956,28 @@ namespace MWWorld
         return mPhysics && mPhysics->canHoldObject(ptr);
     }
 
-    bool World::holdObject(const Ptr& ptr, const Ptr& holder, MWPhysics::HeldObjectInfo* info)
+    std::pair<Ptr, unsigned> World::findDetachedGrabFragment(const Ptr& player,
+        const osg::Vec3f& from, const osg::Vec3f& to) const
+    {
+        if (!mPhysics || player != mPlayer->getPlayer() || (to - from).length2() > 156.f * 156.f)
+            return {};
+        return mPhysics->findDetachedGrabFragment(player, from, to);
+    }
+
+    bool World::holdObject(const Ptr& ptr, const Ptr& holder, MWPhysics::HeldObjectInfo* info, unsigned fragment)
     {
         if (!mPhysics || holder != getPlayerPtr() || mPhysics->hasHeldObject()
-            || !ptr.isInCell() || !ptr.getRefData().getBaseNode() || !ptr.getRefData().isEnabled())
+            || !ptr.isInCell() || !holder.isInCell() || ptr.getCell() != holder.getCell()
+            || !ptr.getRefData().getBaseNode() || !ptr.getRefData().isEnabled())
             return false;
+        if (fragment)
+        {
+            const auto* corpse = dynamic_cast<const MWRender::NpcAnimation*>(getAnimation(ptr));
+            if (!corpse || corpse->getDetachedFragmentNodes(fragment).empty())
+                return false;
+        }
         mHeldThrow.reset();
-        return mPhysics->holdObject(ptr, holder, info);
+        return mPhysics->holdObject(ptr, holder, info, fragment);
     }
 
     bool World::releaseHeldObject(const Ptr& holder, const osg::Vec3f& eyePos, const osg::Vec3f& throwDir,
@@ -2276,12 +2291,13 @@ namespace MWWorld
 
     void World::clearHeldVisual()
     {
-        if (mHeldVisual.valid())
-        {
-            mHeldVisual->setNodeMask(mHeldVisualMask);
-            mHeldVisual->removeCullCallback(mHeldVisualCull);
-        }
-        mHeldVisual = nullptr;
+        for (const auto& [node, mask] : mHeldVisuals)
+            if (node.valid())
+            {
+                node->setNodeMask(mask);
+                node->removeCullCallback(mHeldVisualCull);
+            }
+        mHeldVisuals.clear();
         mHeldVisualCull = nullptr;
     }
 
@@ -2298,8 +2314,13 @@ namespace MWWorld
         auto* animation = dynamic_cast<MWRender::NpcAnimation*>(getAnimation(player));
         const auto* camera = mRendering->getCamera();
         auto* node = item.getRefData().getBaseNode();
+        const unsigned fragment = mPhysics->getHeldFragment();
+        auto* corpse = fragment ? dynamic_cast<MWRender::NpcAnimation*>(getAnimation(item)) : nullptr;
+        const auto nodes = fragment
+            ? (corpse ? corpse->getDetachedFragmentNodes(fragment) : std::vector<osg::Node*>())
+            : std::vector<osg::Node*>{ node };
         if (!node || !item.getRefData().isEnabled() || !item.isInCell() || !player.isInCell()
-            || item.getCell() != player.getCell() || !isFirstPerson())
+            || item.getCell() != player.getCell() || !isFirstPerson() || nodes.empty())
         {
             clearHeldVisual();
             mHeldThrow.reset();
@@ -2318,16 +2339,25 @@ namespace MWWorld
                     sweep, frameStamp, position, rotation))
             {
                 mPhysics->placeHeldObject(position, rotation, mTimeManager->isPaused() ? 0.f : duration);
-                mRendering->moveObject(item, position);
-                mRendering->rotateObject(item, rotation);
-                if (mHeldVisual.get() != node)
+                if (corpse)
+                    mPhysics->poseHeldFragment(*corpse);
+                else
+                {
+                    mRendering->moveObject(item, position);
+                    mRendering->rotateObject(item, rotation);
+                }
+                if (mHeldVisuals.size() != nodes.size()
+                    || !std::equal(nodes.begin(), nodes.end(), mHeldVisuals.begin(),
+                        [](auto* current, const auto& tracked) { return current == tracked.first.get(); }))
                 {
                     clearHeldVisual();
-                    mHeldVisual = node;
-                    mHeldVisualMask = node->getNodeMask();
-                    node->setNodeMask(MWRender::Mask_Player);
                     mHeldVisualCull = animation->makeHeldObjectCullCallback();
-                    node->addCullCallback(mHeldVisualCull);
+                    for (auto* visual : nodes)
+                    {
+                        mHeldVisuals.emplace_back(visual, visual->getNodeMask());
+                        visual->setNodeMask(MWRender::Mask_Player);
+                        visual->addCullCallback(mHeldVisualCull);
+                    }
                 }
             }
         }

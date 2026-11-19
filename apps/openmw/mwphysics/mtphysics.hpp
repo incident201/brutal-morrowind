@@ -163,8 +163,10 @@ namespace MWPhysics
         void disableDynamicObjects(bool props, bool equipment);
         void holdObject(const std::shared_ptr<Object>& object, const std::vector<osg::Vec3f>& vertices,
             float mass, const btCollisionObject* owner);
-        void setHeldPose(const Object& object, const osg::Vec3f& origin, const osg::Quat& rotation);
-        float sweepHeldPose(const Object& object, const osg::Vec3f& from, const osg::Vec3f& to,
+        float holdDetachedFragment(const std::vector<btRigidBody*>& bodies, btTypedConstraint* joint,
+            const btCollisionObject* owner, osg::Vec3f& minimum, osg::Vec3f& maximum);
+        void setHeldPose(const osg::Vec3f& center, const osg::Quat& rotation, const Object* object);
+        float sweepHeldPose(const osg::Vec3f& from, const osg::Vec3f& to,
             const osg::Quat& rotation) const;
         void releaseHeldObject(const btCollisionObject* owner, const osg::Vec3f& linearVelocity,
             const osg::Vec3f& angularVelocity, bool thrown, bool adrenaline, float mass);
@@ -274,7 +276,17 @@ namespace MWPhysics
         {
             btRigidBody* body = nullptr;
             const btCollisionObject* owner = nullptr;
+            struct Part
+            {
+                btRigidBody* body;
+                btTransform relative;
+                float mass;
+            };
+            std::vector<Part> fragment;
+            btTypedConstraint* joint = nullptr;
         };
+        void makeKinematicUnsafe(btRigidBody* body);
+        void beginHoldUnsafe(btRigidBody* body, const btCollisionObject* owner);
         mutable std::mutex mHoldStateMutex;
         HeldState mHeldState;
         struct FlyingObjectState
@@ -285,6 +297,8 @@ namespace MWPhysics
             float mass = 1.f;
             bool adrenaline = false;
             btVector3 prevOrigin{ 0, 0, 0 };
+            btRigidBody* secondBody = nullptr;
+            btVector3 secondPrevOrigin{ 0, 0, 0 };
         };
         std::vector<FlyingObjectState> mFlyingObjects;
         struct ActorIgnoreEntry

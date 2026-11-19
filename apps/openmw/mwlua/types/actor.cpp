@@ -630,6 +630,14 @@ namespace MWLua
             const auto ptr = object.ptrOrEmpty();
             return !ptr.isEmpty() && MWBase::Environment::get().getWorld()->canHoldObject(ptr);
         };
+        actor["findDetachedGrabFragment"] = [](const SelfObject& self, Misc::FiniteVec3f from, Misc::FiniteVec3f to)
+            -> std::tuple<sol::optional<LObject>, unsigned> {
+            const auto [corpse, fragment]
+                = MWBase::Environment::get().getWorld()->findDetachedGrabFragment(self.ptr(), from, to);
+            if (corpse.isEmpty())
+                return { sol::nullopt, 0 };
+            return { LObject(corpse), fragment };
+        };
         actor["setBrutalCarryingObject"] = [context](const SelfObject& self, bool carrying) {
             if (self.ptr() != MWMechanics::getPlayer())
                 throw std::runtime_error("setBrutalCarryingObject requires player SELF");

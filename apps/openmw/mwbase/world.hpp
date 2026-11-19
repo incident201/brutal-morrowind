@@ -339,7 +339,10 @@ namespace MWBase
             float minimumDot, const osg::Vec3f& velocity, bool& headHit, osg::Vec3f& hitPoint, std::size_t& hitPart) = 0;
         virtual void applyObjectImpulse(const MWWorld::Ptr& ptr, const osg::Vec3f& impulse, float mass) = 0;
         virtual bool canHoldObject(const MWWorld::ConstPtr& ptr) const = 0;
-        virtual bool holdObject(const MWWorld::Ptr& ptr, const MWWorld::Ptr& holder, MWPhysics::HeldObjectInfo* info = nullptr) = 0;
+        virtual std::pair<MWWorld::Ptr, unsigned> findDetachedGrabFragment(const MWWorld::Ptr& player,
+            const osg::Vec3f& from, const osg::Vec3f& to) const = 0;
+        virtual bool holdObject(const MWWorld::Ptr& ptr, const MWWorld::Ptr& holder,
+            MWPhysics::HeldObjectInfo* info = nullptr, unsigned fragment = 0) = 0;
         virtual bool releaseHeldObject(const MWWorld::Ptr& holder, const osg::Vec3f& eyePos, const osg::Vec3f& throwDir,
             float throwSpeed, bool adrenaline) = 0;
         virtual MWWorld::Ptr getHeldObject() const = 0;

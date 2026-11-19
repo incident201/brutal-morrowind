@@ -18,6 +18,7 @@ local PICKUP_REACH = 155
 
 local state = 'idle'
 local heldItem, requestedItem = nil, nil
+local heldFragment = nil
 local dualGrip = false
 local savedStance = nil
 local stateTime = 0
@@ -81,17 +82,15 @@ local function restoreStance()
     if prev and prev ~= types.Actor.STANCE.Nothing and not types.Actor.isDead(self) then
         types.Actor.setStance(self, prev)
     end
-    heldItem, requestedItem = nil, nil
+    heldItem, requestedItem, heldFragment = nil, nil, nil
     state, stateTime = 'idle', 0
     throwQueued, releaseFired, throwAdrenaline = false, false, false
 end
 
 local function aimVectors()
-    local eyePos = camera.getPosition()
-    local yaw = camera.getYaw()
-    local pitch = camera.getPitch()
-    local cp = math.cos(pitch)
-    local forward = util.vector3(math.sin(yaw) * cp, math.cos(yaw) * cp, -math.sin(pitch))
+    local viewToWorld = camera.getViewTransform():inverse()
+    local eyePos = viewToWorld:apply(util.vector3(0, 0, 0))
+    local forward = viewToWorld:apply(util.vector3(0, 0, -32)) - eyePos
     return eyePos, forward:normalize()
 end
 
@@ -103,6 +102,10 @@ end
 local function findTarget()
     local eyePos, forward = aimVectors()
     local far = eyePos + forward * PICKUP_REACH
+    if types.Actor.findDetachedGrabFragment then
+        local corpse, fragment = types.Actor.findDetachedGrabFragment(self, eyePos, far)
+        if corpse then return corpse, fragment end
+    end
     local okRender, renderHit = pcall(nearby.castRenderingRay, eyePos, far, { ignore = self })
     if okRender and renderHit and renderHit.hit then
         if canGrab(renderHit.hitObject) then return renderHit.hitObject end
@@ -200,8 +203,9 @@ end
 
 local function startGrab(explicitTarget)
     if state ~= 'idle' or not canAct() then return false end
-    local target = explicitTarget or findTarget()
-    if not canGrab(target) then
+    local target, fragment = explicitTarget, nil
+    if not target then target, fragment = findTarget() end
+    if not fragment and not canGrab(target) then
         stats.rejected = stats.rejected + 1
         return false
     end
@@ -214,7 +218,7 @@ local function startGrab(explicitTarget)
     end
     requestedItem = target
     state, stateTime = 'picking', 0
-    core.sendGlobalEvent('BrutalGrabRequest', { player = self, object = target })
+    core.sendGlobalEvent('BrutalGrabRequest', { player = self, object = target, fragment = fragment })
     return true
 end
 
@@ -284,7 +288,7 @@ local function onUpdate(dt)
             releaseFired = true
             self:sendEvent('BrutalObjectGrabSound', { kind = 'throw', adrenaline = throwAdrenaline })
             if not useDmAnims() then fireRelease(dualGrip and 920 or 1060, throwAdrenaline) end
-            heldItem = nil
+            heldItem, heldFragment = nil, nil
             if (not useDmAnims() or settings.get('firstPersonAnimations') ~= 'darkMessiah')
                 and I.BrutalCameraMotion and I.BrutalCameraMotion.pulse then
                 I.BrutalCameraMotion.pulse(throwAdrenaline and 0.20 or 0.14, 0.07, 0, 0.28)
@@ -336,6 +340,7 @@ return {
                 state = state,
                 active = state ~= 'idle',
                 heldObject = heldItem,
+                heldFragment = heldFragment,
                 dualGrip = dualGrip,
                 savedStance = savedStance,
                 grabs = stats.grabs,
@@ -358,6 +363,7 @@ return {
                 return
             end
             heldItem = data.object
+            heldFragment = data.fragment ~= 0 and data.fragment or nil
             dualGrip = data.dualGrip == true
             stateTime = 0
             stats.grabs = stats.grabs + 1
@@ -384,7 +390,7 @@ return {
     engineHandlers = {
         onUpdate = onUpdate,
         onLoad = function()
-            heldItem, requestedItem, dualGrip, savedStance = nil, nil, false, nil
+            heldItem, requestedItem, heldFragment, dualGrip, savedStance = nil, nil, nil, false, nil
             state, stateTime, useDown, throwQueued, releaseFired, throwAdrenaline = 'idle', 0, false, false, false, false
             cancelAnims()
             if types.Actor.setBrutalCarryingObject then

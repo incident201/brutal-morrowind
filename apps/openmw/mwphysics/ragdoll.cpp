@@ -1093,6 +1093,51 @@ namespace MWPhysics
         return mHeadDetached && part == sHeadPart;
     }
 
+    unsigned Ragdoll::detachedFragment(const btCollisionObject* body) const
+    {
+        const auto found = std::find(mBodies.begin(), mBodies.end(), body);
+        if (found == mBodies.end())
+            return 0;
+        const auto part = std::distance(mBodies.begin(), found);
+        const unsigned limb = LimbSevering::fragment(part, mSeveredLimbsMask);
+        return limb ? 1u << (limb - 1) : (isDetachedHeadPart(part) ? HeadFragment : 0);
+    }
+
+    std::vector<btRigidBody*> Ragdoll::detachedBodies(unsigned fragment) const
+    {
+        std::vector<btRigidBody*> bodies;
+        if (fragment)
+            for (auto* body : mBodies)
+                if (detachedFragment(body) == fragment)
+                    bodies.push_back(body);
+        return bodies;
+    }
+
+    btTypedConstraint* Ragdoll::detachedJoint(unsigned fragment) const
+    {
+        for (auto* joint : mConstraints)
+            if (detachedFragment(&joint->getRigidBodyA()) == fragment
+                && detachedFragment(&joint->getRigidBodyB()) == fragment)
+                return joint;
+        return nullptr;
+    }
+
+    std::vector<std::pair<std::string, osg::Matrixf>> Ragdoll::detachedBonePoses(unsigned fragment) const
+    {
+        const auto bodies = detachedBodies(fragment);
+        const auto transforms = mTaskScheduler->readRigidBodyTransforms(bodies);
+        std::vector<std::pair<std::string, osg::Matrixf>> poses;
+        for (std::size_t i = 0; i < bodies.size(); ++i)
+        {
+            const auto part = std::distance(mBodies.begin(), std::find(mBodies.begin(), mBodies.end(), bodies[i]));
+            const auto& pose = transforms[i];
+            poses.emplace_back(mParts[part]->mBone, mParts[part]->mRenderFromBody
+                * osg::Matrixf::rotate(Misc::Convert::toOsg(pose.getRotation()))
+                * osg::Matrixf::translate(Misc::Convert::toOsg(pose.getOrigin())));
+        }
+        return poses;
+    }
+
     bool Ragdoll::applyKick(std::size_t part, const osg::Vec3f& velocity, const osg::Vec3f& point)
     {
         if (!mRegistered || part >= mParts.size()) return false;

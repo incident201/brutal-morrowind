@@ -922,24 +922,27 @@ namespace MWPhysics
         constexpr int sGrabHeldMask = CollisionType_World | CollisionType_Dynamic | CollisionType_Door
             | CollisionType_HeightMap | CollisionType_Projectile;
         constexpr int sGrabNormalMask = sGrabHeldMask | CollisionType_Actor;
+        constexpr int sRagdollMask = CollisionType_World | CollisionType_Door | CollisionType_HeightMap
+            | CollisionType_Dynamic;
 
-        void setDynamicBodyCollisionMask(btDiscreteDynamicsWorld* world, btRigidBody* body, int mask)
+        void setGrabCollisionFilter(btDiscreteDynamicsWorld* world, btRigidBody* body, int group, int mask)
         {
             if (!world || !body)
                 return;
             if (body->getBroadphaseProxy())
                 world->removeRigidBody(body);
-            world->addRigidBody(body, sGrabHeldGroup, mask);
+            world->addRigidBody(body, group, mask);
         }
 
-        void restoreGrabDynamics(btDiscreteDynamicsWorld* world, btRigidBody* body, float mass)
+        void restoreGrabDynamics(btDiscreteDynamicsWorld* world, btRigidBody* body, float mass, bool ragdoll)
         {
             btVector3 inertia(0, 0, 0);
             body->getCollisionShape()->calculateLocalInertia(mass, inertia);
             body->setMassProps(mass, inertia);
             body->updateInertiaTensor();
             body->setCollisionFlags(body->getCollisionFlags() & ~btCollisionObject::CF_KINEMATIC_OBJECT);
-            setDynamicBodyCollisionMask(world, body, sGrabHeldMask);
+            setGrabCollisionFilter(world, body, ragdoll ? CollisionType_Dynamic : sGrabHeldGroup,
+                ragdoll ? sRagdollMask : sGrabHeldMask);
         }
 
         struct FlyingActorContactCallback final : btCollisionWorld::ContactResultCallback
@@ -1021,26 +1024,8 @@ namespace MWPhysics
             return;
         MaybeExclusiveLock lock(mCollisionWorldMutex, mLockingPolicy);
         auto* world = static_cast<btDiscreteDynamicsWorld*>(mCollisionWorld);
-        if (!world)
+        if (!world || hasHeldObject())
             return;
-
-        btRigidBody* oldHeldBody = nullptr;
-        const btCollisionObject* oldHeldOwner = nullptr;
-        {
-            std::lock_guard holdLock(mHoldStateMutex);
-            oldHeldBody = mHeldState.body;
-            oldHeldOwner = mHeldState.owner;
-            mHeldState = {};
-        }
-        if (oldHeldBody && oldHeldBody != object->getCollisionObject())
-        {
-            const auto* oldObject = static_cast<const Object*>(oldHeldBody->getUserPointer());
-            restoreGrabDynamics(world, oldHeldBody, oldObject->getDynamicMass());
-            oldHeldBody->forceActivationState(ACTIVE_TAG);
-            oldHeldBody->setGravity(world->getGravity());
-            oldHeldBody->setDamping(.05f, .15f);
-            mActorIgnoreTimers[oldHeldBody] = ActorIgnoreEntry{ .3f, oldHeldOwner };
-        }
 
         if (object->commitPositionChange())
             resetDynamicObjectHistory(*object);
@@ -1056,21 +1041,8 @@ namespace MWPhysics
         if (!body)
             return;
 
-        mActorIgnoreTimers.erase(body);
-        std::erase_if(mFlyingObjects, [body](const FlyingObjectState& f) { return f.body == body; });
         mCollisionObjects.insert(body);
-        body->setMassProps(0, btVector3(0, 0, 0));
-        body->setCollisionFlags((body->getCollisionFlags() & ~btCollisionObject::CF_STATIC_OBJECT)
-            | btCollisionObject::CF_KINEMATIC_OBJECT);
-        setDynamicBodyCollisionMask(world, body, 0);
-        body->setGravity(btVector3(0, 0, 0));
-        body->setDamping(.25f, .35f);
-        body->setLinearVelocity(btVector3(0, 0, 0));
-        body->setAngularVelocity(btVector3(0, 0, 0));
-        body->clearForces();
-        body->forceActivationState(DISABLE_DEACTIVATION);
-        if (owner)
-            body->setIgnoreCollisionCheck(owner, true);
+        beginHoldUnsafe(body, owner);
 
         const bool tracked = std::any_of(mDynamicObjects.begin(), mDynamicObjects.end(), [&](const auto& existing) {
             return !existing.owner_before(object) && !object.owner_before(existing);
@@ -1079,45 +1051,129 @@ namespace MWPhysics
             mDynamicObjects.push_back(object);
         mDynamicTransforms.insert_or_assign(body, DynamicTransformHistory(body->getWorldTransform()));
         resetDynamicObjectHistory(*object);
-        {
-            std::lock_guard holdLock(mHoldStateMutex);
-            mHeldState = { body, owner };
-        }
     }
 
-    void PhysicsTaskScheduler::setHeldPose(const Object& object, const osg::Vec3f& origin, const osg::Quat& rotation)
+    float PhysicsTaskScheduler::holdDetachedFragment(const std::vector<btRigidBody*>& bodies, btTypedConstraint* joint,
+        const btCollisionObject* owner, osg::Vec3f& minimum, osg::Vec3f& maximum)
+    {
+        MaybeExclusiveLock lock(mCollisionWorldMutex, mLockingPolicy);
+        if (hasHeldObject() || bodies.empty()
+            || std::any_of(bodies.begin(), bodies.end(), [&](const auto* body) {
+                return !mRagdollTransforms.contains(body) || body->getInvMass() <= 0.f;
+            }))
+            return 0.f;
+
+        const auto rootInverse = bodies.front()->getWorldTransform().inverse();
+        std::vector<HeldState::Part> fragment;
+        btVector3 lower(BT_LARGE_FLOAT, BT_LARGE_FLOAT, BT_LARGE_FLOAT), upper = -lower;
+        float mass = 0.f;
+        for (auto* body : bodies)
+        {
+            const float partMass = 1.f / body->getInvMass();
+            const auto relative = rootInverse * body->getWorldTransform();
+            btVector3 lo, hi;
+            body->getCollisionShape()->getAabb(relative, lo, hi);
+            lower.setMin(lo);
+            upper.setMax(hi);
+            fragment.push_back({ body, relative, partMass });
+            mass += partMass;
+        }
+        minimum = Misc::Convert::toOsg(lower);
+        maximum = Misc::Convert::toOsg(upper);
+
+        // The elbow's current bend is kept as part of the grip until release.
+        if (joint)
+            static_cast<btDiscreteDynamicsWorld*>(mCollisionWorld)->removeConstraint(joint);
+        for (auto* body : bodies)
+            makeKinematicUnsafe(body);
+        std::lock_guard holdLock(mHoldStateMutex);
+        mHeldState = { bodies.front(), owner, std::move(fragment), joint };
+        return mass;
+    }
+
+    void PhysicsTaskScheduler::makeKinematicUnsafe(btRigidBody* body)
+    {
+        auto* world = static_cast<btDiscreteDynamicsWorld*>(mCollisionWorld);
+        if (const auto timer = mActorIgnoreTimers.find(body); timer != mActorIgnoreTimers.end())
+        {
+            if (timer->second.owner && mCollisionObjects.contains(timer->second.owner))
+                body->setIgnoreCollisionCheck(timer->second.owner, false);
+            mActorIgnoreTimers.erase(timer);
+        }
+        std::erase_if(mFlyingObjects, [body](const FlyingObjectState& f) {
+            return f.body == body || f.secondBody == body;
+        });
+        body->setMassProps(0, btVector3(0, 0, 0));
+        body->setCollisionFlags((body->getCollisionFlags() & ~btCollisionObject::CF_STATIC_OBJECT)
+            | btCollisionObject::CF_KINEMATIC_OBJECT);
+        setGrabCollisionFilter(world, body, mRagdollTransforms.contains(body) ? CollisionType_Dynamic : sGrabHeldGroup, 0);
+        body->setGravity(btVector3(0, 0, 0));
+        body->setLinearVelocity(btVector3(0, 0, 0));
+        body->setAngularVelocity(btVector3(0, 0, 0));
+        body->clearForces();
+        body->forceActivationState(DISABLE_DEACTIVATION);
+    }
+
+    void PhysicsTaskScheduler::beginHoldUnsafe(btRigidBody* body, const btCollisionObject* owner)
+    {
+        makeKinematicUnsafe(body);
+        if (owner)
+            body->setIgnoreCollisionCheck(owner, true);
+        std::lock_guard holdLock(mHoldStateMutex);
+        mHeldState = { body, owner, {}, nullptr };
+    }
+
+    void PhysicsTaskScheduler::setHeldPose(const osg::Vec3f& center, const osg::Quat& rotation, const Object* object)
     {
         MaybeExclusiveLock lock(mCollisionWorldMutex, mLockingPolicy);
         std::lock_guard holdLock(mHoldStateMutex);
         auto* body = mHeldState.body;
-        if (!body || body != object.getCollisionObject())
+        if (!body)
             return;
-        const btTransform pose(Misc::Convert::toBullet(rotation),
-            Misc::Convert::toBullet(origin) + object.getDynamicCenterWorldOffset(rotation));
-        body->setCenterOfMassTransform(pose);
-        body->setInterpolationWorldTransform(pose);
-        body->setLinearVelocity(btVector3(0, 0, 0));
-        body->setAngularVelocity(btVector3(0, 0, 0));
-        mCollisionWorld->updateSingleAabb(body);
-        resetDynamicObjectHistory(object);
+        const btTransform pose(Misc::Convert::toBullet(rotation), Misc::Convert::toBullet(center));
+        const auto place = [&](btRigidBody* part, const btTransform& target) {
+            part->setCenterOfMassTransform(target);
+            part->setInterpolationWorldTransform(target);
+            part->setLinearVelocity(btVector3(0, 0, 0));
+            part->setAngularVelocity(btVector3(0, 0, 0));
+            mCollisionWorld->updateSingleAabb(part);
+        };
+        if (object)
+        {
+            place(body, pose);
+            resetDynamicObjectHistory(*object);
+        }
+        for (const auto& part : mHeldState.fragment)
+        {
+            const btTransform target = pose * part.relative;
+            place(part.body, target);
+            mRagdollTransforms.at(part.body) = { target, target };
+        }
     }
 
-    float PhysicsTaskScheduler::sweepHeldPose(const Object& object, const osg::Vec3f& from, const osg::Vec3f& to,
+    float PhysicsTaskScheduler::sweepHeldPose(const osg::Vec3f& from, const osg::Vec3f& to,
         const osg::Quat& rotation) const
     {
         MaybeSharedLock lock(mCollisionWorldMutex, mLockingPolicy);
-        const auto* shape = object.getCollisionObject()->getCollisionShape();
-        if (!shape->isConvex())
+        std::lock_guard holdLock(mHoldStateMutex);
+        if (!mHeldState.body)
             return 1.f;
-        const auto offset = object.getDynamicCenterWorldOffset(rotation);
-        const auto start = Misc::Convert::toBullet(from) + offset;
-        const auto end = Misc::Convert::toBullet(to) + offset;
+        const auto start = Misc::Convert::toBullet(from);
+        const auto end = Misc::Convert::toBullet(to);
         const auto orientation = Misc::Convert::toBullet(rotation);
         btCollisionWorld::ClosestConvexResultCallback hit(start, end);
         hit.m_collisionFilterGroup = CollisionType_Dynamic;
         hit.m_collisionFilterMask = CollisionType_World | CollisionType_Door | CollisionType_HeightMap;
-        mCollisionWorld->convexSweepTest(static_cast<const btConvexShape*>(shape), btTransform(orientation, start),
-            btTransform(orientation, end), hit);
+        const auto sweep = [&](const btRigidBody* body, const btTransform& relative) {
+            const auto* shape = body->getCollisionShape();
+            if (shape->isConvex())
+                mCollisionWorld->convexSweepTest(static_cast<const btConvexShape*>(shape),
+                    btTransform(orientation, start) * relative, btTransform(orientation, end) * relative, hit);
+        };
+        if (mHeldState.fragment.empty())
+            sweep(mHeldState.body, btTransform::getIdentity());
+        for (const auto& part : mHeldState.fragment)
+            sweep(part.body, part.relative);
         return hit.m_closestHitFraction;
     }
 
@@ -1126,34 +1182,50 @@ namespace MWPhysics
     {
         MaybeExclusiveLock lock(mCollisionWorldMutex, mLockingPolicy);
         auto* world = static_cast<btDiscreteDynamicsWorld*>(mCollisionWorld);
-        btRigidBody* body = nullptr;
-        const btCollisionObject* heldOwner = nullptr;
+        HeldState held;
         {
             std::lock_guard holdLock(mHoldStateMutex);
-            body = mHeldState.body;
-            heldOwner = mHeldState.owner ? mHeldState.owner : owner;
-            mHeldState = {};
+            held = std::exchange(mHeldState, {});
         }
+        auto* body = held.body;
+        const auto* heldOwner = held.owner ? held.owner : owner;
         if (!world || !body || !body->isInWorld())
             return;
-        restoreGrabDynamics(world, body, mass);
-        body->forceActivationState(ACTIVE_TAG);
-        body->activate(true);
-        body->setGravity(world->getGravity());
-        body->setDamping(.05f, .15f);
-        body->setLinearVelocity(Misc::Convert::toBullet(linearVelocity));
-        body->setInterpolationLinearVelocity(Misc::Convert::toBullet(linearVelocity));
-        body->setAngularVelocity(Misc::Convert::toBullet(angularVelocity));
-        body->setInterpolationAngularVelocity(Misc::Convert::toBullet(angularVelocity));
-        invalidateReleasedPairs(*mCollisionWorld, body);
+        const auto angular = Misc::Convert::toBullet(angularVelocity);
+        const auto root = body->getWorldTransform().getOrigin();
+        const auto launch = [&](btRigidBody* part, float partMass, bool ragdoll) {
+            restoreGrabDynamics(world, part, partMass, ragdoll);
+            part->forceActivationState(ACTIVE_TAG);
+            part->setGravity(world->getGravity());
+            if (!ragdoll)
+                part->setDamping(.05f, .15f);
+            const auto linear = Misc::Convert::toBullet(linearVelocity)
+                + angular.cross(part->getWorldTransform().getOrigin() - root);
+            part->setLinearVelocity(linear);
+            part->setInterpolationLinearVelocity(linear);
+            part->setAngularVelocity(angular);
+            part->setInterpolationAngularVelocity(angular);
+            invalidateReleasedPairs(*mCollisionWorld, part);
+        };
+        if (held.fragment.empty())
+            launch(body, mass, false);
+        for (const auto& part : held.fragment)
+            launch(part.body, part.mass, true);
+        if (held.joint)
+            world->addConstraint(held.joint, false);
+
         if (thrown)
         {
-            std::erase_if(mFlyingObjects, [body](const FlyingObjectState& f) { return f.body == body; });
-            mFlyingObjects.push_back(FlyingObjectState{
-                body, heldOwner, 0.f, mass, adrenaline, body->getWorldTransform().getOrigin() });
+            FlyingObjectState flying{ body, heldOwner, 0.f, mass, adrenaline, root };
+            if (held.fragment.size() > 1)
+            {
+                flying.secondBody = held.fragment[1].body;
+                flying.secondPrevOrigin = flying.secondBody->getWorldTransform().getOrigin();
+            }
+            mFlyingObjects.push_back(flying);
             mActorIgnoreTimers[body] = ActorIgnoreEntry{ 4.2f, heldOwner };
         }
-        else
+        else if (held.fragment.empty())
         {
             mActorIgnoreTimers[body] = ActorIgnoreEntry{ .35f, heldOwner };
         }
@@ -1201,7 +1273,7 @@ namespace MWPhysics
         std::erase_if(mFlyingObjects, [collisionObject](FlyingObjectState& f) {
             if (f.owner == collisionObject)
                 f.owner = nullptr;
-            return f.body == collisionObject;
+            return f.body == collisionObject || f.secondBody == collisionObject;
         });
         if (auto* body = btRigidBody::upcast(collisionObject))
         {
@@ -1237,9 +1309,12 @@ namespace MWPhysics
                     [body](const FlyingObjectState& f) { return f.body == body; });
                 if (!stillFlying && world && body && body->isInWorld())
                 {
-                    if (timerIt->second.owner && mCollisionObjects.contains(timerIt->second.owner))
-                        body->setIgnoreCollisionCheck(timerIt->second.owner, false);
-                    setDynamicBodyCollisionMask(world, body, sGrabNormalMask);
+                    if (!mRagdollTransforms.contains(body))
+                    {
+                        if (timerIt->second.owner && mCollisionObjects.contains(timerIt->second.owner))
+                            body->setIgnoreCollisionCheck(timerIt->second.owner, false);
+                        setGrabCollisionFilter(world, body, sGrabHeldGroup, sGrabNormalMask);
+                    }
                     invalidateReleasedPairs(*mCollisionWorld, body);
                     body->activate(true);
                 }
@@ -1267,40 +1342,40 @@ namespace MWPhysics
             btVector3 hitPos = curOrigin;
             btVector3 hitNormal(0, 0, 1);
 
-            if ((curOrigin - it->prevOrigin).length2() > btScalar(1e-4))
-            {
-                const btCollisionShape* rawShape = body->getCollisionShape();
-                btTransform fromT(curTransform.getRotation(), it->prevOrigin);
-                btTransform toT = curTransform;
-                FlyingActorSweepCallback sweep(it->prevOrigin, curOrigin, body, it->owner);
-                if (rawShape && rawShape->isConvex())
+            const auto findContact = [&](btRigidBody* part, const btVector3& previous) {
+                const btTransform current = part->getWorldTransform();
+                if ((current.getOrigin() - previous).length2() > btScalar(1e-4))
                 {
-                    mCollisionWorld->convexSweepTest(static_cast<const btConvexShape*>(rawShape), fromT, toT, sweep);
+                    const btCollisionShape* rawShape = part->getCollisionShape();
+                    const btTransform from(current.getRotation(), previous);
+                    FlyingActorSweepCallback sweep(previous, current.getOrigin(), part, it->owner);
+                    if (rawShape && rawShape->isConvex())
+                        mCollisionWorld->convexSweepTest(static_cast<const btConvexShape*>(rawShape), from, current, sweep);
+                    else
+                    {
+                        btBoxShape fallbackBox(btVector3(4.f, 4.f, 4.f));
+                        mCollisionWorld->convexSweepTest(&fallbackBox, from, current, sweep);
+                    }
+                    if (sweep.hasHit())
+                    {
+                        hitActor = sweep.m_hitCollisionObject;
+                        hitPos = sweep.m_hitPointWorld;
+                        hitNormal = sweep.m_hitNormalWorld;
+                        return;
+                    }
                 }
-                else
-                {
-                    btBoxShape fallbackBox(btVector3(4.f, 4.f, 4.f));
-                    mCollisionWorld->convexSweepTest(&fallbackBox, fromT, toT, sweep);
-                }
-                if (sweep.hasHit())
-                {
-                    hitActor = sweep.m_hitCollisionObject;
-                    hitPos = sweep.m_hitPointWorld;
-                    hitNormal = sweep.m_hitNormalWorld;
-                }
-            }
-
-            if (!hitActor)
-            {
-                FlyingActorContactCallback contact(body, it->owner);
-                ContactTestWrapper::contactTest(mCollisionWorld, body, contact);
+                FlyingActorContactCallback contact(part, it->owner);
+                ContactTestWrapper::contactTest(mCollisionWorld, part, contact);
                 if (contact.mHitActor)
                 {
                     hitActor = contact.mHitActor;
                     hitPos = contact.mHitPoint;
                     hitNormal = contact.mHitNormal;
                 }
-            }
+            };
+            findContact(body, it->prevOrigin);
+            if (!hitActor && it->secondBody)
+                findContact(it->secondBody, it->secondPrevOrigin);
 
             if (hitActor)
             {
@@ -1316,12 +1391,19 @@ namespace MWPhysics
                 btVector3 bounce = velocity * btScalar(0.02) + hitNormal * btScalar(28.f) + btVector3(0, 0, 18.f);
                 body->setLinearVelocity(bounce);
                 body->setAngularVelocity(body->getAngularVelocity() * btScalar(0.25) + btVector3(1.5f, -1.2f, 1.f));
+                if (it->secondBody)
+                {
+                    it->secondBody->setLinearVelocity(bounce);
+                    it->secondBody->setAngularVelocity(body->getAngularVelocity());
+                }
                 mActorIgnoreTimers[body] = ActorIgnoreEntry{ .25f, it->owner };
                 it = mFlyingObjects.erase(it);
                 continue;
             }
 
             it->prevOrigin = curOrigin;
+            if (it->secondBody)
+                it->secondPrevOrigin = it->secondBody->getWorldTransform().getOrigin();
             if (it->age > 4.0f || (it->age > .18f && speed < 65.f) || !body->isActive())
             {
                 mActorIgnoreTimers[body] = ActorIgnoreEntry{ .1f, it->owner };
@@ -1742,8 +1824,7 @@ namespace MWPhysics
         mCollisionObjects.reserve(mCollisionObjects.size() + bodies.size());
         for (auto* body : bodies)
         {
-            world->addRigidBody(body, CollisionType_Dynamic,
-                CollisionType_World | CollisionType_Door | CollisionType_HeightMap | CollisionType_Dynamic);
+            world->addRigidBody(body, CollisionType_Dynamic, sRagdollMask);
             mCollisionObjects.insert(body);
             const auto transform = body->getWorldTransform();
             mRagdollTransforms.emplace(body, RagdollTransformHistory{ transform, transform });
@@ -1774,12 +1855,17 @@ namespace MWPhysics
                 world->getSolverInfo().m_solverMode = mRagdollBaselineSolverMode;
             }
         }
-        for (auto* constraint : constraints)
-            world->removeConstraint(constraint);
+        {
+            std::lock_guard holdLock(mHoldStateMutex);
+            for (auto* constraint : constraints)
+                if (constraint != mHeldState.joint)
+                    world->removeConstraint(constraint);
+        }
         for (auto* body : bodies)
         {
             forgetSuperKickObject(body);
             clearReleasedGripPairs(body);
+            clearObjectTrackingUnsafe(body);
             mRagdollTransforms.erase(body);
             mCollisionObjects.erase(body);
             world->removeRigidBody(body);

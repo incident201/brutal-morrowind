@@ -475,6 +475,7 @@ namespace MWRender
             const osg::Quat& view, const std::function<float(const osg::Vec3f&, const osg::Vec3f&, const osg::Quat&)>& sweep,
             const osg::FrameStamp& frameStamp, osg::Vec3f& position, osg::Quat& rotation);
         osg::ref_ptr<osg::Callback> makeHeldObjectCullCallback() const;
+        std::vector<osg::Node*> getDetachedFragmentNodes(unsigned fragment) const;
         bool sampleSwordWallContact(float duration, const osg::FrameStamp& frameStamp);
         bool consumeSwordWallContact(std::uint64_t swing, std::string& key);
         const SwordWallContact& getSwordWallContactForAudit() const { return mSwordWallContact; }

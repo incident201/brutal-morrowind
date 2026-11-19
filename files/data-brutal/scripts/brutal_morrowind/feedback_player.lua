@@ -98,7 +98,9 @@ return {interfaceName='BrutalPlayerFeedback',interface={count=function(category)
         if type(e)~='table' then return end
         local pitch = math.random(92,108)/100
         cue3d('object_hit_flesh', e.target or e.item, e.adrenaline and 0.80 or 0.65, pitch)
-        cue3d(classifyObjectMaterial(e.item), e.target or e.item, 0.45, pitch)
+        if not e.item or not types.Actor.objectIsInstance(e.item) then
+            cue3d(classifyObjectMaterial(e.item), e.target or e.item, 0.45, pitch)
+        end
     end,
     BrutalDynamicObjectImpact = function(e)
         if type(e)~='table' or not e.item or not e.item:isValid() then return end

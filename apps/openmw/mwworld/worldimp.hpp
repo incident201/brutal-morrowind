@@ -114,9 +114,8 @@ namespace MWWorld
             float wait = 0.f;
         };
         std::optional<HeldThrow> mHeldThrow;
-        osg::observer_ptr<osg::Node> mHeldVisual;
+        std::vector<std::pair<osg::observer_ptr<osg::Node>, unsigned>> mHeldVisuals;
         osg::ref_ptr<osg::Callback> mHeldVisualCull;
-        unsigned mHeldVisualMask = 0;
         void clearHeldVisual();
         std::unique_ptr<DetourNavigator::Navigator> mNavigator;
         std::unique_ptr<MWRender::RenderingManager> mRendering;
@@ -436,7 +435,10 @@ namespace MWWorld
             const osg::Vec3f& velocity, bool& headHit, osg::Vec3f& hitPoint, std::size_t& hitPart) override;
         void applyObjectImpulse(const Ptr& ptr, const osg::Vec3f& impulse, float mass) override;
         bool canHoldObject(const ConstPtr& ptr) const override;
-        bool holdObject(const Ptr& ptr, const Ptr& holder, MWPhysics::HeldObjectInfo* info = nullptr) override;
+        std::pair<Ptr, unsigned> findDetachedGrabFragment(const Ptr& player,
+            const osg::Vec3f& from, const osg::Vec3f& to) const override;
+        bool holdObject(const Ptr& ptr, const Ptr& holder, MWPhysics::HeldObjectInfo* info = nullptr,
+            unsigned fragment = 0) override;
         bool releaseHeldObject(const Ptr& holder, const osg::Vec3f& eyePos, const osg::Vec3f& throwDir,
             float throwSpeed, bool adrenaline) override;
         Ptr getHeldObject() const override;

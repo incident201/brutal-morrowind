@@ -35,7 +35,7 @@ namespace MWRender
             normal.normalize();
             // Rest a broad object in the palm. A narrow handle crosses the
             // base of the fingers so the fingers can close over its far side.
-            return { knuckles * (shaft ? .99f : .80f) + normal * .55f, forward, normal,
+            return { knuckles * (shaft ? 1.09f : .80f) + normal * (shaft ? .85f : .55f), forward, normal,
                 std::max(2.f, (finger(4) - finger(1)).length()) };
         }
 
@@ -46,14 +46,17 @@ namespace MWRender
             return result;
         }
 
-        struct ShaftClearance
+        struct GripClearance
         {
             osg::Vec3f center, axis;
             float radius = 0.f;
+            bool plane = false;
 
             float overlap(const osg::Vec3f& start, const osg::Vec3f& along, float length) const
             {
                 const auto delta = start - center;
+                if (plane)
+                    return std::max(0.f, delta * axis + std::max(0.f, along * axis) * length + .35f);
                 const auto radial = delta - axis * (delta * axis);
                 const auto travel = along - axis * (along * axis);
                 const float closest = std::clamp(-float(radial * travel) / std::max(.001f, travel.length2()), 0.f, length);
@@ -63,7 +66,7 @@ namespace MWRender
 
         template <class Apply>
         void curlGripFingers(const Animation::NodeMap& nodes, const char* prefix, const osg::Matrixf& hand,
-            const Palm& palm, float curl, const ShaftClearance& shaft, const Apply& apply)
+            const Palm& palm, float curl, const GripClearance& clearance, const Apply& apply)
         {
             const auto forward = direction(palm.forward, hand);
             const auto normal = direction(palm.normal, hand);
@@ -88,7 +91,7 @@ namespace MWRender
                     const float target = osg::DegreesToRadians(open[joint] + (closed[joint] - open[joint]) * curl);
                     const auto ideal = std::clamp(std::remainder(target - current, float(2 * osg::PI)), -.9f, .9f);
                     float delta = ideal;
-                    if (shaft.radius > 0.f)
+                    if (clearance.radius > 0.f || clearance.plane)
                     {
                         const float length = osg::Matrixf::transform3x3(segment, world).length() + .55f;
                         float bestScore = std::numeric_limits<float>::infinity();
@@ -97,7 +100,7 @@ namespace MWRender
                             const float trial = std::clamp(ideal + float(step) * .12f, -.9f, .9f);
                             const auto along = osg::Quat(trial, lateral) * axis;
                             const float score = std::abs(trial - ideal)
-                                + 5.f * shaft.overlap(world.getTrans(), along, length);
+                                + 5.f * clearance.overlap(world.getTrans(), along, length);
                             if (score < bestScore)
                             {
                                 bestScore = score;
@@ -117,7 +120,7 @@ namespace MWRender
 
         template <class Apply>
         void closeGripThumb(const Animation::NodeMap& nodes, const char* prefix, const osg::Matrixf& hand,
-            const Palm& palm, float thickness, const ShaftClearance& shaft, const Apply& apply)
+            const Palm& palm, float thickness, const GripClearance& clearance, const Apply& apply)
         {
             const auto normal = direction(palm.normal, hand);
             const auto along = direction(palm.forward, hand);
@@ -127,8 +130,12 @@ namespace MWRender
                 return;
             const auto side = (osg::Vec3f(thumb->second->getMatrix().getTrans()) - palm.center)
                     * (palm.forward ^ palm.normal) > 0.f ? 1.f : -1.f;
-            const osg::Vec3f target = palm.center * hand + normal * (thickness * 1.56f + .45f)
-                + along * (thickness * .74f) + axis * (side * 1.45f);
+            const auto knuckles = palm.center * hand;
+            const auto shaftAtHand
+                = clearance.center + clearance.axis * ((knuckles - clearance.center) * clearance.axis);
+            const osg::Vec3f target = (clearance.plane ? knuckles + along * 2.f + normal * .45f
+                : shaftAtHand + normal * (thickness * .56f + .1f) + along * (thickness * .74f))
+                + axis * (side * 1.45f);
             osg::Matrixf parent = hand;
             const std::array<std::string, 3> names{ std::string(prefix) + "0",
                 std::string(prefix) + "01", std::string(prefix) + "02" };
@@ -158,7 +165,7 @@ namespace MWRender
                     osg::Quat sample;
                     sample.slerp(trial, osg::Quat(), alignment);
                     const float score = (ideal - trial) * angle
-                        + 5.f * shaft.overlap(world.getTrans(), sample * axisTurn, length);
+                        + 5.f * clearance.overlap(world.getTrans(), sample * axisTurn, length);
                     if (score < bestScore)
                     {
                         bestScore = score;
@@ -239,6 +246,8 @@ namespace MWRender
         const float holdWeight = throwing ? 0.f : 1.f - raiseWeight * raiseWeight * (3.f - 2.f * raiseWeight);
         const auto& nodes = getNodeMap();
         const bool wrapsShaft = grip.narrowEnd || grip.shaft;
+        const float shaftOffset = grip.shaft ? grip.thickness + 1.62f : 0.f;
+        const float shieldOffset = grip.shield ? grip.shieldDepth + 1.65f : 0.f;
         const std::array<Palm, 2> palms{
             palmGeometry(nodes, "Bip01 R Finger", wrapsShaft), palmGeometry(nodes, "Bip01 L Finger", wrapsShaft) };
         const auto rightHand = getBoneWorldMatrix("Bip01 R Hand");
@@ -279,7 +288,7 @@ namespace MWRender
             const int widthAxis = 3 - grip.lengthAxis - grip.depthAxis;
             center = (right + left) * .5f;
             center += (ahead * 12.f - up * (7.f + grip.half[widthAxis] * .24f)) * holdWeight;
-            position = center + depth * (grip.shaft ? grip.thickness * .80f : 0.f) - rotation * grip.contact;
+            position = center + depth * (shaftOffset + shieldOffset) - rotation * grip.contact;
         }
         else
         {
@@ -314,7 +323,9 @@ namespace MWRender
             {
                 const auto out = lateral * (i == 0 ? 1.f : -1.f);
                 osg::Quat align, turn;
-                align.makeRotate(direction(palms[i].normal, original[i]), grip.shaft ? depth : -out);
+                auto support = grip.shaft ? depth : (grip.shield ? depth - out * .55f : -out);
+                support.normalize();
+                align.makeRotate(direction(palms[i].normal, original[i]), support);
                 turn.slerp(.85f, osg::Quat(), align);
                 goals[i] = original[i] * osg::Matrixf::rotate(turn);
                 goals[i].setTrans(center + out * grip.span
@@ -369,36 +380,68 @@ namespace MWRender
         {
             for (unsigned joint = 0; joint < arms[i].bones.size(); ++joint)
                 setPose(arms[i].bones[joint], arms[i].result[joint]);
-            const osg::Matrixf hand = osg::computeLocalToWorld(arms[i].bones[2]->getParentalNodePaths().front());
-            solved[i] = palms[i].center * hand;
-            const float relativeThickness = grip.thickness / palms[i].width;
-            const float curl = grip.dual && !grip.shaft ? .05f : wrapsShaft
-                ? std::clamp(1.37f - relativeThickness * .65f, .60f, 1.f)
-                : std::clamp(.80f - .20f * relativeThickness, .27f, .64f);
-            const char* prefix = i == 0 ? "Bip01 R Finger" : "Bip01 L Finger";
-            ShaftClearance shaft;
-            if (wrapsShaft)
-            {
-                const auto normal = direction(palms[i].normal, hand);
-                shaft.center = solved[i] + (grip.dual ? depth * (grip.thickness * .80f) : normal * (grip.thickness + .35f));
-                shaft.axis = grip.dual ? lateral : direction(palms[i].forward, hand) ^ normal;
-                shaft.radius = grip.thickness + .43f;
-            }
-            curlGripFingers(nodes, prefix, hand, palms[i], curl, shaft, setPose);
-            if (wrapsShaft)
-                closeGripThumb(nodes, prefix, hand, palms[i], grip.thickness, shaft, setPose);
+            hands[i] = osg::computeLocalToWorld(arms[i].bones[2]->getParentalNodePaths().front());
+            solved[i] = palms[i].center * hands[i];
         }
+
+        GripClearance heldClearance;
         if (grip.dual)
         {
+            osg::Vec3f midpoint = (solved[0] + solved[1]) * .5f;
             auto span = solved[0] - solved[1];
+            if (grip.shaft)
+            {
+                // Use the limited wrist poses. A camera-space offset may put a
+                // shaft inside one palm when the wrists face different ways.
+                const auto right = direction(palms[0].normal, hands[0]);
+                const auto left = direction(palms[1].normal, hands[1]);
+                midpoint += (right + left) * (.5f * shaftOffset);
+                span += (right - left) * shaftOffset;
+                if ((right + left).length2() > .01f)
+                    depth = right + left;
+            }
             if (span.normalize() > .001f)
+            {
+                if ((span ^ depth).length2() < .01f)
+                    depth = std::abs(span * up) < .9f ? up : ahead;
                 rotation = alignObject(grip, span, depth);
-            position = (solved[0] + solved[1]) * .5f
-                + depth * (grip.shaft ? grip.thickness * .80f : 0.f) - rotation * grip.contact;
+            }
+            else
+                span = lateral;
+            if (grip.shield)
+            {
+                osg::Vec3f normal;
+                normal[grip.depthAxis] = 1.f;
+                depth = rotation * normal;
+                midpoint += depth * shieldOffset;
+                heldClearance = { midpoint - depth * grip.shieldDepth, depth, 0.f, true };
+            }
+            position = midpoint - rotation * grip.contact;
+            if (grip.shaft)
+                heldClearance = { midpoint, span, grip.thickness + .43f, false };
         }
         else
             soloPose(hands[0]);
 
+        for (unsigned i = 0; i < count; ++i)
+        {
+            const auto& hand = hands[i];
+            const float relativeThickness = grip.thickness / palms[i].width;
+            const float curl = grip.shield ? .24f : grip.dual && !grip.shaft ? .05f : wrapsShaft
+                ? std::clamp(1.37f - relativeThickness * .65f, .60f, 1.f)
+                : std::clamp(.80f - .20f * relativeThickness, .27f, .64f);
+            const char* prefix = i == 0 ? "Bip01 R Finger" : "Bip01 L Finger";
+            GripClearance clearance = heldClearance;
+            if (grip.narrowEnd)
+            {
+                osg::Vec3f axis;
+                axis[grip.lengthAxis] = 1.f;
+                clearance = { position + rotation * grip.contact, rotation * axis, grip.thickness + .43f, false };
+            }
+            curlGripFingers(nodes, prefix, hand, palms[i], curl, clearance, setPose);
+            if (wrapsShaft || grip.shield)
+                closeGripThumb(nodes, prefix, hand, palms[i], grip.thickness, clearance, setPose);
+        }
         if (mSkeleton)
             mSkeleton->markDirty();
         osg::NodeVisitor bounds(osg::NodeVisitor::TRAVERSE_ALL_CHILDREN);

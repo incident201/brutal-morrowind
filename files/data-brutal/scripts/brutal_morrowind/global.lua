@@ -36,7 +36,7 @@ return {
         local item, player = data.object, data.player
         if not item or not item:isValid() or not player or not player:isValid()
             or item.cell ~= player.cell or types.Actor.isDead(player) then return end
-        world.holdObject(item, player)
+        world.holdObject(item, player, data.fragment)
     end, BrutalGrabRelease = function(data)
         if type(world.releaseHeldObject) ~= 'function' then return end
         local player = data.player

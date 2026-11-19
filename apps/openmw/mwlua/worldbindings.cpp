@@ -823,13 +823,14 @@ namespace MWLua
             const auto ptr = object.ptrOrEmpty();
             return !ptr.isEmpty() && MWBase::Environment::get().getWorld()->canHoldObject(ptr);
         };
-        api["holdObject"] = [context](const GObject& object, const GObject& holder) {
-            context.mLuaManager->addAction([lua = context.mLua, manager = context.mLuaManager, object, holder] {
+        api["holdObject"] = [context](const GObject& object, const GObject& holder, sol::optional<unsigned> part) {
+            context.mLuaManager->addAction([lua = context.mLua, manager = context.mLuaManager, object, holder,
+                                               fragment = part.value_or(0)] {
                 const auto itemPtr = object.ptrOrEmpty();
                 const auto actorPtr = holder.ptrOrEmpty();
                 MWPhysics::HeldObjectInfo info;
                 const bool ok = !itemPtr.isEmpty() && !actorPtr.isEmpty()
-                    && MWBase::Environment::get().getWorld()->holdObject(itemPtr, actorPtr, &info);
+                    && MWBase::Environment::get().getWorld()->holdObject(itemPtr, actorPtr, &info, fragment);
                 if (actorPtr.isEmpty())
                     return;
                 lua->protectedCall([&](LuaUtil::LuaView& view) {
@@ -841,6 +842,7 @@ namespace MWLua
                         data["radius"] = info.radius;
                         data["mass"] = info.mass;
                         data["halfExtents"] = info.halfExtents;
+                        data["fragment"] = fragment;
                     }
                     manager->sendLocalEvent(actorPtr, ok ? "BrutalObjectHeld" : "BrutalObjectHoldFailed", data);
                 });

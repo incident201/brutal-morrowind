@@ -35,6 +35,7 @@ namespace osg
 
 namespace MWRender
 {
+    class Animation;
     class DebugDrawer;
 }
 
@@ -158,9 +159,11 @@ namespace MWPhysics
         int depthAxis = 2;
         float span = 0.f;
         float thickness = 0.f;
+        float shieldDepth = 0.f;
         bool narrowEnd = false;
         bool dual = false;
         bool shaft = false;
+        bool shield = false;
     };
 
     struct ThrownObjectHit
@@ -254,8 +257,13 @@ namespace MWPhysics
         void updateScale(const MWWorld::Ptr& ptr);
 
         bool canHoldObject(const MWWorld::ConstPtr& ptr) const;
-        bool holdObject(const MWWorld::Ptr& ptr, const MWWorld::Ptr& holder, HeldObjectInfo* info = nullptr);
+        std::pair<MWWorld::Ptr, unsigned> findDetachedGrabFragment(const MWWorld::Ptr& player,
+            const osg::Vec3f& from, const osg::Vec3f& to) const;
+        bool holdObject(const MWWorld::Ptr& ptr, const MWWorld::Ptr& holder, HeldObjectInfo* info = nullptr,
+            unsigned fragment = 0);
         const HeldObjectGrip& getHeldGrip() const { return mHeldGrip; }
+        unsigned getHeldFragment() const { return mHeldFragment; }
+        void poseHeldFragment(MWRender::Animation& animation) const;
         void placeHeldObject(const osg::Vec3f& origin, const osg::Quat& rotation, float duration);
         float sweepHeldObject(const osg::Vec3f& from, const osg::Vec3f& to, const osg::Quat& rotation) const;
         bool releaseHeldObject(const MWWorld::Ptr& holder, const osg::Vec3f& eyePos, const osg::Vec3f& throwDir,
@@ -490,6 +498,8 @@ namespace MWPhysics
         std::array<std::vector<Simulation>, 2> mSimulations;
         std::vector<std::pair<MWWorld::Ptr, osg::Vec3f>> mActorsPositions;
         MWWorld::Ptr mHeldObject;
+        unsigned mHeldFragment = 0;
+        float mHeldMass = 0.f;
         HeldObjectGrip mHeldGrip;
         osg::Vec3f mHeldLastCenter, mHeldVelocity;
         bool mHeldPoseReady = false;

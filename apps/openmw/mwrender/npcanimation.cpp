@@ -3,6 +3,7 @@
 #include "decapitation.hpp"
 #include "bisection.hpp"
 #include "limbsevering.hpp"
+#include "../mwphysics/ragdoll.hpp"
 #include "releasedequipmentcapture.hpp"
 #include "decapitationplane.hpp"
 #include "renderprewarm.hpp"
@@ -1301,6 +1302,17 @@ namespace MWRender
         return new OverrideFieldOfViewCallback(
             mFirstPersonFieldOfView, MWBase::Environment::get().getWorld()->getRenderingManager(),
             !useFullBodyFirstPerson());
+    }
+
+    std::vector<osg::Node*> NpcAnimation::getDetachedFragmentNodes(unsigned fragment) const
+    {
+        if (fragment == MWPhysics::Ragdoll::HeadFragment && mDecapitation)
+            return { mDecapitation->upper.get() };
+        if (mLimbSevering)
+            for (std::size_t i = 0; i < mLimbSevering->cuts.size(); ++i)
+                if (mLimbSevering->cuts[i].bit == fragment)
+                    return { mLimbSevering->regions[i + 1].get(), mLimbSevering->cuts[i].caps[1].get() };
+        return {};
     }
 
     void NpcAnimation::setRenderBin()

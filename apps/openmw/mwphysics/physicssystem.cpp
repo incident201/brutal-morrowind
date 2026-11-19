@@ -29,6 +29,7 @@
 #include <LinearMath/btVector3.h>
 
 #include <components/debug/debuglog.hpp>
+#include <components/esm3/loadarmo.hpp>
 #include <components/esm3/loadgmst.hpp>
 #include <components/esm3/loadligh.hpp>
 #include <components/esm3/loadmgef.hpp>
@@ -1902,9 +1903,124 @@ namespace MWPhysics
         return std::isfinite(radius) && radius <= 55.f;
     }
 
-    bool PhysicsSystem::holdObject(const MWWorld::Ptr& ptr, const MWWorld::Ptr& holder, HeldObjectInfo* info)
+    std::pair<MWWorld::Ptr, unsigned> PhysicsSystem::findDetachedGrabFragment(
+        const MWWorld::Ptr& player, const osg::Vec3f& from, const osg::Vec3f& to) const
     {
-        if (!Settings::game().mBrutalObjectGrab || !canHoldObject(ptr))
+        if (!Settings::game().mBrutalObjectGrab || !player.isInCell() || mRagdolls.empty())
+            return {};
+        const auto* actor = getActor(player);
+        struct GrabRay final : btCollisionWorld::ClosestRayResultCallback
+        {
+            const btCollisionObject* player;
+            GrabRay(const btVector3& from, const btVector3& to, const btCollisionObject* ignored)
+                : ClosestRayResultCallback(from, to), player(ignored)
+            {
+                m_collisionFilterGroup = CollisionType_Actor | CollisionType_Dynamic;
+                m_collisionFilterMask = CollisionType_World | CollisionType_Door | CollisionType_HeightMap
+                    | CollisionType_Dynamic | CollisionType_Actor;
+            }
+            bool needsCollision(btBroadphaseProxy* proxy) const override
+            {
+                return proxy->m_clientObject != player && ClosestRayResultCallback::needsCollision(proxy);
+            }
+        };
+        const auto cast = [&](const osg::Vec3f& end) {
+            GrabRay ray(Misc::Convert::toBullet(from), Misc::Convert::toBullet(end),
+                actor ? actor->getCollisionObject() : nullptr);
+            mTaskScheduler->rayTest(ray.m_rayFromWorld, ray.m_rayToWorld, ray);
+            return ray;
+        };
+        const auto fragmentAt = [&](const GrabRay& ray) -> std::pair<MWWorld::Ptr, unsigned> {
+            if (!ray.hasHit())
+                return {};
+            for (const auto& [ref, ragdoll] : mRagdolls)
+                if (const unsigned fragment = ragdoll->detachedFragment(ray.m_collisionObject))
+                {
+                    const auto ptr = ragdoll->getPtr();
+                    if (ptr.isInCell() && ptr.getCell() == player.getCell() && ptr.getRefData().isEnabled())
+                        return { ptr, fragment };
+                }
+            return {};
+        };
+        const auto central = cast(to);
+        if (auto hit = fragmentAt(central); hit.second)
+            return hit;
+
+        // A small crosshair tolerance covers the edges of irregular skin and
+        // tiny movements of a fragment that has not quite stopped rolling.
+        auto forward = to - from;
+        const float reach = forward.normalize();
+        if (reach < 1.f)
+            return {};
+        auto right = forward ^ osg::Vec3f(0, 0, 1);
+        if (right.normalize() < .001f)
+            right.set(1, 0, 0);
+        const auto up = right ^ forward;
+        std::pair<MWWorld::Ptr, unsigned> best;
+        float fraction = std::min(1.f, float(central.m_closestHitFraction) + .045f);
+        for (const auto& lateral : { right, -right, up, -up })
+        {
+            auto direction = forward + lateral * .036f;
+            direction.normalize();
+            const auto ray = cast(from + direction * reach);
+            if (ray.m_closestHitFraction < fraction)
+                if (auto hit = fragmentAt(ray); hit.second)
+                {
+                    best = std::move(hit);
+                    fraction = ray.m_closestHitFraction;
+                }
+        }
+        return best;
+    }
+
+    bool PhysicsSystem::holdObject(const MWWorld::Ptr& ptr, const MWWorld::Ptr& holder, HeldObjectInfo* info,
+        unsigned fragment)
+    {
+        if (!Settings::game().mBrutalObjectGrab || hasHeldObject())
+            return false;
+        const Actor* holderActor = getActor(holder);
+        const btCollisionObject* owner = holderActor ? holderActor->getCollisionObject() : nullptr;
+        if (fragment)
+        {
+            const auto found = mRagdolls.find(ptr.mRef);
+            if (found == mRagdolls.end())
+                return false;
+            const auto& ragdoll = *found->second;
+            osg::Vec3f lo, hi;
+            const float mass = mTaskScheduler->holdDetachedFragment(
+                ragdoll.detachedBodies(fragment), ragdoll.detachedJoint(fragment), owner, lo, hi);
+            if (mass <= 0.f)
+                return false;
+            mHeldObject = ptr;
+            mHeldFragment = fragment;
+            mHeldMass = mass;
+            mHeldPoseReady = false;
+            mHeldVelocity = {};
+            mHeldGrip = {};
+            auto& grip = mHeldGrip;
+            grip.center = grip.contact = (lo + hi) * .5f;
+            grip.half = (hi - lo) * .5f;
+            if (fragment == Ragdoll::HeadFragment)
+            {
+                grip.depthAxis = 1;
+                grip.contact.y() = lo.y();
+                grip.thickness = grip.half[2];
+            }
+            else
+            {
+                // The proximal collider's Y axis follows the upper arm or calf.
+                // Hold this segment so a bent elbow cannot place the hand in empty space.
+                grip.lengthAxis = 1;
+                grip.depthAxis = 2;
+                grip.contact = osg::Vec3f(0.f, -2.f, 0.f);
+                grip.narrowEnd = true;
+                grip.thickness = (fragment & 3u) ? 5.f : 4.5f;
+            }
+            if (info)
+                *info = { grip.half, mass, grip.half.length(), grip.dual };
+            return true;
+        }
+        if (!canHoldObject(ptr))
             return false;
         const auto* baseNode = ptr.getRefData().getBaseNode();
         if (!baseNode)
@@ -1939,10 +2055,10 @@ namespace MWPhysics
         }
         const float weight = std::max(0.f, ptr.getClass().getWeight(ptr));
         const float mass = std::clamp(weight * .5f, .25f, 50.f);
-        const Actor* holderActor = getActor(holder);
-        const btCollisionObject* owner = holderActor ? holderActor->getCollisionObject() : nullptr;
         mTaskScheduler->holdObject(object, visitor.mVertices, mass, owner);
         mHeldObject = ptr;
+        mHeldFragment = 0;
+        mHeldMass = mass;
         const osg::Vec3f half = object->getDynamicHalfExtents();
         const float radius = half.length();
         const bool dualGrip = weight >= 6.f || radius >= 18.f;
@@ -1951,6 +2067,8 @@ namespace MWPhysics
         mHeldGrip = {};
         auto& grip = mHeldGrip;
         grip.dual = dualGrip;
+        grip.shield = dualGrip && ptr.getType() == ESM::REC_ARMO
+            && ptr.get<ESM::Armor>()->mBase->mData.mType == ESM::Armor::Shield;
         const float scale = ptr.getCellRef().getScale();
         osg::BoundingBox bounds;
         for (const auto& vertex : visitor.mVertices)
@@ -1979,13 +2097,25 @@ namespace MWPhysics
             // A flat prop spans its broad horizontal axis; a long prop spans its shaft.
             grip.lengthAxis = grip.depthAxis == 0 ? 1 : 0;
             const int other = 3 - grip.depthAxis - grip.lengthAxis;
-            if (grip.half[other] > grip.half[grip.lengthAxis] * 1.4f)
+            if (!grip.shield && grip.half[other] > grip.half[grip.lengthAxis] * 1.4f)
                 grip.lengthAxis = other;
             const int length = grip.lengthAxis, width = 3 - length - grip.depthAxis;
             grip.span = grip.half[length];
+            if (grip.shield)
+            {
+                float nearRim = grip.center[grip.depthAxis];
+                for (const auto& vertex : visitor.mVertices)
+                {
+                    const auto point = vertex * scale;
+                    if (std::abs(point[length] - grip.center[length]) >= grip.span * .86f)
+                        nearRim = std::min(nearRim, point[grip.depthAxis]);
+                }
+                grip.shieldDepth = grip.center[grip.depthAxis] - nearRim;
+                grip.span *= .90f;
+            }
             // On a long prop, prefer the visibly narrower portion of its axis
             // rather than placing one hand on the heavy head.
-            if (grip.span > grip.half[width] * 1.9f)
+            if (!grip.shield && grip.span > grip.half[width] * 1.9f)
             {
                 float bestWidth = grip.half[width];
                 for (const float end : { -.48f, .48f })
@@ -2062,30 +2192,36 @@ namespace MWPhysics
 
     void PhysicsSystem::placeHeldObject(const osg::Vec3f& origin, const osg::Quat& rotation, float duration)
     {
-        if (const auto* object = getObject(mHeldObject))
+        const auto* object = mHeldFragment ? nullptr : getObject(mHeldObject);
+        const auto center = object ? origin + Misc::Convert::toOsg(object->getDynamicCenterWorldOffset(rotation)) : origin;
+        if (mHeldPoseReady && duration > 0.f)
         {
-            const osg::Vec3f center
-                = origin + Misc::Convert::toOsg(object->getDynamicCenterWorldOffset(rotation));
-            if (mHeldPoseReady && duration > 0.f)
-            {
-                auto velocity = (center - mHeldLastCenter) / duration;
-                const float speed = velocity.length();
-                if (speed > 650.f)
-                    velocity *= 650.f / speed;
-                const float blend = 1.f - std::exp(-duration * 40.f);
-                mHeldVelocity += (velocity - mHeldVelocity) * blend;
-            }
-            mHeldLastCenter = center;
-            mHeldPoseReady = true;
-            mTaskScheduler->setHeldPose(*object, origin, rotation);
+            auto velocity = (center - mHeldLastCenter) / duration;
+            const float speed = velocity.length();
+            if (speed > 650.f)
+                velocity *= 650.f / speed;
+            const float blend = 1.f - std::exp(-duration * 40.f);
+            mHeldVelocity += (velocity - mHeldVelocity) * blend;
         }
+        mHeldLastCenter = center;
+        mHeldPoseReady = true;
+        mTaskScheduler->setHeldPose(center, rotation, object);
+    }
+
+    void PhysicsSystem::poseHeldFragment(MWRender::Animation& animation) const
+    {
+        if (const auto found = mRagdolls.find(mHeldObject.mRef); found != mRagdolls.end())
+            for (const auto& [bone, pose] : found->second->detachedBonePoses(mHeldFragment))
+                animation.setBoneWorldMatrix(bone, pose);
     }
 
     float PhysicsSystem::sweepHeldObject(const osg::Vec3f& from, const osg::Vec3f& to, const osg::Quat& rotation) const
     {
-        if (const auto* object = getObject(mHeldObject))
-            return mTaskScheduler->sweepHeldPose(*object, from, to, rotation);
-        return 1.f;
+        osg::Vec3f offset;
+        if (!mHeldFragment)
+            if (const auto* object = getObject(mHeldObject))
+                offset = Misc::Convert::toOsg(object->getDynamicCenterWorldOffset(rotation));
+        return mTaskScheduler->sweepHeldPose(from + offset, to + offset, rotation);
     }
 
     bool PhysicsSystem::releaseHeldObject(const MWWorld::Ptr& holder, const osg::Vec3f& eyePos,
@@ -2096,8 +2232,7 @@ namespace MWPhysics
             mHeldObject = MWWorld::Ptr();
             return false;
         }
-        const Object* obj = getObject(mHeldObject);
-        const float mass = obj ? std::max(.25f, obj->getDynamicMass()) : 1.f;
+        const float mass = mHeldMass;
         const Actor* holderActor = holder.isEmpty() ? nullptr : getActor(holder);
         const btCollisionObject* owner = holderActor ? holderActor->getCollisionObject() : nullptr;
 
@@ -2144,6 +2279,7 @@ namespace MWPhysics
         }
         mTaskScheduler->releaseHeldObject(owner, vel, ang, thrown, adrenaline, mass);
         mHeldObject = MWWorld::Ptr();
+        mHeldFragment = 0;
         return true;
     }
 
@@ -2170,6 +2306,10 @@ namespace MWPhysics
             for (const auto& [ref, obj] : mObjects)
                 if (obj->getCollisionObject() == entry.item)
                 { hit.item = obj->getPtr(); break; }
+            if (hit.item.isEmpty())
+                for (const auto& [ref, ragdoll] : mRagdolls)
+                    if (ragdoll->detachedFragment(entry.item))
+                    { hit.item = ragdoll->getPtr(); break; }
             for (const auto& [ref, actor] : mActors)
             {
                 if (actor->getCollisionObject() == entry.actor)
