@@ -38,6 +38,9 @@ local function clinching()
     local s=I.BrutalClinch.status()
     return s.active or s.pending
 end
+local function carrying()
+    return I.BrutalObjectGrab and I.BrutalObjectGrab.status().active
+end
 
 local function chooseTarget()
     local origin = self.position + util.vector3(0, 0, 55)
@@ -76,7 +79,7 @@ local function tryKick()
     end
     -- A kick interrupts any sword phase (the engine cancels its pending hit), but
     -- not an unfinished kick: its own animation is the kick's cooldown.
-    if bash or sliding() or clinching() or animation.getCompletion(self, 'brutal_kick') ~= nil
+    if bash or sliding() or clinching() or carrying() or animation.getCompletion(self, 'brutal_kick') ~= nil
         or animation.getCompletion(self, 'brutal_kick1h') ~= nil
         or animation.getCompletion(self, 'brutal_kick1h_low') ~= nil then
         lastResult = 'busy'
@@ -174,7 +177,7 @@ local function tryBash()
         if kind~=W.ShortBladeOneHand and kind~=W.LongBladeOneHand
             and kind~=W.BluntOneHand and kind~=W.AxeOneHand then return false end
     end
-    if bash or windup or sliding() or clinching() or I.UI.getMode() or not isBlockRaised or not isBlockRaised(self)
+    if bash or windup or sliding() or clinching() or carrying() or I.UI.getMode() or not isBlockRaised or not isBlockRaised(self)
         or not animation.hasGroup(self, 'brutal_shieldbash')
         or animation.getCompletion(self, 'brutal_kick') ~= nil
         or animation.getCompletion(self, 'brutal_kick1h') ~= nil
@@ -214,7 +217,7 @@ end
 
 local function updateBlock()
     if not hasShieldBlock or not setShieldBlock then return end
-    local held = (settings.get('activeBlockEnabled') or settings.get('parryEnabled')) and not I.UI.getMode() and not clinching() and input.isMouseButtonPressed(C.blockButton)
+    local held = (settings.get('activeBlockEnabled') or settings.get('parryEnabled')) and not I.UI.getMode() and not clinching() and not carrying() and input.isMouseButtonPressed(C.blockButton)
     -- Send changes only; the native controller decides whether the shield can rise.
     if held ~= blockHeld then
         blockHeld = held

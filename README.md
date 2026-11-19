@@ -40,7 +40,14 @@ away within a game day. Blood also splatters onto nearby floors and walls, using
 Dark Messiah's decals; outdoors the rain washes it away. Both have switches in
 the Brutal Morrowind settings.
 
-This branch uses **Dark Messiah import recipe 13**. Its launcher asks to reimport
+Aim at small loose items and press `G` (rebindable) to grab and carry them in one
+or two hands while your equipped weapon and shield are hidden and restored after
+dropping (`G`) or throwing (`Use` / left click). First-person carry and throw
+animations, camera motion and impact sounds come from Dark Messiah; hits stagger
+NPCs by hit location (head or body), and throwing with full adrenaline spends the
+charge to knock living targets into a physical ragdoll.
+
+This branch uses **Dark Messiah import recipe 14**. Its launcher asks to reimport
 older data. See `CHANGELOG.md` for the other unreleased changes.
 
 ## Requirements

@@ -918,6 +918,47 @@ namespace MWLua
         });
     }
 
+    void LuaManager::thrownObjectHit(const MWWorld::Ptr& attacker, const MWWorld::Ptr& item,
+        const MWWorld::Ptr& victim, const osg::Vec3f& hitPos, const osg::Vec3f& normal,
+        const osg::Vec3f& velocity, float mass, bool adrenaline, bool headHit, bool knockedDown,
+        std::string_view reaction, float damage)
+    {
+        if (attacker.isEmpty())
+            return;
+        mLua.protectedCall([&](LuaUtil::LuaView& view) {
+            sol::table data = view.newTable();
+            if (!item.isEmpty())
+                data["item"] = LObject(item);
+            if (!victim.isEmpty())
+                data["target"] = LObject(victim);
+            data["hitPos"] = hitPos;
+            data["normal"] = normal;
+            data["velocity"] = velocity;
+            data["mass"] = mass;
+            data["adrenaline"] = adrenaline;
+            data["headHit"] = headHit;
+            data["knockedDown"] = knockedDown;
+            data["reaction"] = std::string(reaction);
+            data["damage"] = damage;
+            sendLocalEvent(attacker, "BrutalThrownObjectHit", data);
+        });
+    }
+
+    void LuaManager::dynamicObjectImpact(const MWWorld::Ptr& player, const MWWorld::Ptr& item,
+        const osg::Vec3f& position, const osg::Vec3f& normal, float speed)
+    {
+        if (player.isEmpty() || item.isEmpty())
+            return;
+        mLua.protectedCall([&](LuaUtil::LuaView& view) {
+            sol::table data = view.newTable();
+            data["item"] = LObject(item);
+            data["position"] = position;
+            data["normal"] = normal;
+            data["speed"] = speed;
+            sendLocalEvent(player, "BrutalDynamicObjectImpact", data);
+        });
+    }
+
     void LuaManager::objectAddedToScene(const MWWorld::Ptr& ptr)
     {
         mObjectLists.objectAddedToScene(ptr); // assigns generated RefNum if it is not set yet.

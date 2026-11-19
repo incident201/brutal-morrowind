@@ -100,6 +100,12 @@ namespace MWBase
             const osg::Vec3f& position, const osg::Vec3f& normal, float speed) = 0;
         // A kick sent a living NPC over a ledge into a ragdoll; the kicker receives BrutalKickRagdoll.
         virtual void npcKickRagdoll(const MWWorld::Ptr& attacker, const MWWorld::Ptr& target) = 0;
+        virtual void thrownObjectHit(const MWWorld::Ptr& attacker, const MWWorld::Ptr& item,
+            const MWWorld::Ptr& victim, const osg::Vec3f& hitPos, const osg::Vec3f& normal,
+            const osg::Vec3f& velocity, float mass, bool adrenaline, bool headHit, bool knockedDown,
+            std::string_view reaction, float damage) = 0;
+        virtual void dynamicObjectImpact(const MWWorld::Ptr& player, const MWWorld::Ptr& item,
+            const osg::Vec3f& position, const osg::Vec3f& normal, float speed) = 0;
         virtual void exteriorCreated(MWWorld::CellStore& cell) = 0;
         virtual void actorDied(const MWWorld::Ptr& actor) = 0;
         virtual void onDialogueResponse(

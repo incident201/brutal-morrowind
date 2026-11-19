@@ -116,6 +116,7 @@ namespace MWMechanics
         std::string mLastConsumedPowerStrikeToken;
         // Transient Lua presentation state: defer automatic arrest while adrenaline is visible.
         bool mBrutalAdrenalineEffectActive = false;
+        bool mBrutalCarryingObject = false; // Player is gripping/throwing a physics world object.
         bool mBrutalBlockRequested = false; // Player is holding the block control (Lua).
         bool mBrutalBlockRaised = false; // Controller-owned: the shield is up this frame.
         bool mBrutalBlockImpact = false; // A blow landed on the raised shield; consumed by the controller.

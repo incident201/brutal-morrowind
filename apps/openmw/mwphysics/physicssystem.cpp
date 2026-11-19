@@ -5,14 +5,19 @@
 #include <memory>
 #include <vector>
 
+#include <osg/ComputeBoundsVisitor>
+#include <osg/Geode>
+#include <osg/Geometry>
 #include <osg/Group>
 #include <osg/Stats>
 #include <osg/Timer>
+#include <osg/Transform>
 
 #include <BulletCollision/BroadphaseCollision/btDbvtBroadphase.h>
 #include <BulletCollision/CollisionDispatch/btCollisionObject.h>
 #include <BulletCollision/CollisionDispatch/btCollisionWorld.h>
 #include <BulletCollision/CollisionDispatch/btDefaultCollisionConfiguration.h>
+#include <BulletCollision/CollisionShapes/btBoxShape.h>
 #include <BulletCollision/CollisionShapes/btConeShape.h>
 #include <BulletCollision/CollisionShapes/btConvexHullShape.h>
 #include <BulletCollision/CollisionShapes/btSphereShape.h>
@@ -25,6 +30,7 @@
 
 #include <components/debug/debuglog.hpp>
 #include <components/esm3/loadgmst.hpp>
+#include <components/esm3/loadligh.hpp>
 #include <components/esm3/loadmgef.hpp>
 #include <components/misc/convert.hpp>
 #include <components/misc/rng.hpp>
@@ -476,6 +482,8 @@ namespace MWPhysics
 
     void PhysicsSystem::remove(const MWWorld::Ptr& ptr)
     {
+        if (ptr == mHeldObject)
+            mHeldObject = MWWorld::Ptr();
         stopNpcRagdoll(ptr);
         mKickWatches.erase(ptr.mRef);
         mRagdollAnimation.erase(ptr.mRef);
@@ -500,6 +508,8 @@ namespace MWPhysics
 
     void PhysicsSystem::updatePtr(const MWWorld::Ptr& old, const MWWorld::Ptr& updated)
     {
+        if (old == mHeldObject)
+            mHeldObject = updated;
         if (old.mRef != updated.mRef)
         {
             if (auto source = mSuperKickSources.extract(old.mRef); !source.empty())
@@ -902,7 +912,8 @@ namespace MWPhysics
                     Misc::Convert::toOsg(update.authoritative.getRotation()),
                     Misc::Convert::toOsg(update.rendered.getOrigin()),
                     Misc::Convert::toOsg(update.rendered.getRotation()), update.authoritativeChanged);
-        mTaskScheduler->disableDynamicObjects(!Settings::game().mBrutalDynamicProps,
+        mTaskScheduler->disableDynamicObjects(
+            !(Settings::game().mBrutalDynamicProps || Settings::game().mBrutalObjectGrab),
             !Settings::game().mBrutalEquipmentPhysics);
     }
 
@@ -1011,11 +1022,12 @@ namespace MWPhysics
     bool PhysicsSystem::applyNpcKick(const MWWorld::Ptr& ptr, const osg::Vec3f& kick, const MWWorld::Ptr& attacker, bool continuing,
         bool knockDown, bool slideTrip)
     {
-        return applyNpcKickImpl(ptr, kick, attacker, continuing, knockDown, false, slideTrip);
+        return applyNpcKickImpl(ptr, kick, attacker, continuing, knockDown, false, slideTrip, {}, nullptr);
     }
 
     bool PhysicsSystem::applyNpcKickImpl(const MWWorld::Ptr& ptr, const osg::Vec3f& kick,
-        const MWWorld::Ptr& attacker, bool continuing, bool knockDown, bool superKick, bool slideTrip)
+        const MWWorld::Ptr& attacker, bool continuing, bool knockDown, bool superKick, bool slideTrip,
+        std::string_view reactionOverride, const osg::Vec3f* impactPointOverride)
     {
         auto world=MWBase::Environment::get().getWorld();
         auto* actor=getActor(ptr);
@@ -1085,8 +1097,11 @@ namespace MWPhysics
             {
                 if (!immobile) actor->addExternalVelocity(push);
                 // Creatures keep their own hit animations: no group is imposed on them.
-                MWBase::Environment::get().getMechanicsManager()->staggerActor(
-                    ptr, isCreature ? std::string() : chooseKickReaction(ptr, attacker, direction, 2.f * half.z()));
+                const std::string reaction = isCreature
+                    ? std::string()
+                    : (!reactionOverride.empty() ? std::string(reactionOverride)
+                                                 : chooseKickReaction(ptr, attacker, direction, 2.f * half.z()));
+                MWBase::Environment::get().getMechanicsManager()->staggerActor(ptr, reaction);
                 // Source rechecks support throughout a push, not only at contact.
                 if (!isCreature || (rig && !immobile))
                     mKickWatches[ptr.mRef]={ptr,attacker,direction,0.f,kick.z()*weight/push.length()};
@@ -1109,9 +1124,11 @@ namespace MWPhysics
                   + bones.at("Bip01 R Calf").getTrans() + bones.at("Bip01 R Foot").getTrans()) * .25f
                 - direction * 5.f // physical calf capsule radius
             : bones.at("Bip01 Spine1").getTrans() - direction * half.x());
-        const osg::Vec3f contact = rig
-            ? osg::Vec3f((lowTrip ? osg::Vec3f(position + osg::Vec3f(0.f, 0.f, half.z() * .3f)) : rootBone) - direction * half.x())
-            : humanContact;
+        const osg::Vec3f contact = impactPointOverride
+            ? *impactPointOverride
+            : (rig
+                ? osg::Vec3f((lowTrip ? osg::Vec3f(position + osg::Vec3f(0.f, 0.f, half.z() * .3f)) : rootBone) - direction * half.x())
+                : humanContact);
         MWBase::Environment::get().getMechanicsManager()->staggerActor(ptr);
         animation->beginRagdollPose();
         try {
@@ -1801,6 +1818,454 @@ namespace MWPhysics
         stats.setAttribute(frameNumber, "Physics Objects", static_cast<double>(mObjects.size()));
         stats.setAttribute(frameNumber, "Physics Projectiles", static_cast<double>(mProjectiles.size()));
         stats.setAttribute(frameNumber, "Physics HeightFields", static_cast<double>(mHeightFields.size()));
+    }
+
+    namespace
+    {
+        struct CollectUnscaledVerticesVisitor final : osg::NodeVisitor
+        {
+            osg::Matrixf mMatrix = osg::Matrixf::identity();
+            std::vector<osg::Vec3f> mVertices;
+
+            CollectUnscaledVerticesVisitor()
+                : osg::NodeVisitor(TRAVERSE_ALL_CHILDREN)
+            {
+            }
+
+            void apply(osg::Node& node) override
+            {
+                if (node.getNodeMask() == 0)
+                    return;
+                traverse(node);
+            }
+
+            void apply(osg::Transform& transform) override
+            {
+                if (transform.getNodeMask() == 0)
+                    return;
+                const osg::Matrixf prev = mMatrix;
+                osg::Matrix next(mMatrix);
+                transform.computeLocalToWorldMatrix(next, this);
+                mMatrix = osg::Matrixf(next);
+                traverse(transform);
+                mMatrix = prev;
+            }
+
+            void apply(osg::Geode& geode) override
+            {
+                if (geode.getNodeMask() == 0)
+                    return;
+                for (unsigned i = 0; i < geode.getNumDrawables(); ++i)
+                {
+                    const auto* geom = geode.getDrawable(i) ? geode.getDrawable(i)->asGeometry() : nullptr;
+                    const auto* verts = geom ? dynamic_cast<const osg::Vec3Array*>(geom->getVertexArray()) : nullptr;
+                    if (!verts || verts->empty())
+                        continue;
+                    const std::size_t step = verts->size() > 8192 ? (verts->size() / 8192) + 1 : 1;
+                    for (std::size_t v = 0; v < verts->size() && mVertices.size() < 65536; v += step)
+                        mVertices.push_back((*verts)[v] * mMatrix);
+                }
+            }
+        };
+
+        osg::BoundingBox computeChildLocalBounds(const osg::Node* baseNode)
+        {
+            osg::ComputeBoundsVisitor cbv;
+            if (const auto* group = baseNode ? baseNode->asGroup() : nullptr)
+                for (unsigned i = 0; i < group->getNumChildren(); ++i)
+                    if (auto* child = const_cast<osg::Node*>(group->getChild(i)); child && child->getNodeMask() != 0)
+                        child->accept(cbv);
+            return cbv.getBoundingBox();
+        }
+    }
+
+    bool PhysicsSystem::canHoldObject(const MWWorld::ConstPtr& ptr) const
+    {
+        if (ptr.isEmpty() || !ptr.isInCell() || !ptr.getRefData().isEnabled() || ptr.getClass().isActor())
+            return false;
+        const unsigned int type = ptr.getType();
+        bool validType = (type == ESM::REC_MISC || type == ESM::REC_ALCH || type == ESM::REC_INGR
+            || type == ESM::REC_BOOK || type == ESM::REC_APPA || type == ESM::REC_CLOT
+            || type == ESM::REC_ARMO || type == ESM::REC_WEAP || type == ESM::REC_LOCK
+            || type == ESM::REC_PROB || type == ESM::REC_REPA);
+        if (type == ESM::REC_LIGH)
+            validType = (ptr.get<ESM::Light>()->mBase->mData.mFlags & ESM::Light::Carry) != 0;
+        if (!validType)
+            return false;
+        const float weight = ptr.getClass().getWeight(ptr);
+        if (!std::isfinite(weight) || weight > 35.f)
+            return false;
+        float radius = 0.f;
+        if (const Object* obj = getObject(ptr))
+            radius = obj->getDynamicHalfExtents().length();
+        else
+        {
+            const osg::BoundingBox bb = computeChildLocalBounds(ptr.getRefData().getBaseNode());
+            if (!bb.valid())
+                return false;
+            radius = bb.radius() * std::max(0.1f, ptr.getCellRef().getScale());
+        }
+        return std::isfinite(radius) && radius <= 55.f;
+    }
+
+    bool PhysicsSystem::holdObject(const MWWorld::Ptr& ptr, const MWWorld::Ptr& holder, HeldObjectInfo* info)
+    {
+        if (!Settings::game().mBrutalObjectGrab || !canHoldObject(ptr))
+            return false;
+        const auto* baseNode = ptr.getRefData().getBaseNode();
+        if (!baseNode)
+            return false;
+        CollectUnscaledVerticesVisitor visitor;
+        if (const auto* group = baseNode->asGroup())
+            for (unsigned i = 0; i < group->getNumChildren(); ++i)
+                if (auto* child = const_cast<osg::Node*>(group->getChild(i)); child && child->getNodeMask() != 0)
+                    child->accept(visitor);
+        if (visitor.mVertices.size() < 4)
+        {
+            const osg::BoundingBox bb = computeChildLocalBounds(baseNode);
+            if (bb.valid())
+            {
+                visitor.mVertices.clear();
+                for (unsigned c = 0; c < 8; ++c)
+                    visitor.mVertices.push_back(bb.corner(c));
+            }
+        }
+        std::shared_ptr<Object> object;
+        if (auto found = mObjects.find(ptr.mRef); found != mObjects.end())
+            object = found->second;
+        else
+        {
+            auto shape = osg::ref_ptr<Resource::BulletShape>(new Resource::BulletShape);
+            shape->mCollisionShape.reset(new btBoxShape(btVector3(1.f, 1.f, 1.f)));
+            shape->mVisualCollisionType = Resource::VisualCollisionType::Default;
+            auto instance = Resource::makeInstance(shape);
+            object = std::make_shared<Object>(ptr, instance, baseNode->getAttitude(),
+                CollisionType_World, mTaskScheduler.get());
+            mObjects.emplace(ptr.mRef, object);
+        }
+        const float weight = std::max(0.f, ptr.getClass().getWeight(ptr));
+        const float mass = std::clamp(weight * .5f, .25f, 50.f);
+        const Actor* holderActor = getActor(holder);
+        const btCollisionObject* owner = holderActor ? holderActor->getCollisionObject() : nullptr;
+        mTaskScheduler->holdObject(object, visitor.mVertices, mass, owner);
+        mHeldObject = ptr;
+        const osg::Vec3f half = object->getDynamicHalfExtents();
+        const float radius = half.length();
+        const bool dualGrip = weight >= 6.f || radius >= 18.f;
+        mHeldDualGrip = dualGrip;
+        if (info)
+        {
+            info->halfExtents = half;
+            info->mass = mass;
+            info->radius = radius;
+            info->dualGrip = dualGrip;
+        }
+        return true;
+    }
+
+    bool PhysicsSystem::setHoldView(const osg::Vec3f& eyePos, const osg::Vec3f& aimDir, const osg::Quat& viewOrient,
+        float pullback, float raiseOffset, bool dualGrip)
+    {
+        if (mHeldObject.isEmpty() || !mHeldObject.isInCell() || !mHeldObject.getRefData().isEnabled()
+            || !mTaskScheduler->hasHeldObject())
+        {
+            mHeldObject = MWWorld::Ptr();
+            return false;
+        }
+        const Object* heldObj = getObject(mHeldObject);
+        if (!heldObj)
+        {
+            mHeldObject = MWWorld::Ptr();
+            return false;
+        }
+        osg::Vec3f forward = aimDir;
+        if (forward.normalize() < 1e-4f)
+            return false;
+        osg::Vec3f right = forward ^ osg::Vec3f(0, 0, 1);
+        if (right.normalize() < 1e-4f)
+        {
+            right = viewOrient * osg::Vec3f(1, 0, 0);
+            right.z() = 0.f;
+            if (right.normalize() < 1e-4f)
+                right = osg::Vec3f(1, 0, 0);
+        }
+        osg::Vec3f up = right ^ forward;
+        up.normalize();
+
+        const osg::Vec3f half = heldObj->getDynamicHalfExtents();
+        const float objRadius = std::clamp(half.length(), 3.f, 55.f);
+        float forwardDist = 0.f, rightOffset = 0.f, upOffset = 0.f;
+        if (dualGrip)
+        {
+            forwardDist = std::clamp(35.f + objRadius * .85f, 36.f, 70.f) - pullback;
+            rightOffset = 0.f;
+            upOffset = -13.f + raiseOffset;
+        }
+        else
+        {
+            forwardDist = std::clamp(29.f + objRadius * .78f, 30.f, 58.f) - pullback;
+            rightOffset = 4.5f + std::min(half.x(), 6.f) * .2f;
+            upOffset = -7.5f + raiseOffset;
+        }
+        osg::Vec3f desiredCenter = eyePos + forward * forwardDist + right * rightOffset + up * upOffset;
+        const int wallMask = CollisionType_World | CollisionType_Door | CollisionType_HeightMap;
+        const auto wallHit = castRay(eyePos, eyePos + (desiredCenter - eyePos) * 1.15f,
+            { mHeldObject, MWMechanics::getPlayer() }, {}, wallMask, CollisionType_Actor);
+        if (wallHit.mHit)
+        {
+            const osg::Vec3f toDesired = desiredCenter - eyePos;
+            const float desiredLen = toDesired.length();
+            const float hitDist = (wallHit.mHitPos - eyePos).length();
+            const float safeDist = std::max(14.f, std::min(desiredLen, hitDist - std::min(objRadius * .55f, 12.f)));
+            if (desiredLen > 1e-3f)
+                desiredCenter = eyePos + toDesired * (safeDist / desiredLen);
+        }
+        const float yaw = std::atan2(forward.x(), forward.y());
+        const float pitchTilt = std::clamp(std::asin(std::clamp(forward.z(), -1.f, 1.f)) * .35f, -.35f, .35f);
+        const osg::Quat targetRot = osg::Quat(-pitchTilt, osg::Vec3f(1, 0, 0)) * osg::Quat(-yaw, osg::Vec3f(0, 0, 1));
+        mTaskScheduler->setHoldTarget(desiredCenter, targetRot, dualGrip ? 1150.f : 1450.f);
+        return true;
+    }
+
+    bool PhysicsSystem::releaseHeldObject(const MWWorld::Ptr& holder, const osg::Vec3f& eyePos,
+        const osg::Vec3f& throwDir, float throwSpeed, bool adrenaline)
+    {
+        if (!hasHeldObject())
+        {
+            mHeldObject = MWWorld::Ptr();
+            return false;
+        }
+        const Object* obj = getObject(mHeldObject);
+        const float mass = obj ? std::max(.25f, obj->getDynamicMass()) : 1.f;
+        const Actor* holderActor = holder.isEmpty() ? nullptr : getActor(holder);
+        const btCollisionObject* owner = holderActor ? holderActor->getCollisionObject() : nullptr;
+
+        osg::Vec3f aim = throwDir;
+        if (aim.normalize() < 1e-4f)
+            aim = osg::Vec3f(0, 1, 0);
+        osg::Vec3f vel, ang;
+        bool thrown = false;
+        if (throwSpeed <= 0.f)
+        {
+            vel = aim * 30.f + osg::Vec3f(0, 0, -15.f);
+            ang = osg::Vec3f(.8f, -.6f, .3f);
+        }
+        else
+        {
+            const int aimMask = CollisionType_World | CollisionType_Actor | CollisionType_Door | CollisionType_HeightMap;
+            const auto aimHit = castRay(eyePos, eyePos + aim * 2000.f, { holder, mHeldObject }, {}, aimMask, CollisionType_Actor);
+            const osg::Vec3f aimPoint = aimHit.mHit ? aimHit.mHitPos : (eyePos + aim * 1200.f);
+            const osg::Vec3f curCenter = mTaskScheduler->getHeldCenter();
+            osg::Vec3f launchDir = aimPoint - curCenter;
+            if ((aimPoint - eyePos).length() < 35.f || launchDir.normalize() < 1e-3f)
+                launchDir = aim;
+            if (adrenaline)
+            {
+                const float massFactor = std::clamp(1.18f - std::log10(std::max(1.f, mass)) * .12f, .88f, 1.15f);
+                const float speed = std::clamp(throwSpeed * 1.45f * massFactor, 1250.f, 1750.f);
+                vel = launchDir * speed + osg::Vec3f(0, 0, 18.f);
+            }
+            else
+            {
+                const float massFactor = std::clamp(1.15f - std::log10(std::max(1.f, mass)) * .25f, .68f, 1.12f);
+                const float speed = std::clamp(throwSpeed * massFactor, 650.f, 1300.f);
+                vel = launchDir * speed + osg::Vec3f(0, 0, 55.f);
+            }
+            osg::Vec3f right = launchDir ^ osg::Vec3f(0, 0, 1);
+            if (right.normalize() < 1e-4f)
+                right = osg::Vec3f(1, 0, 0);
+            ang = right * 8.f + launchDir * 3.f + osg::Vec3f(0, 0, -2.f);
+            thrown = true;
+        }
+        mTaskScheduler->releaseHeldObject(owner, vel, ang, thrown, adrenaline, mass);
+        mHeldObject = MWWorld::Ptr();
+        return true;
+    }
+
+    bool PhysicsSystem::hasHeldObject() const
+    {
+        return !mHeldObject.isEmpty() && mTaskScheduler->hasHeldObject();
+    }
+
+    MWWorld::Ptr PhysicsSystem::getHeldObject() const
+    {
+        return hasHeldObject() ? mHeldObject : MWWorld::Ptr();
+    }
+
+    std::vector<ThrownObjectHit> PhysicsSystem::takeThrownObjectHits()
+    {
+        const auto raw = mTaskScheduler->takeFlyingObjectHits();
+        if (raw.empty())
+            return {};
+        std::vector<ThrownObjectHit> out;
+        out.reserve(raw.size());
+        for (const auto& entry : raw)
+        {
+            ThrownObjectHit hit;
+            for (const auto& [ref, obj] : mObjects)
+                if (obj->getCollisionObject() == entry.item)
+                { hit.item = obj->getPtr(); break; }
+            for (const auto& [ref, actor] : mActors)
+            {
+                if (actor->getCollisionObject() == entry.actor)
+                    hit.victim = actor->getPtr();
+                if (actor->getCollisionObject() == entry.owner)
+                    hit.attacker = actor->getPtr();
+            }
+            if (hit.victim.isEmpty())
+            {
+                for (const auto& [ref, ragdoll] : mRagdolls)
+                {
+                    const auto& bodies = ragdoll->getCollisionBodies();
+                    if (std::find(bodies.begin(), bodies.end(), entry.actor) != bodies.end())
+                    { hit.victim = ragdoll->getPtr(); break; }
+                }
+            }
+            if (hit.victim.isEmpty())
+                continue;
+            hit.hitPos = entry.hitPos;
+            hit.velocity = entry.velocity;
+            hit.hitNormal = entry.hitNormal;
+            hit.mass = entry.mass;
+            hit.adrenaline = entry.adrenaline;
+            out.push_back(std::move(hit));
+        }
+        return out;
+    }
+
+    std::vector<DynamicObjectImpact> PhysicsSystem::takeDynamicImpacts()
+    {
+        const auto raw = mTaskScheduler->takeDynamicImpacts();
+        if (raw.empty())
+            return {};
+        std::vector<DynamicObjectImpact> out;
+        out.reserve(raw.size());
+        for (const auto& entry : raw)
+        {
+            MWWorld::Ptr itemPtr;
+            for (const auto& [ref, obj] : mObjects)
+                if (obj->getCollisionObject() == entry.item)
+                { itemPtr = obj->getPtr(); break; }
+            if (!itemPtr.isEmpty())
+                out.push_back(DynamicObjectImpact{ itemPtr, entry.position, entry.normal, entry.speed });
+        }
+        return out;
+    }
+
+    std::string PhysicsSystem::chooseThrownReaction(const MWWorld::Ptr& ptr, const MWWorld::Ptr& attacker,
+        const osg::Vec3f& hitPos, const osg::Vec3f& direction, float) const
+    {
+        osg::Vec3f fromDir(-direction.x(), -direction.y(), 0.f);
+        if (fromDir.normalize() < 1e-4f && !attacker.isEmpty())
+        {
+            fromDir = attacker.getRefData().getPosition().asVec3() - ptr.getRefData().getPosition().asVec3();
+            fromDir.z() = 0.f;
+            if (fromDir.normalize() < 1e-4f)
+                fromDir = osg::Vec3f(0, 1, 0);
+        }
+        else if (fromDir.length2() < 1e-4f)
+            fromDir = osg::Vec3f(0, 1, 0);
+
+        const float rotZ = ptr.getRefData().getPosition().rot[2];
+        const osg::Vec3f npcForward(std::sin(rotZ), std::cos(rotZ), 0.f);
+        const osg::Vec3f npcRight(std::cos(rotZ), -std::sin(rotZ), 0.f);
+        const float frontDot = npcForward * fromDir;
+        const float rightDot = npcRight * fromDir;
+        const char* side = std::abs(frontDot) >= std::abs(rightDot)
+            ? (frontDot >= 0.f ? "front" : "back")
+            : (rightDot >= 0.f ? "right" : "left");
+
+        bool head = false;
+        auto world = MWBase::Environment::get().getWorld();
+        if (const auto* animation = world->getAnimation(ptr))
+        {
+            if (const auto headMat = animation->getBoneWorldMatrix("Bip01 Head"))
+                head = hitPos.z() >= headMat->getTrans().z() - 6.f;
+        }
+        if (!head)
+        {
+            const auto* actor = getActor(ptr);
+            const float height = actor ? 2.f * actor->getRenderingHalfExtents().z() : 128.f;
+            if (!world->getAnimation(ptr) || !world->getAnimation(ptr)->getBoneWorldMatrix("Bip01 Head"))
+                head = hitPos.z() >= ptr.getRefData().getPosition().asVec3().z() + height * .72f;
+        }
+        return std::string("brutal_push_") + (head ? "head_" : "body_") + side;
+    }
+
+    ThrownObjectHitResult PhysicsSystem::applyNpcThrownHit(const ThrownObjectHit& hit)
+    {
+        ThrownObjectHitResult result;
+        if (hit.victim.isEmpty() || !hit.victim.isInCell() || !hit.victim.getRefData().isEnabled()
+            || !hit.victim.getClass().isActor() || hit.victim == hit.attacker)
+            return result;
+        auto& stats = hit.victim.getClass().getCreatureStats(hit.victim);
+        if (!stats.mBrutalClinchOpponent.isEmpty())
+            return result;
+
+        if (const auto ragIt = mRagdolls.find(hit.victim.mRef); ragIt != mRagdolls.end())
+        {
+            osg::Vec3f dir = hit.velocity;
+            if (dir.normalize() < 1e-3f)
+                dir = osg::Vec3f(0, 1, 0);
+            std::size_t part = 0;
+            osg::Vec3f pt = hit.hitPos;
+            const float dist = ragIt->second->findKickPart(hit.hitPos - dir * 20.f, dir, 70.f, -1.f, part, pt);
+            if (dist < 0.f)
+                part = 0;
+            ragIt->second->applyKick(part, hit.velocity * std::clamp(hit.mass * .12f, .2f, .5f), hit.hitPos);
+            result.applied = true;
+            result.knockedDown = true;
+            return result;
+        }
+        if (stats.isDead())
+            return result;
+
+        osg::Vec3f horiz(hit.velocity.x(), hit.velocity.y(), 0.f);
+        if (horiz.normalize() < 1e-3f && !hit.attacker.isEmpty())
+        {
+            horiz = hit.victim.getRefData().getPosition().asVec3() - hit.attacker.getRefData().getPosition().asVec3();
+            horiz.z() = 0.f;
+            if (horiz.normalize() < 1e-3f)
+                horiz = osg::Vec3f(0, 1, 0);
+        }
+        else if (horiz.length2() < 1e-3f)
+            horiz = osg::Vec3f(0, 1, 0);
+
+        const float speed = hit.velocity.length();
+        const float kinetic = hit.mass * (speed / 900.f);
+        const float damage = hit.adrenaline
+            ? std::clamp(14.f + kinetic * 9.f, 14.f, 45.f)
+            : std::clamp(4.f + kinetic * 4.5f, 4.f, 22.f);
+        const float fatigueDamage = hit.adrenaline ? 40.f : 22.f;
+        const ESM::RefId objId = hit.item.isEmpty() ? ESM::RefId() : hit.item.getCellRef().getRefId();
+
+        result.reaction = chooseThrownReaction(hit.victim, hit.attacker, hit.hitPos, horiz, hit.mass);
+        result.headHit = result.reaction.find("head_") != std::string::npos;
+        result.damage = damage;
+        result.applied = true;
+
+        if (hit.adrenaline)
+        {
+            const float pushSpeed = std::clamp(440.f + std::min(hit.mass, 16.f) * 3.5f, 440.f, 496.f);
+            const osg::Vec3f push = horiz * pushSpeed + osg::Vec3f(0, 0, pushSpeed * .24f);
+            result.knockedDown = applyNpcKickImpl(
+                hit.victim, push, hit.attacker, false, true, false, false, {}, &hit.hitPos);
+            hit.victim.getClass().onHit(hit.victim, { { "health", damage }, { "fatigue", fatigueDamage } },
+                objId, hit.attacker, true, MWMechanics::DamageSourceType::Ranged);
+        }
+        else
+        {
+            hit.victim.getClass().onHit(hit.victim, { { "health", damage }, { "fatigue", fatigueDamage } },
+                objId, hit.attacker, true, MWMechanics::DamageSourceType::Ranged);
+            if (!stats.isDead())
+            {
+                const float pushSpeed = std::clamp(220.f + hit.mass * 12.f, 240.f, 440.f);
+                const osg::Vec3f push = horiz * pushSpeed + osg::Vec3f(0, 0, pushSpeed * .35f);
+                result.knockedDown = applyNpcKickImpl(
+                    hit.victim, push, hit.attacker, false, false, false, true, result.reaction, &hit.hitPos);
+            }
+        }
+        return result;
     }
 
     void PhysicsSystem::reportCollision(const btVector3& position, const btVector3& normal)

@@ -65,6 +65,7 @@ namespace MWPhysics
 {
     class RayCastingResult;
     class RayCastingInterface;
+    struct HeldObjectInfo;
 }
 
 namespace MWRender
@@ -337,6 +338,13 @@ namespace MWBase
         virtual MWWorld::Ptr kickNpcRagdoll(const osg::Vec3f& origin, const osg::Vec3f& forward, float reach,
             float minimumDot, const osg::Vec3f& velocity, bool& headHit, osg::Vec3f& hitPoint, std::size_t& hitPart) = 0;
         virtual void applyObjectImpulse(const MWWorld::Ptr& ptr, const osg::Vec3f& impulse, float mass) = 0;
+        virtual bool canHoldObject(const MWWorld::ConstPtr& ptr) const = 0;
+        virtual bool holdObject(const MWWorld::Ptr& ptr, const MWWorld::Ptr& holder, MWPhysics::HeldObjectInfo* info = nullptr) = 0;
+        virtual bool setHoldView(const MWWorld::Ptr& holder, const osg::Vec3f& eyePos, const osg::Vec3f& aimDir,
+            float pullback, float raiseOffset, bool dualGrip) = 0;
+        virtual bool releaseHeldObject(const MWWorld::Ptr& holder, const osg::Vec3f& eyePos, const osg::Vec3f& throwDir,
+            float throwSpeed, bool adrenaline) = 0;
+        virtual MWWorld::Ptr getHeldObject() const = 0;
         virtual void syncDynamicObject(const MWWorld::Ptr& ptr, const osg::Vec3f& position, const osg::Quat& rotation,
             const osg::Vec3f& renderedPosition, const osg::Quat& renderedRotation, bool authoritativeChanged) = 0;
         virtual void queueMovement(const MWWorld::Ptr& ptr, const osg::Vec3f& velocity) = 0;

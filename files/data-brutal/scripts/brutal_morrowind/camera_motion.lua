@@ -243,9 +243,13 @@ end
 
 local current={0,0,0,0,0,0}
 local actionWeight,lastAction,groundAction=0,ZERO,false
+local pulseState=nil
 return {
     interfaceName='BrutalCameraMotion',
-    interface={version=1,status=function()
+    interface={version=2,pulse=function(pitch,roll,z,duration)
+        if type(duration)~='number' or duration<=0 then return end
+        pulseState={pitch=tonumber(pitch) or 0,roll=tonumber(roll) or 0,z=tonumber(z) or 0,duration=duration,elapsed=0}
+    end,status=function()
         local moving={}
         for name,w in pairs(weights) do if w>0 then moving[name]=w end end
         return {available=data~=nil,movement=moving,landing=landing,actionWeight=actionWeight,
@@ -274,12 +278,23 @@ return {
                 local limit=math.pi/2-.001
                 out[1]=math.max(math.min(out[1],math.max(0,limit-pitch)),math.min(0,-limit-pitch))
             end
+            if pulseState then
+                pulseState.elapsed=pulseState.elapsed+dt
+                if pulseState.elapsed>=pulseState.duration then
+                    pulseState=nil
+                else
+                    local w=math.sin(math.pi*pulseState.elapsed/pulseState.duration)
+                    out[1]=out[1]+pulseState.pitch*w
+                    out[3]=out[3]+pulseState.roll*w
+                    out[6]=out[6]+pulseState.z*w
+                end
+            end
             current=out
             camera.setExtraPitch(camera.getExtraPitch()+out[1])
             camera.setExtraYaw(camera.getExtraYaw()+out[2])
             camera.setExtraRoll(camera.getExtraRoll()+out[3])
             camera.setFirstPersonOffset(camera.getFirstPersonOffset()+util.vector3(out[4],out[5],out[6]))
         end,
-        onLoad=function() weights,phases,landing,airborne,actionWeight,groundAction={},{},nil,0,0,false end,
+        onLoad=function() weights,phases,landing,airborne,actionWeight,groundAction,pulseState={},{},nil,0,0,false,nil end,
     },
 }

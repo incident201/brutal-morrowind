@@ -1894,6 +1894,24 @@ namespace MWMechanics
 
         if (!isKnockedOut() && !isKnockedDown() && !isRecovery())
         {
+            if (mPtr == getPlayer() && stats.mBrutalCarryingObject && weaptype == ESM::Weapon::None && weaptype != mWeaponType)
+            {
+                if (!mCurrentWeapon.empty())
+                    mAnimation->disable(mCurrentWeapon);
+                mAnimation->disable("shield");
+                mAnimation->disable("torch");
+                mAnimation->detachArrow();
+                mAnimation->showWeapons(false);
+                mAnimation->showCarriedLeft(false);
+                mUpperBodyState = UpperBodyState::WeaponEquipped;
+                mReadyToHit = false;
+                stats.mBrutalSlashRight = false;
+                stats.mBrutalSlideAttack = false;
+                mBrutalBlock = BrutalBlock::None;
+                stats.mBrutalBlockRequested = stats.mBrutalBlockRaised = stats.mBrutalParry = false;
+                mWeaponType = weaptype;
+                mCurrentWeapon.clear();
+            }
             std::string weapgroup;
             if (((!isWerewolf && cls.isBipedal(mPtr)) || mWeaponType != ESM::Weapon::Spell) && weaptype != mWeaponType
                 && mUpperBodyState <= UpperBodyState::AttackWindUp && mUpperBodyState != UpperBodyState::Unequipping
@@ -2646,6 +2664,17 @@ namespace MWMechanics
         }
 
         bool isPlayer = mPtr == MWMechanics::getPlayer();
+        if (isPlayer && cls.isActor() && cls.getCreatureStats(mPtr).mBrutalCarryingObject)
+        {
+            auto& st = cls.getCreatureStats(mPtr);
+            if (st.getDrawState() != DrawState::Nothing)
+                st.setDrawState(DrawState::Nothing);
+            setAttackingOrSpell(false);
+            st.mBrutalBlockRequested = st.mBrutalBlockRaised = st.mBrutalParry = false;
+            mBrutalBlock = BrutalBlock::None;
+            if (mUpperBodyState > UpperBodyState::WeaponEquipped)
+                cancelAttackForKick();
+        }
         if (isPlayer && mBrutalFast != BrutalFast::Attack)
             cls.getCreatureStats(mPtr).mBrutalAttackKind = mAttackType == "chop" ? 0 : mAttackType == "thrust" ? 2 : 1;
         if (isPlayer && !cls.getCreatureStats(mPtr).mPowerStrike.token.empty())

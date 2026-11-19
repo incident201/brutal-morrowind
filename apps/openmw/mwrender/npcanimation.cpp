@@ -4050,6 +4050,10 @@ namespace MWRender
 
     bool NpcAnimation::updateCarriedLeftVisible(const int weaptype) const
     {
+        if (mPtr == MWMechanics::getPlayer()
+            && mPtr.getClass().getCreatureStats(mPtr).mBrutalCarryingObject)
+            return false;
+
         if (carriesLeftWeapon())
             return mPtr.getClass().getCreatureStats(mPtr).getDrawState() == MWMechanics::DrawState::Weapon;
 

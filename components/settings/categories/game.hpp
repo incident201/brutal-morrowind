@@ -32,6 +32,7 @@ namespace Settings
         SettingValue<int> mBrutalGroundFinisherHealth{ mIndex, "Game", "brutal ground finisher health",
             makeClampSanitizerInt(0, 100) };
         SettingValue<bool> mBrutalDynamicProps{ mIndex, "Game", "brutal dynamic props" };
+        SettingValue<bool> mBrutalObjectGrab{ mIndex, "Game", "brutal object grab" };
         SettingValue<bool> mBrutalEquipmentPhysics{ mIndex, "Game", "brutal equipment physics" };
         SettingValue<float> mBrutalRagdollWeaponDrop{ mIndex, "Game", "brutal ragdoll weapon drop",
             makeClampSanitizerFloat(0, 1) };

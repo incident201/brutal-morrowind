@@ -161,6 +161,33 @@ namespace MWPhysics
         };
         std::vector<DynamicObjectTransform> readDynamicObjectTransforms();
         void disableDynamicObjects(bool props, bool equipment);
+        void holdObject(const std::shared_ptr<Object>& object, const std::vector<osg::Vec3f>& vertices,
+            float mass, const btCollisionObject* owner);
+        void setHoldTarget(const osg::Vec3f& center, const osg::Quat& rotation, float maxSpeed = 1400.f);
+        void releaseHeldObject(const btCollisionObject* owner, const osg::Vec3f& linearVelocity,
+            const osg::Vec3f& angularVelocity, bool thrown, bool adrenaline, float mass);
+        bool hasHeldObject() const;
+        osg::Vec3f getHeldCenter() const;
+        struct FlyingObjectHit
+        {
+            const btCollisionObject* item = nullptr;
+            const btCollisionObject* actor = nullptr;
+            const btCollisionObject* owner = nullptr;
+            osg::Vec3f hitPos;
+            osg::Vec3f velocity;
+            osg::Vec3f hitNormal;
+            float mass = 1.f;
+            bool adrenaline = false;
+        };
+        std::vector<FlyingObjectHit> takeFlyingObjectHits();
+        struct DynamicObjectImpact
+        {
+            const btCollisionObject* item = nullptr;
+            osg::Vec3f position;
+            osg::Vec3f normal;
+            float speed = 0.f;
+        };
+        std::vector<DynamicObjectImpact> takeDynamicImpacts();
 
         // Thread safe wrappers
         void rayTest(const btVector3& rayFromWorld, const btVector3& rayToWorld,
@@ -241,6 +268,44 @@ namespace MWPhysics
         // Separate registry: loose items must not alter ragdoll substep policy.
         std::unordered_map<const btRigidBody*, DynamicTransformHistory> mDynamicTransforms;
         void resetDynamicObjectHistory(const Object& object);
+        struct HeldState
+        {
+            btRigidBody* body = nullptr;
+            const btCollisionObject* owner = nullptr;
+            btVector3 targetOrigin{ 0, 0, 0 };
+            btQuaternion targetRotation{ 0, 0, 0, 1 };
+            float maxSpeed = 1400.f;
+            bool hasTarget = false;
+        };
+        mutable std::mutex mHoldStateMutex;
+        HeldState mHeldState;
+        struct FlyingObjectState
+        {
+            btRigidBody* body = nullptr;
+            const btCollisionObject* owner = nullptr;
+            float age = 0.f;
+            float mass = 1.f;
+            bool adrenaline = false;
+            btVector3 prevOrigin{ 0, 0, 0 };
+        };
+        std::vector<FlyingObjectState> mFlyingObjects;
+        struct ActorIgnoreEntry
+        {
+            float timer = 0.f;
+            const btCollisionObject* owner = nullptr;
+        };
+        std::unordered_map<const btRigidBody*, ActorIgnoreEntry> mActorIgnoreTimers;
+        std::unordered_map<btRigidBody*, std::vector<const btCollisionObject*>> mWedgedIn;
+        std::unordered_map<const btRigidBody*, float> mImpactSoundCooldowns;
+        mutable std::mutex mImpactQueueMutex;
+        std::vector<FlyingObjectHit> mFlyingHits;
+        std::vector<DynamicObjectImpact> mDynamicImpacts;
+        void freeWedgedObjectUnsafe(btRigidBody* body);
+        void updateWedgedObjectsUnsafe();
+        void steerHeldObjectUnsafe(btScalar dt);
+        void updateFlyingObjectsUnsafe(btScalar dt);
+        void collectDynamicImpactsUnsafe(btScalar dt);
+        void clearObjectTrackingUnsafe(btCollisionObject* collisionObject);
         struct ReleasedGripPair { btCollisionObject* item; btCollisionObject* grip; };
         std::vector<ReleasedGripPair> mReleasedGripPairs;
         void clearReleasedGripPairs(btCollisionObject* removed);

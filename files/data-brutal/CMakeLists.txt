@@ -26,6 +26,7 @@ set(BRUTAL_DATA_FILES
     scripts/brutal_morrowind/input_bindings.lua
     scripts/brutal_morrowind/kick_global.lua
     scripts/brutal_morrowind/native_impulse.lua
+    scripts/brutal_morrowind/object_grab.lua
     scripts/brutal_morrowind/player.lua
     scripts/brutal_morrowind/ragdoll_global.lua
     scripts/brutal_morrowind/ragdoll_local.lua

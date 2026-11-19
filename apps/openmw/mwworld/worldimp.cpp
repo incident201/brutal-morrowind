@@ -1949,6 +1949,58 @@ namespace MWWorld
         mPhysics->applyObjectImpulse(ptr, impulse, mass);
     }
 
+    bool World::canHoldObject(const ConstPtr& ptr) const
+    {
+        return mPhysics && mPhysics->canHoldObject(ptr);
+    }
+
+    bool World::holdObject(const Ptr& ptr, const Ptr& holder, MWPhysics::HeldObjectInfo* info)
+    {
+        if (!mPhysics || !ptr.isInCell() || !ptr.getRefData().getBaseNode() || !ptr.getRefData().isEnabled())
+            return false;
+        return mPhysics->holdObject(ptr, holder, info);
+    }
+
+    bool World::setHoldView(const Ptr& holder, const osg::Vec3f& eyePos, const osg::Vec3f& aimDir,
+        float pullback, float raiseOffset, bool dualGrip)
+    {
+        if (!mPhysics || holder.isEmpty() || !holder.isInCell())
+            return false;
+        const osg::Quat holderYaw(-holder.getRefData().getPosition().rot[2], osg::Vec3f(0, 0, 1));
+        return mPhysics->setHoldView(eyePos, aimDir, holderYaw, pullback, raiseOffset, dualGrip);
+    }
+
+    bool World::releaseHeldObject(const Ptr& holder, const osg::Vec3f& eyePos, const osg::Vec3f& throwDir,
+        float throwSpeed, bool adrenaline)
+    {
+        if (!mPhysics)
+            return false;
+        return mPhysics->releaseHeldObject(holder, eyePos, throwDir, throwSpeed, adrenaline);
+    }
+
+    Ptr World::getHeldObject() const
+    {
+        return mPhysics ? mPhysics->getHeldObject() : Ptr();
+    }
+
+    void World::processThrownObjects()
+    {
+        if (!mPhysics)
+            return;
+        auto lua = MWBase::Environment::get().getLuaManager();
+        for (const auto& hit : mPhysics->takeThrownObjectHits())
+        {
+            const auto res = mPhysics->applyNpcThrownHit(hit);
+            if (res.applied)
+                lua->thrownObjectHit(hit.attacker, hit.item, hit.victim, hit.hitPos, hit.hitNormal, hit.velocity,
+                    hit.mass, hit.adrenaline, res.headHit, res.knockedDown, res.reaction, res.damage);
+        }
+        const Ptr player = getPlayerPtr();
+        for (const auto& impact : mPhysics->takeDynamicImpacts())
+            if (!player.isEmpty())
+                lua->dynamicObjectImpact(player, impact.item, impact.position, impact.normal, impact.speed);
+    }
+
     void World::syncDynamicObject(const Ptr& ptr, const osg::Vec3f& position, const osg::Quat& rotation,
         const osg::Vec3f& renderedPosition, const osg::Quat& renderedRotation, bool authoritativeChanged)
     {
@@ -1995,6 +2047,7 @@ namespace MWWorld
         mDiscardMovements = false;
         mPhysics->moveActors();
         mPhysics->moveDynamicObjects();
+        processThrownObjects();
         mPhysics->moveNpcRagdolls(duration);
     }
 

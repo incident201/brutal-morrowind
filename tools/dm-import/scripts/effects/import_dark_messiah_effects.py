@@ -45,6 +45,18 @@ SOUNDS = {
     # Dark Messiah's named slow-motion cues.
     'slow_motion_in': ('player', 'Slow_Motion_In'),
     'slow_motion_out': ('player', 'Slow_Motion_Out'),
+    # Object grab, drop, throw effort/whoosh, and small-object impact sounds.
+    'object_pickup': ('inventory', 'Take_Object'),
+    'object_drop': ('inventory', 'Drop_Object'),
+    'object_throw_voice': ('player', 'Player_throwobject'),
+    'object_throw_whoosh': ('daggers', 'Daggers_Throw'),
+    'object_hit_flesh': ('collisions', 'FleshSmall_on_All'),
+    'object_hit_wood': ('collisions', 'WoodSmall_on_Stone'),
+    'object_hit_metal': ('collisions', 'MetalSmall_on_Stone'),
+    'object_hit_stone': ('collisions', 'StoneSmall_on_Stone'),
+    'object_hit_glass': ('collisions', 'GlassSmall_on_Stone'),
+    'object_hit_pottery': ('collisions', 'PotterySmall_on_Stone'),
+    'object_hit_book': ('collisions', 'Book_on_Stone'),
 }
 MATERIALS = {
     'blood': 'effects/blood_part_001',

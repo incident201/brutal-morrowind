@@ -112,6 +112,12 @@ namespace MWLua
         void actorExternalImpact(const MWWorld::Ptr& actor, const MWWorld::Ptr& hitObject,
             const osg::Vec3f& position, const osg::Vec3f& normal, float speed) override;
         void npcKickRagdoll(const MWWorld::Ptr& attacker, const MWWorld::Ptr& target) override;
+        void thrownObjectHit(const MWWorld::Ptr& attacker, const MWWorld::Ptr& item,
+            const MWWorld::Ptr& victim, const osg::Vec3f& hitPos, const osg::Vec3f& normal,
+            const osg::Vec3f& velocity, float mass, bool adrenaline, bool headHit, bool knockedDown,
+            std::string_view reaction, float damage) override;
+        void dynamicObjectImpact(const MWWorld::Ptr& player, const MWWorld::Ptr& item,
+            const osg::Vec3f& position, const osg::Vec3f& normal, float speed) override;
         void exteriorCreated(MWWorld::CellStore& cell) override
         {
             mEngineEvents.addToQueue(EngineEvents::OnNewExterior{ cell });

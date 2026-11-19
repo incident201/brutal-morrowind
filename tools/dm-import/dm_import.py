@@ -29,9 +29,9 @@ ANIMATION = ROOT / 'scripts/animation'
 CREATURES = ROOT / 'scripts/creatures'
 EFFECTS = ROOT / 'scripts/effects'
 CALIBRATION = HERE / 'calibration'
-RECIPE_VERSION = 13  # Misc::DarkMessiahData::sRecipe in the engine must match.
+RECIPE_VERSION = 14  # Misc::DarkMessiahData::sRecipe in the engine must match.
 # Conversion steps per import, for progress reporting.
-TOTAL_STEPS = 40
+TOTAL_STEPS = 42
 KEYFRAMES = ('.kf', '.yaml')
 # Steps run side by side, one core each; the matrices involved are 4x4.
 ENVIRONMENT = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1')
@@ -521,6 +521,8 @@ class Importer:
                 arms = self.finish(dagger, staff, sword, chain)
                 frames.result(); effects.result(); creatures.result(); kick.result()
                 self.run('Ground finisher', ANIMATION / 'import_ground_finisher.py', *self.source,
+                         '--camera-contract', self.contract, '--arms', arms, '--calibration', CALIBRATION)
+                self.run('Object grab and throw', ANIMATION / 'import_object_grab.py', *self.source,
                          '--camera-contract', self.contract, '--arms', arms, '--calibration', CALIBRATION)
                 # The finished arm groups name their DM clips; the head camera follows them.
                 self.run('Camera motion', ANIMATION / 'import_camera_head.py', '--vpk-root', self.vpks,

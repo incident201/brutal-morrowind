@@ -14,5 +14,6 @@ PLAYER: scripts/brutal_morrowind/adrenaline.lua
 PLAYER: scripts/brutal_morrowind/feedback_player.lua
 PLAYER: scripts/brutal_morrowind/clinch.lua
 PLAYER: scripts/brutal_morrowind/camera_motion.lua
+PLAYER: scripts/brutal_morrowind/object_grab.lua
 
 GLOBAL: scripts/brutal_morrowind/kick_global.lua

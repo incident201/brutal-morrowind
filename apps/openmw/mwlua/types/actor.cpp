@@ -492,7 +492,8 @@ namespace MWLua
                 {"stamina", g.mBrutalStamina}, {"wallBounce", g.mBrutalWallBounce},
                 {"controlsEnabled", g.mBrutalControlsEnabled}, {"slide", g.mBrutalSlide}, {"clinch", g.mBrutalClinch}, {"fastAttacks", g.mBrutalFastAttacks},
                 {"combatSounds", g.mBrutalCombatSounds}, {"bloodEffects", g.mBrutalBloodEffects},
-                {"sparkEffects", g.mBrutalSparkEffects}, {"kickAlwaysRagdoll", g.mBrutalKickAlwaysRagdoll}
+                {"sparkEffects", g.mBrutalSparkEffects}, {"kickAlwaysRagdoll", g.mBrutalKickAlwaysRagdoll},
+                {"objectGrab", g.mBrutalObjectGrab}
             };
         };
         actor["setBrutalRagdollWeaponDrop"] = [context](const SelfObject& self, float chance) {
@@ -557,6 +558,7 @@ namespace MWLua
                 g.mRagdollLimbResponse.set(on("ragdollLimbResponse"));
                 g.mRagdollSelfCollision.set(on("ragdollSelfCollision"));
                 g.mBrutalDynamicProps.set(on("dynamicProps"));
+                g.mBrutalObjectGrab.set(on("objectGrab"));
                 g.mBrutalEquipmentPhysics.set(on("equipmentPhysics"));
                 g.mBrutalMeleeGeometry.set(on("meleeGeometry"));
                 g.mBrutalImpactEffects.set(on("impactEffects"));
@@ -623,6 +625,27 @@ namespace MWLua
                     for (const auto& ptr : actors) if (ptr != player && ptr.getClass().isNpc()) reload(ptr);
                 }
             }, "SetBrutalOption");
+        };
+        actor["canHoldObject"] = [](const Object& object) {
+            const auto ptr = object.ptrOrEmpty();
+            return !ptr.isEmpty() && MWBase::Environment::get().getWorld()->canHoldObject(ptr);
+        };
+        actor["setBrutalCarryingObject"] = [context](const SelfObject& self, bool carrying) {
+            if (self.ptr() != MWMechanics::getPlayer())
+                throw std::runtime_error("setBrutalCarryingObject requires player SELF");
+            context.mLuaManager->addAction([object = Object(self), carrying] {
+                const auto ptr = object.ptrOrEmpty();
+                if (ptr.isEmpty() || !ptr.getClass().isActor())
+                    return;
+                auto& stats = ptr.getClass().getCreatureStats(ptr);
+                stats.mBrutalCarryingObject = carrying;
+                if (carrying)
+                {
+                    stats.setDrawState(MWMechanics::DrawState::Nothing);
+                    stats.mBrutalBlockRequested = stats.mBrutalBlockRaised = stats.mBrutalParry = false;
+                }
+                MWBase::Environment::get().getMechanicsManager()->forceStateUpdate(ptr);
+            }, "SetBrutalCarryingObject");
         };
         actor["armPowerStrike"] = [context](const SelfObject& self, std::string token,
             sol::optional<Misc::FiniteFloat> multiplier, sol::optional<Misc::FiniteFloat> minimumStrength) {

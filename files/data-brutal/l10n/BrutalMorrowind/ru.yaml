@@ -27,6 +27,8 @@ ragdollWeaponDrop: Шанс выпадения оружия, %
 ragdollWeaponDropDescription: "Шанс выпадения каждого оружия из рук живого сбитого с ног NPC. При смерти оружие выпадает всегда. Этот шанс также применяется к щитам и заряженным боеприпасам."
 dynamicProps: Физика предметов мира
 dynamicPropsDescription: "Удары сдвигают лежащие предметы."
+objectGrabEnabled: Захват и бросок предметов
+objectGrabEnabledDescription: "Поднимайте небольшие предметы мира, переносите их, опускайте или бросайте во врагов. В адреналине бросок сбивает врага с ног (ragdoll)."
 movementEnabled: Ходьба, бег и спринт
 movementEnabledDescription: "Скорости Dark Messiah. Alt — ходьба; кнопка спринта задаётся выше."
 staminaEnabled: Выносливость Dark Messiah
@@ -103,6 +105,10 @@ dualWieldEnabledDescription: "Парные анимации и удары дву
 kickBinding: "Кнопка пинка"
 
 kickBindingDescription: "Нажмите и задайте кнопку; Esc — убрать."
+
+grabBinding: "Кнопка захвата / отпускания предмета"
+
+grabBindingDescription: "Нажмите и задайте кнопку; Esc — убрать."
 
 sprintBinding: "Кнопка спринта"
 

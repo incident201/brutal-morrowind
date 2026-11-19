@@ -1,4 +1,5 @@
 #include "worldbindings.hpp"
+#include "../mwphysics/physicssystem.hpp"
 #include "../mwphysics/raycasting.hpp"
 #include "../mwrender/animation.hpp"
 #include "../mwrender/npcanimation.hpp"
@@ -817,6 +818,58 @@ namespace MWLua
                 if (!ptr.isEmpty())
                     MWBase::Environment::get().getWorld()->applyObjectImpulse(ptr, impulse, mass);
             }, "ApplyObjectImpulse");
+        };
+        api["canHoldObject"] = [](const GObject& object) {
+            const auto ptr = object.ptrOrEmpty();
+            return !ptr.isEmpty() && MWBase::Environment::get().getWorld()->canHoldObject(ptr);
+        };
+        api["holdObject"] = [context](const GObject& object, const GObject& holder) {
+            context.mLuaManager->addAction([lua = context.mLua, manager = context.mLuaManager, object, holder] {
+                const auto itemPtr = object.ptrOrEmpty();
+                const auto actorPtr = holder.ptrOrEmpty();
+                MWPhysics::HeldObjectInfo info;
+                const bool ok = !itemPtr.isEmpty() && !actorPtr.isEmpty()
+                    && MWBase::Environment::get().getWorld()->holdObject(itemPtr, actorPtr, &info);
+                if (actorPtr.isEmpty())
+                    return;
+                lua->protectedCall([&](LuaUtil::LuaView& view) {
+                    sol::table data = view.newTable();
+                    data["object"] = object;
+                    if (ok)
+                    {
+                        data["dualGrip"] = info.dualGrip;
+                        data["radius"] = info.radius;
+                        data["mass"] = info.mass;
+                        data["halfExtents"] = info.halfExtents;
+                    }
+                    manager->sendLocalEvent(actorPtr, ok ? "BrutalObjectHeld" : "BrutalObjectHoldFailed", data);
+                });
+            }, "HoldObject");
+        };
+        api["setHoldView"] = [context](const GObject& holder, Misc::FiniteVec3f eyePos, Misc::FiniteVec3f aimDir,
+                                 Misc::FiniteFloat pullback, Misc::FiniteFloat raiseOffset, bool dualGrip) {
+            const float p = pullback;
+            const float r = raiseOffset;
+            context.mLuaManager->addAction([holder, eyePos, aimDir, p, r, dualGrip] {
+                const auto ptr = holder.ptrOrEmpty();
+                if (!ptr.isEmpty())
+                    MWBase::Environment::get().getWorld()->setHoldView(ptr, eyePos, aimDir, p, r, dualGrip);
+            }, "SetHoldView");
+        };
+        api["releaseHeldObject"] = [context](const GObject& holder, Misc::FiniteVec3f eyePos,
+                                       Misc::FiniteVec3f throwDir, Misc::FiniteFloat throwSpeed, bool adrenaline) {
+            const float speed = std::clamp(float(throwSpeed), 0.f, 2000.f);
+            context.mLuaManager->addAction([holder, eyePos, throwDir, speed, adrenaline] {
+                const auto ptr = holder.ptrOrEmpty();
+                if (!ptr.isEmpty())
+                    MWBase::Environment::get().getWorld()->releaseHeldObject(ptr, eyePos, throwDir, speed, adrenaline);
+            }, "ReleaseHeldObject");
+        };
+        api["getHeldObject"] = []() -> sol::optional<GObject> {
+            const auto ptr = MWBase::Environment::get().getWorld()->getHeldObject();
+            if (ptr.isEmpty())
+                return sol::nullopt;
+            return GObject(ptr);
         };
 
         ObjectLists* objectLists = context.mObjectLists;

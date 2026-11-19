@@ -47,14 +47,20 @@ namespace MWPhysics
         bool isSolid() const;
         void setSolid(bool solid);
         bool isAnimated() const;
-        // Scheduler collision-world lock is required for the following three operations.
+        // Scheduler collision-world lock is required for the following operations.
         void makeDynamic(float mass);
         void makeStatic();
         // Release-only geometry is already expressed in this item's rigid local frame.
         // Call before insertion under the scheduler's collision-world lock.
         void makeReleasedDynamic(float mass, const std::vector<osg::Vec3f>& vertices,
             const osg::Vec3f& frameLinearVelocity, const osg::Vec3f& angularVelocity);
+        void makeGrabbableDynamic(float mass, const std::vector<osg::Vec3f>& vertices);
         void applyDynamicImpulse(const osg::Vec3f& impulse, float mass);
+        bool isDynamic() const { return mDynamicShape != nullptr && mDynamicMass > 0.f; }
+        float getDynamicMass() const { return mDynamicMass; }
+        osg::Vec3f getDynamicHalfExtents() const;
+        btTransform getDynamicBodyTransform(const osg::Vec3f& centerWorld, const btQuaternion& rotation) const;
+        btVector3 getDynamicCenterWorldOffset(const osg::Quat& rotation) const;
         void captureDynamicTransform();
         // Scheduler collision-world lock is required; render COM and raw body
         // belong to the same completed-step snapshot.

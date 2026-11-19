@@ -143,6 +143,43 @@ namespace MWPhysics
         osg::Vec3f mStormDirection;
     };
 
+    struct HeldObjectInfo
+    {
+        osg::Vec3f halfExtents;
+        float mass = 1.f;
+        float radius = 4.f;
+        bool dualGrip = false;
+    };
+
+    struct ThrownObjectHit
+    {
+        MWWorld::Ptr item;
+        MWWorld::Ptr victim;
+        MWWorld::Ptr attacker;
+        osg::Vec3f hitPos;
+        osg::Vec3f velocity;
+        osg::Vec3f hitNormal;
+        float mass = 1.f;
+        bool adrenaline = false;
+    };
+
+    struct DynamicObjectImpact
+    {
+        MWWorld::Ptr item;
+        osg::Vec3f position;
+        osg::Vec3f normal;
+        float speed = 0.f;
+    };
+
+    struct ThrownObjectHitResult
+    {
+        bool applied = false;
+        bool headHit = false;
+        bool knockedDown = false;
+        float damage = 0.f;
+        std::string reaction;
+    };
+
     template <class Ptr, class FrameData>
     class SimulationImpl
     {
@@ -203,6 +240,18 @@ namespace MWPhysics
         void remove(const MWWorld::Ptr& ptr);
 
         void updateScale(const MWWorld::Ptr& ptr);
+
+        bool canHoldObject(const MWWorld::ConstPtr& ptr) const;
+        bool holdObject(const MWWorld::Ptr& ptr, const MWWorld::Ptr& holder, HeldObjectInfo* info = nullptr);
+        bool setHoldView(const osg::Vec3f& eyePos, const osg::Vec3f& aimDir, const osg::Quat& viewOrient,
+            float pullback = 0.f, float raiseOffset = 0.f, bool dualGrip = false);
+        bool releaseHeldObject(const MWWorld::Ptr& holder, const osg::Vec3f& eyePos, const osg::Vec3f& throwDir,
+            float throwSpeed, bool adrenaline);
+        bool hasHeldObject() const;
+        MWWorld::Ptr getHeldObject() const;
+        std::vector<ThrownObjectHit> takeThrownObjectHits();
+        std::vector<DynamicObjectImpact> takeDynamicImpacts();
+        ThrownObjectHitResult applyNpcThrownHit(const ThrownObjectHit& hit);
         void updateRotation(const MWWorld::Ptr& ptr, osg::Quat rotate);
         void updatePosition(const MWWorld::Ptr& ptr);
 
@@ -353,7 +402,8 @@ namespace MWPhysics
     private:
         void updateWater();
         bool applyNpcKickImpl(const MWWorld::Ptr& ptr, const osg::Vec3f& kick, const MWWorld::Ptr& attacker,
-            bool continuing, bool knockDown, bool superKick, bool slideTrip = false);
+            bool continuing, bool knockDown, bool superKick, bool slideTrip = false,
+            std::string_view reactionOverride = {}, const osg::Vec3f* impactPointOverride = nullptr);
         void refreshSuperKickActors();
         void processSuperKickContacts();
 
@@ -426,6 +476,11 @@ namespace MWPhysics
         std::size_t mSimulationsCounter = 0;
         std::array<std::vector<Simulation>, 2> mSimulations;
         std::vector<std::pair<MWWorld::Ptr, osg::Vec3f>> mActorsPositions;
+        MWWorld::Ptr mHeldObject;
+        bool mHeldDualGrip = false;
+
+        std::string chooseThrownReaction(const MWWorld::Ptr& ptr, const MWWorld::Ptr& attacker,
+            const osg::Vec3f& hitPos, const osg::Vec3f& direction, float mass) const;
 
         PhysicsSystem(const PhysicsSystem&);
         PhysicsSystem& operator=(const PhysicsSystem&);

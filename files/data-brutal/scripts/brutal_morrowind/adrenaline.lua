@@ -199,9 +199,18 @@ local function resolved(e)
     clearReservation()
     self:sendEvent('BrutalAdrenalineSpent',{attackId=e.attackId,token=e.token})
 end
+local function spendThrow()
+    if not settings.get('adrenalineEnabled') or types.Actor.isDead(self) then return false end
+    if meter<CAPACITY or pendingKick then return false end
+    meter,decayElapsed=0,0;spent=spent+1
+    clearReservation()
+    self:sendEvent('BrutalAdrenalineSpent',{source='throw'})
+    syncArrestEffect(visible())
+    return true
+end
 return {
     interfaceName='BrutalAdrenaline',
-    interface={version=5,bonus=function() self:sendEvent('BrutalAdrenalineBonus',{}) end,fill=fill,reserveSuperKick=reserveSuperKick,status=function()
+    interface={version=6,bonus=function() self:sendEvent('BrutalAdrenalineBonus',{}) end,fill=fill,reserveSuperKick=reserveSuperKick,spendThrow=spendThrow,status=function()
         return {amount=meter,capacity=CAPACITY,ready=meter>=CAPACITY and not pendingKick,apiAvailable=available,
             superKickPending=pendingKick,superKicks=superKicks,rejectedKicks=rejectedKicks,lastKickId=lastKickId,
             token=available and query(self) or '',gains=gains,spent=spent,hudVisible=hud.isVisible(),

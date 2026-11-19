@@ -10,7 +10,7 @@ local native={
     dualWieldEnabled='dualWield',meleeGeometry='meleeGeometry',equipmentPhysics='equipmentPhysics',
     npcStandupEnabled='npcStandup',ragdollSoftStops='ragdollSoftStops',ragdollNeutralPose='ragdollNeutralPose',
     ragdollLimbResponse='ragdollLimbResponse',ragdollSelfCollision='ragdollSelfCollision',
-    ragdollEnabled='ragdoll',ragdollEnhancements='ragdollEnhancements',dynamicProps='dynamicProps',
+    ragdollEnabled='ragdoll',ragdollEnhancements='ragdollEnhancements',dynamicProps='dynamicProps',objectGrabEnabled='objectGrab',
     bloodDecals='bloodDecals',weaponBlood='weaponBlood',worldBlood='worldBlood',movementEnabled='kineticMovement',activeBlockEnabled='activeBlocking',
     parryEnabled='swordParry',attackCombosEnabled='comboAttacks',npcAiTweaks='npcCombatTweaks',
     npcStagger='npcStagger',hitRecovery='hitRecovery',staminaEnabled='stamina',

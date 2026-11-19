@@ -167,6 +167,7 @@ namespace MWWorld
 
         void doPhysics(float duration, osg::Timer_t frameStart, unsigned int frameNumber, osg::Stats& stats);
         ///< Run physics simulation and modify \a world accordingly.
+        void processThrownObjects();
 
         void updateNavigator();
 
@@ -418,6 +419,13 @@ namespace MWWorld
         Ptr kickNpcRagdoll(const osg::Vec3f& origin, const osg::Vec3f& forward, float reach, float minimumDot,
             const osg::Vec3f& velocity, bool& headHit, osg::Vec3f& hitPoint, std::size_t& hitPart) override;
         void applyObjectImpulse(const Ptr& ptr, const osg::Vec3f& impulse, float mass) override;
+        bool canHoldObject(const ConstPtr& ptr) const override;
+        bool holdObject(const Ptr& ptr, const Ptr& holder, MWPhysics::HeldObjectInfo* info = nullptr) override;
+        bool setHoldView(const Ptr& holder, const osg::Vec3f& eyePos, const osg::Vec3f& aimDir,
+            float pullback, float raiseOffset, bool dualGrip) override;
+        bool releaseHeldObject(const Ptr& holder, const osg::Vec3f& eyePos, const osg::Vec3f& throwDir,
+            float throwSpeed, bool adrenaline) override;
+        Ptr getHeldObject() const override;
         void syncDynamicObject(const Ptr& ptr, const osg::Vec3f& position, const osg::Quat& rotation,
             const osg::Vec3f& renderedPosition, const osg::Quat& renderedRotation, bool authoritativeChanged) override;
         void queueMovement(const Ptr& ptr, const osg::Vec3f& velocity) override;

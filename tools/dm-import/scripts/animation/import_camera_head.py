@@ -40,6 +40,8 @@ def candidates(folder, clip):
     if name.startswith('anm_'):
         name = name[4:]
     out = ['@layer_'+name]
+    if name.startswith('layer_'):
+        out.insert(0, '@'+name)
     # Kicks: anm_sword_noshield_kick_medium -> @layer_sword_kick_medium, shield -> @layer_shield_kick_*.
     for height in ('medium', 'low'):
         if name.endswith('kick_'+height):
@@ -78,6 +80,22 @@ def main():
         return np.r_[angles, scale * iv.BASIS @ np.asarray(position, float)]
 
     def bake(name, previous=None):
+        if name.lower() in ('@layer_throw_solo_raise', '@layer_throw_solo_throw',
+                            '@layer_throw_dual_raise', '@layer_throw_dual_throw'):
+            if name in clips:
+                return name
+            is_dual = 'dual' in name
+            is_raise = name.endswith('_raise')
+            source_name = '@layer_throw_dual_high' if is_dual else '@layer_throw_solo_high'
+            anim = available.get(source_name.lower())
+            if anim is None:
+                return False
+            split_frame = 7  # Frame 7 (~0.29s) is the peak cock-back right before the forward whip.
+            f_start = 0 if is_raise else split_frame
+            f_end = split_frame if is_raise else (anim.frame_count - 1)
+            frames = [sample(source_name, frame / anim.fps).tolist() for frame in range(f_start, f_end + 1)]
+            clips[name] = dict(fps=float(anim.fps), loop=False, frames=frames)
+            return name
         anim = available.get(name.lower())
         if anim is None:
             return False
@@ -119,8 +137,11 @@ def main():
                     raise ValueError(f"Ground finisher camera layer missing for {entry['clip']}")
                 report.setdefault(folder, []).append([group, entry['start'], entry['clip'], head])
                 if head:
+                    duration = entry['duration']
+                    if head.startswith('@layer_throw_') and head in clips and clips[head]['frames']:
+                        duration = (len(clips[head]['frames']) - 1) / clips[head]['fps']
                     parts.append(dict(start=entry['start'], stop=entry['stop'], clip=head,
-                                      duration=entry['duration'], natural=entry['natural']))
+                                      duration=duration, natural=entry['natural']))
             if parts:
                 sets.setdefault(folder, {})[group] = parts
 

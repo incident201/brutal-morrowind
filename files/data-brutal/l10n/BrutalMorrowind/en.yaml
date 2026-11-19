@@ -27,6 +27,8 @@ ragdollWeaponDrop: Weapon drop chance, %
 ragdollWeaponDropDescription: "Chance per held weapon when a living NPC is knocked down. Held weapons always drop on death. This chance also applies to shields and loaded ammunition."
 dynamicProps: Movable world items
 dynamicPropsDescription: "Impacts move loose items."
+objectGrabEnabled: Grab and throw items
+objectGrabEnabledDescription: "Pick up small world items, carry them, drop them, or throw them at enemies. In adrenaline, throws knock enemies into ragdoll."
 movementEnabled: Walking, running and sprinting
 movementEnabledDescription: "Dark Messiah speeds. Alt walks; sprint uses the assigned button."
 staminaEnabled: Dark Messiah stamina
@@ -103,6 +105,10 @@ dualWieldEnabledDescription: "Paired animations and strikes with two equipped sh
 kickBinding: "Kick button"
 
 kickBindingDescription: "Click, then press a button; Esc clears."
+
+grabBinding: "Grab / drop item button"
+
+grabBindingDescription: "Click, then press a button; Esc clears."
 
 sprintBinding: "Sprint button"
 

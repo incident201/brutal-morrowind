@@ -1,6 +1,7 @@
 Brutal Morrowind (unreleased)
 ----------------------------
 
+    Combat: Pick up and carry small physical objects with G and drop or throw them with Use (left click), auto-holstering and restoring equipped gear with Dark Messiah first-person animations, camera motion and sounds, directional hit-location NPC staggers, and adrenaline-powered ragdoll knockdowns. Recipe 14 requires reimporting the Dark Messiah assets.
     Combat: NPCs brace against repeated fast attacks and prefer a charged guard breaker against a prolonged player block.
     Combat: Guard impacts drain both actors' stamina, with a greater cost for the attacker; charged blows and kicks open defence.
     Combat: Living actors intercept NPC and creature melee attacks without redirecting damage into bystanders.

@@ -115,21 +115,24 @@ namespace MWPhysics
             maximum.setMax(point);
         }
         const btVector3 center = (minimum + maximum) * .5f;
-        auto shape = std::make_unique<btConvexHullShape>();
-        shape->setMargin(.05f);
+        auto hull = std::make_unique<btConvexHullShape>();
+        hull->setMargin(.05f);
         for (const auto& vertex : vertices)
-            shape->addPoint(Misc::Convert::toBullet(vertex) * mScale.x() - center, false);
-        shape->recalcLocalAabb();
-        shape->optimizeConvexHull();
+            hull->addPoint(Misc::Convert::toBullet(vertex) * mScale.x() - center, false);
+        hull->recalcLocalAabb();
+        hull->optimizeConvexHull();
         btVector3 inertia;
-        shape->calculateLocalInertia(mass, inertia);
+        hull->calculateLocalInertia(mass, inertia);
+        std::unique_ptr<btCollisionShape> shape = std::move(hull);
+        if (!std::isfinite(inertia[0]) || !std::isfinite(inertia[1]) || !std::isfinite(inertia[2])
+            || inertia[0] <= 0.f || inertia[1] <= 0.f || inertia[2] <= 0.f)
+            throw std::runtime_error("Invalid released equipment motion or inertia");
         btTransform transform = mCollisionObject->getWorldTransform();
         const auto offset = transform.getBasis() * center;
         const auto angular = Misc::Convert::toBullet(angularVelocity);
         const auto linear = Misc::Convert::toBullet(frameLinearVelocity) + angular.cross(offset);
         for (int axis = 0; axis < 3; ++axis)
-            if (!std::isfinite(linear[axis]) || !std::isfinite(angular[axis])
-                || !std::isfinite(inertia[axis]) || inertia[axis] <= 0.f)
+            if (!std::isfinite(linear[axis]) || !std::isfinite(angular[axis]))
                 throw std::runtime_error("Invalid released equipment motion or inertia");
         if (linear.length2() > 2000.f * 2000.f || angular.length2() > 200.f * 200.f)
             throw std::runtime_error("Released equipment motion exceeds numeric bound");
@@ -155,6 +158,129 @@ namespace MWPhysics
         mDynamicMass = mass;
         mDynamicShape = std::move(shape);
         mCollisionObject = std::move(body);
+    }
+
+    void Object::makeGrabbableDynamic(float mass, const std::vector<osg::Vec3f>& vertices)
+    {
+        mass = std::clamp(mass, .1f, 500.f);
+        if (auto* existing = btRigidBody::upcast(mCollisionObject.get()))
+        {
+            if (mDynamicShape && mass != mDynamicMass)
+            {
+                btVector3 inertia;
+                mDynamicShape->calculateLocalInertia(mass, inertia);
+                for (int axis = 0; axis < 3; ++axis)
+                    if (!std::isfinite(inertia[axis]) || inertia[axis] <= 0.f)
+                        inertia[axis] = mass;
+                existing->setMassProps(mass, inertia);
+                existing->updateInertiaTensor();
+                mDynamicMass = mass;
+            }
+            existing->setLinearVelocity(btVector3(0, 0, 0));
+            existing->setAngularVelocity(btVector3(0, 0, 0));
+            existing->clearForces();
+            existing->activate(true);
+            return;
+        }
+        btVector3 minimum(BT_LARGE_FLOAT, BT_LARGE_FLOAT, BT_LARGE_FLOAT), maximum = -minimum;
+        bool validVerts = vertices.size() >= 4 && vertices.size() <= 262144;
+        if (validVerts)
+        {
+            for (const auto& vertex : vertices)
+            {
+                for (int axis = 0; axis < 3; ++axis)
+                {
+                    if (!std::isfinite(vertex[axis]) || std::abs(vertex[axis]) > 4096.f)
+                    {
+                        validVerts = false;
+                        break;
+                    }
+                }
+                if (!validVerts)
+                    break;
+                const auto point = Misc::Convert::toBullet(vertex) * mScale.x();
+                minimum.setMin(point);
+                maximum.setMax(point);
+            }
+        }
+        btVector3 center(0, 0, 0);
+        std::unique_ptr<btCollisionShape> shape;
+        btVector3 halfExtent(4.f, 4.f, 4.f);
+        if (validVerts)
+        {
+            center = (minimum + maximum) * .5f;
+            halfExtent = (maximum - minimum) * .5f;
+            auto hull = std::make_unique<btConvexHullShape>();
+            hull->setMargin(.05f);
+            for (const auto& vertex : vertices)
+                hull->addPoint(Misc::Convert::toBullet(vertex) * mScale.x() - center, false);
+            hull->recalcLocalAabb();
+            hull->optimizeConvexHull();
+            btVector3 inertia(0, 0, 0);
+            hull->calculateLocalInertia(mass, inertia);
+            if (std::isfinite(inertia[0]) && std::isfinite(inertia[1]) && std::isfinite(inertia[2])
+                && inertia[0] > 1e-4f && inertia[1] > 1e-4f && inertia[2] > 1e-4f)
+                shape = std::move(hull);
+        }
+        if (!shape)
+        {
+            if (!validVerts && mShapeInstance && mShapeInstance->mCollisionShape)
+            {
+                btVector3 aabbMin, aabbMax;
+                mShapeInstance->mCollisionShape->getAabb(btTransform::getIdentity(), aabbMin, aabbMax);
+                center = (aabbMin + aabbMax) * .5f;
+                halfExtent = (aabbMax - aabbMin) * .5f;
+            }
+            btVector3 clampedHalf(std::max<btScalar>(halfExtent.x(), 1.5f),
+                std::max<btScalar>(halfExtent.y(), 1.5f), std::max<btScalar>(halfExtent.z(), 1.5f));
+            shape = std::make_unique<btBoxShape>(clampedHalf);
+        }
+        btVector3 inertia(0, 0, 0);
+        shape->calculateLocalInertia(mass, inertia);
+        for (int axis = 0; axis < 3; ++axis)
+            if (!std::isfinite(inertia[axis]) || inertia[axis] <= 0.f)
+                inertia[axis] = mass;
+        btTransform transform = mCollisionObject->getWorldTransform();
+        transform.setOrigin(transform.getOrigin() + transform.getBasis() * center);
+        auto body = std::make_unique<btRigidBody>(mass, nullptr, shape.get(), inertia);
+        body->setWorldTransform(transform);
+        body->setInterpolationWorldTransform(transform);
+        body->setUserPointer(this);
+        body->setFriction(.7f);
+        body->setRestitution(.1f);
+        body->setDamping(.05f, .15f);
+        body->setSleepingThresholds(1.f, .1f);
+        const float inscribedRadius = std::max(.5f, float(halfExtent[halfExtent.minAxis()]));
+        body->setCcdMotionThreshold(std::max(1.f, inscribedRadius));
+        body->setCcdSweptSphereRadius(std::min(2.f, inscribedRadius * .5f));
+        mDynamicCenter = center;
+        mDynamicInitialScale = mScale.x();
+        mDynamicMass = mass;
+        mDynamicShape = std::move(shape);
+        mCollisionObject = std::move(body);
+    }
+
+    osg::Vec3f Object::getDynamicHalfExtents() const
+    {
+        const btCollisionShape* shape = mDynamicShape
+            ? mDynamicShape.get()
+            : (mShapeInstance ? mShapeInstance->mCollisionShape.get() : nullptr);
+        if (!shape)
+            return osg::Vec3f(4.f, 4.f, 4.f);
+        btVector3 aabbMin, aabbMax;
+        shape->getAabb(btTransform::getIdentity(), aabbMin, aabbMax);
+        return Misc::Convert::toOsg((aabbMax - aabbMin) * .5f);
+    }
+
+    btTransform Object::getDynamicBodyTransform(const osg::Vec3f& centerWorld, const btQuaternion& rotation) const
+    {
+        return btTransform(rotation, Misc::Convert::toBullet(centerWorld));
+    }
+
+    btVector3 Object::getDynamicCenterWorldOffset(const osg::Quat& rotation) const
+    {
+        const btScalar ratio = mDynamicInitialScale > 0.f ? btScalar(mScale.x() / mDynamicInitialScale) : btScalar(1);
+        return quatRotate(Misc::Convert::toBullet(rotation), mDynamicCenter * ratio);
     }
 
     void Object::applyDynamicImpulse(const osg::Vec3f& impulse, float mass)

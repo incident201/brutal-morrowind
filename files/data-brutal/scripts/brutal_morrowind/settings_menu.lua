@@ -31,11 +31,12 @@ local function setting(key,renderer,argument)
 end
 local options={setting('enabled','checkbox'),setting('allowThirdPerson','checkbox'),
     {key='kickBinding',renderer='inputBinding',argument={key=bindings.KICK,type='trigger'},name='Blank',default=D.kickBinding},
+    {key='grabBinding',renderer='inputBinding',argument={key=bindings.GRAB,type='trigger'},name='Blank',default=D.grabBinding},
     {key='sprintBinding',renderer='inputBinding',argument={key=bindings.SPRINT,type='action'},name='Blank',default=D.sprintBinding},
 }
 for _,key in ipairs({
     'firstPersonBody','firstPersonAnimations','cameraMotionMovement','dualWieldEnabled','npcAnimations','guaranteedHits','meleeGeometry',
-    'ragdollEnabled','ragdollWeaponDrop','dynamicProps','movementEnabled','staminaEnabled',
+    'ragdollEnabled','ragdollWeaponDrop','dynamicProps','objectGrabEnabled','movementEnabled','staminaEnabled',
     'kickEnabled','kickAlwaysRagdoll','slideEnabled','activeBlockEnabled','shieldBashEnabled','parryEnabled',
     'clinchEnabled','attackCombosEnabled','fastAttacksEnabled','wallBounceEnabled','npcAiTweaks','npcStagger','hitRecovery',
     'adrenalineEnabled','finisherEnabled','groundFinisherEnabled','groundFinisherHealth',
