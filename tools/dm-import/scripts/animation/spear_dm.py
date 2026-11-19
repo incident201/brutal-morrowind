@@ -57,7 +57,7 @@ def build(arms, body=None):
     text = keys(stream)
     marks = {line.removeprefix('weapononehand: '): float(t)
              for t, label in text.keys for line in label.splitlines()}
-    channels = tracks(source)               # original data, sampled below
+    channels = tracks(source)               # source data, sampled below
     rig = Rig(arms / 'meshes/brutal_fp/xbase_anim.1st.nif')
     names = [e.string_data for e in stream.root.extra_datas if isinstance(e, nif.NiStringExtraData)]
     controllers = dict(zip(names, stream.root.controllers))

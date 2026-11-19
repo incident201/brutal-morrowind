@@ -826,7 +826,7 @@ def build(arms, native_skeleton, native_animation, body=None):
         maximum = marks[name + ' max attack']
         # Reach the resting transverse hold before playing the source windup.
         # Fade the reserved transition time out by maximum charge. The end
-        # of the original windup and the hit clocks thus meet exactly.
+        # of the source windup and the hit clocks thus meet exactly.
         change = .46
         def enter(t):
             if t < change:
@@ -848,7 +848,7 @@ def build(arms, native_skeleton, native_animation, body=None):
     join(marks['unequip start'], .24, True)
 
     # Different source sections share the KF but are played independently.
-    # Preserve original key grids outside each replaced interval.
+    # Keep the source key grids outside each replaced interval.
     replaced = ('thrust ', 'fasta ', 'fastb ', 'fastc ', 'fastd ', 'fastend')
     for t, label in text.keys:
         kept = [line for line in label.splitlines() if not line.removeprefix('weapononehand: ').startswith(replaced)
