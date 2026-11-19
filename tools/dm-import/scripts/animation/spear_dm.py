@@ -28,6 +28,16 @@ JAB_CHAMBER, JAB_END = -.19, .18   # deepest draw (both hands on the haft), end 
 SETTLE = .12          # each stroke holds the chamber while the engine blends into it
 RETURN = .38          # draw back from the held thrust to the guard
 RATE = 60.
+# The staff's own sections (side swing, draw, sheathe) start and end in the
+# staff guard, haft across the view with the point up and left. Blending from
+# the spear guard straight into it swings the haft through the camera in a
+# few frames. DM's side swing passes through a point-forward pose twice: the
+# early wind-up (SWING_JOIN) and the recovery after the second impact
+# (SWING_LEAVE). The spear joins and leaves the swing there.
+SWING_JOIN, SWING_LEAVE = .5, .46     # after 'slash start' / after 'slash hit2'
+JOIN, LEAVE = .4, .4                  # blend lengths into and out of the swing
+DIP = (0., 6., -16.)                  # the hands' detour under the eye during those blends
+DRAW_EARLY = .1                       # leave DM's draw this long before the attach key
 # A person never strikes the same spot twice. Each quick stroke turns both
 # arms and the spear together about the neck by its own (yaw, pitch, roll) in
 # degrees: z up, positive yaw to the left, positive pitch tip up, positive roll
@@ -180,6 +190,92 @@ def build(arms, body=None):
                 [(t, size + ' follow ' + edge) for t, edge in ((hit2 - chamber + .001, 'start'), (total, 'stop'))
                  for size in ('small', 'medium', 'large')])
 
+    # Moving between the spear guard and a staff pose: DM regrips the arms
+    # (upper arms differ by ~170 degrees of twist), so blending the bones
+    # spins the hands and the spear in them. The spear moves on its own
+    # world path instead; both palms follow it on their grips and the arms
+    # reach them.
+    grasps = {side: Grasp(contact_pose, side, False) for side in 'RL'}
+    hand_bones = {side: grasps[side].names[-1] for side in 'RL'}
+    arm_chain = {n for g in grasps.values() for n in g.names}
+
+    from import_two_hand_viewmodel import quat_matrix
+    from audit_staff_mesh_grip import matrix
+
+    class Mix:
+        """Blend two moving poses without flips. The rotation between a staff
+        pose and the guard can be near 180 degrees, so the shortest way round
+        changes side from one sample to the next. Each channel keeps the side
+        it starts on for the whole transition."""
+        def __init__(self, held=True):
+            self.signs = {}
+            self.held = held
+            self.dip = np.array(DIP)
+
+        def turn(self, key, a, b, w):
+            qa, qb = matrix_quat(a[:3, :3]), matrix_quat(b[:3, :3])
+            last = self.signs.get(key)
+            if last is None:
+                qb = qb if qa @ qb >= 0 else -qb
+            else:
+                qa = qa if qa @ last[0] >= 0 else -qa
+                qb = qb if qb @ last[1] >= 0 else -qb
+            self.signs[key] = (qa, qb)
+            angle = np.arccos(np.clip(qa @ qb, -1., 1.))
+            if angle < 1e-6:
+                q = qa
+            else:
+                q = (np.sin((1 - w) * angle) * qa + np.sin(w * angle) * qb) / np.sin(angle)
+            return matrix(quat_matrix(q[[1, 2, 3, 0]]), a[:3, 3] + w * (b[:3, 3] - a[:3, 3]))
+
+        def __call__(self, a, b, w):
+            w = min(1., max(0., w))
+            out = {n: self.turn(n, a[n], b[n], w) for n in animated}
+            if not self.held:
+                return out
+            A, B = LocalPose(rig, a), LocalPose(rig, b)
+            spear = self.turn('spear', A.world(WEAPON), B.world(WEAPON), w)
+            # The guard's hands sit beside the head; on the way to a staff
+            # pose they pass under the eye instead of across it.
+            spear[:3, 3] += self.dip * np.sin(np.pi * w)
+            now = LocalPose(rig, out)
+            for side, grasp in grasps.items():
+                hand = hand_bones[side]
+                grip = self.turn('grip ' + side, inverse(A.world(WEAPON)) @ A.world(hand),
+                                 inverse(B.world(WEAPON)) @ B.world(hand), w)
+                neck = now.world(rig.parents[grasp.names[0]])
+                # The blended bones are both ends: steer_arm only reaches the palm.
+                out.update(steer_arm(now, now, grasp, spear @ grip, 0., parent=neck))
+                now = LocalPose(rig, out)
+            out[WEAPON] = inverse(now.world(rig.parents[WEAPON])) @ spear
+            return out
+
+    # Side swing: from the guard straight into DM's wind-up, which keeps
+    # running (slower, to the same max attack key); leave the recovery when
+    # the point faces forward again and settle into the guard. The follow
+    # stops move to the end of that settle.
+    swing, wound = marks['slash start'], marks['slash max attack']
+    joined = swing + SWING_JOIN
+    section(swing, wound - swing,
+            lambda e, mix=Mix(): mix(guard_local, at(joined + e / (wound - swing) * (wound - joined)), ease(min(1., e / JOIN))),
+            'slash', [(0., 'start'), (marks['slash min attack'] - swing, 'min attack'),
+                      (wound - swing, 'max attack')])
+    leave = marks['slash hit2'] + SWING_LEAVE
+    section(leave, LEAVE, lambda e, mix=Mix(): mix(at(leave + e), guard_local, ease(e / LEAVE)),
+            'slash', [(LEAVE, size + ' follow stop') for size in ('small', 'medium', 'large')])
+
+    # Draw and sheathe: DM's draw brings the haft over the shoulder into the
+    # staff guard; the spear leaves that path for its own guard while it is
+    # still coming down. Sheathing lets go of the spear at once (detach key),
+    # so only the arms blend back into DM's sheathe.
+    drawn_at, drawn_end = marks['equip attach'] - DRAW_EARLY, marks['equip stop']
+    section(drawn_at, drawn_end - drawn_at,
+            lambda e, mix=Mix(): mix(at(drawn_at + e), guard_local, ease(e / (drawn_end - drawn_at))), 'equip', [])
+    sheathe, sheathe_to = marks['unequip start'], marks['unequip detach'] + .25
+    section(sheathe, sheathe_to - sheathe,
+            lambda e, mix=Mix(held=False): mix(guard_local, at(sheathe + e), ease(e / (sheathe_to - sheathe))),
+            'unequip', [])
+
     # Sample and merge: replace keys inside every authored interval.
     samples = {}
     for begin, stop, fn in segments:
@@ -211,6 +307,9 @@ def build(arms, body=None):
     for t, label in text.keys:
         lines = [l for l in label.splitlines()
                  if not l.removeprefix('weapononehand: ').startswith(replaced)
+                 and l.removeprefix('weapononehand: ') not in (
+                     'slash start', 'slash min attack', 'slash max attack',
+                     'slash small follow stop', 'slash medium follow stop', 'slash large follow stop')
                  and not (any(h <= t <= e for h, e in holds)
                           and l in ('weapononehand: loop start', 'weapononehand: loop stop'))]
         if lines:
