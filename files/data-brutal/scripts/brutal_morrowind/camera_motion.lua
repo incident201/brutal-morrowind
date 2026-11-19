@@ -26,44 +26,63 @@ local GROUND_FINISHER='brutal_ground_finisher'
 local DIRECTIONS={'N','NE','E','SE','S','SW','W','NW'}
 local ZERO={0,0,0,0,0,0}
 
--- The spear uses the same action mixer as the imported head layers. Anchor
--- each short gaze curve to the corresponding arm key so weapon speed, an
+-- The spear uses the same action mixer as the imported head layers. Each
+-- curve segment runs between two arm text keys, so weapon speed, an
 -- interrupted combo and a held charge all use the actual game clock.
+-- Amplitudes follow DM's own staff thrust (bigslash_staff_B_out: -14 pitch,
+-- -20 roll into the drive, +15 pitch rebound) and shield bash (-19/-17 in
+-- .13 s), with the pitch sign turned so that the drive dips the eye into
+-- the line instead of lifting it off the target (DM's negative pitch looks
+-- up): the chamber cocks the head back, the drive dives into the line,
+-- contact adds a short kick, then the head rebounds and settles.
+-- Values: pitch, yaw, roll in degrees; x right, y forward, z up eye offset.
 local function addSpearHeadMotion(set, clips)
-    local charged={1.6,-4.0,2.35,2.4,-2.8,-1.1}
-    local function add(group, from, to, a, b)
+    local function add(group, from, to, a, b, shape)
         local name='spear_'..group..'_'..from
         local frames={}
         for i=0,12 do
             local u=i/12
-            local w=u*u*(3-2*u)
+            local w
+            if shape=='drive' then w=u*u*(2.6-1.6*u)          -- fastest at contact
+            elseif shape=='snap' then w=1-(1-u)^3             -- immediate kick
+            else w=u*u*(3-2*u) end
             local frame={0,0,0,0,0,0}
-            for k=1,3 do frame[k]=math.rad(1.4*(a[k]+(b[k]-a[k])*w)) end
+            for k=1,3 do frame[k]=math.rad(a[k]+(b[k]-a[k])*w) end
             for k=4,6 do frame[k]=a[k]+(b[k]-a[k])*w end
             frames[#frames+1]=frame
         end
         clips[name]={fps=12,loop=false,frames=frames}
         set[#set+1]={start=group..' '..from,stop=group..' '..to,clip=name,duration=1}
     end
-    -- Each approach has its own shoulder lead. The last few centimetres
-    -- of head travel follow the plant, then ease back with the recoil.
-    local leads={fasta={1.2,-2.8,1.8,1.0,-1.5,-.55},fastb={2.6,-1.8,2.4,1.4,-1.1,-2.3},
-        fastc={-.9,-3.6,-1.55,2.5,-2.1,1.4},fastd={1.1,-4.1,2.2,2.5,-2.4,-1.0}}
-    local impacts={fasta={-1.8,2.2,-1.4,-1.4,3.1,-1.0},fastb={-1.8,1.35,-.9,-1.0,3.4,.95},
-        fastc={-3.1,2.65,1.2,-2.3,4.2,-2.0},fastd={-1.4,3.3,-2.0,-3.1,3.8,-.8}}
-    leads.fastloopa,impacts.fastloopa=leads.fasta,impacts.fasta
+    -- Quick strokes: chamber, drive, kick, rebound, settle.
+    local quick={
+        fasta={cock={-2.5,-2.5,3.5,.3,-.8,.2},drive={7.5,3.5,-7.,-.4,2.6,-.8},kick={9.5,4.5,-9.5,-.5,3.4,-1.1},rebound={-2.5,-1.5,1.5,0,.8,0}},
+        fastb={cock={-3.5,-2.,3.,.2,-.8,.3},drive={5.5,3.,-6.,-.3,2.4,-.4},kick={7.5,4.,-8.,-.4,3.,-.6},rebound={-2.,-1.2,1.,0,.6,0}},
+        fastc={cock={-1.5,-3.,4.,.3,-.9,.1},drive={9.5,4.,-7.5,-.4,2.8,-1.3},kick={12.,5.,-10.,-.5,3.6,-1.6},rebound={-3.,-1.8,2.,0,.8,0}},
+        fastd={cock={-4.,-4.5,5.5,.5,-1.2,.3},drive={10.5,6.,-11.,-.6,3.6,-1.4},kick={13.5,7.,-14.,-.7,4.6,-1.8},rebound={-4.,-3.,3.,0,1.,0}},
+    }
+    quick.fastloopa=quick.fasta
     for _,group in ipairs({'fasta','fastloopa','fastb','fastc','fastd'}) do
-        add(group,'start','plant',ZERO,leads[group])
-        add(group,'plant','weight forward',leads[group],impacts[group])
-        add(group,'weight forward','stop',impacts[group],ZERO)
+        local q=quick[group]
+        add(group,'start','plant',ZERO,q.cock)
+        add(group,'plant','thrust hit',q.cock,q.drive,'drive')
+        add(group,'thrust hit','weight forward',q.drive,q.kick,'snap')
+        add(group,'weight forward','settle end',q.kick,q.rebound)
+        add(group,'settle end','stop',q.rebound,ZERO)
     end
-    local press={-3.9,3.2,-2.7,-3.2,6.8,-2.5}
-    local inhale={2.1,-4.35,2.6,2.9,-3.3,-.4}
+    -- Charged: a long cock-back held while charging, then DM's staff lunge.
+    local charged={-5.,-6.,7.,.6,-1.6,.4}
+    local inhale={-6.,-6.8,7.8,.7,-1.9,.6}
+    local drive={8.,7.5,-14.,-.8,4.5,-2.}
+    local kick={10.,8.5,-17.,-1.,5.5,-2.4}
+    local rebound={-4.,-5.,-5.,0,1.5,0}
     add('thrust','start','max attack',ZERO,charged)
     add('thrust hold','start','breath',charged,inhale)
     add('thrust hold','breath','stop',inhale,charged)
-    add('thrust','plant','weight forward',charged,press)
-    add('thrust','weight forward','large follow stop',press,ZERO)
+    add('thrust','plant','hit',charged,drive,'drive')
+    add('thrust','hit','weight forward',drive,kick,'snap')
+    add('thrust','weight forward','settle end',kick,rebound)
+    add('thrust','settle end','large follow stop',rebound,ZERO)
 end
 if data and data.sets and data.sets.brutal_fp_spear then
     addSpearHeadMotion(data.sets.brutal_fp_spear.weapononehand, data.clips)
