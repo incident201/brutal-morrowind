@@ -63,14 +63,41 @@ def hinge_arm(grasp, shoulder, wrist, phi, pole):
 
 
 def wrist_angles(bind, fore, hand):
-    """Twist about the forearm and remaining bend of the hand, in degrees."""
+    """Twist about the forearm, total bend, and the bend split into flexion
+    (palm toward forearm) and sideways deviation, in degrees. The hand's +y is
+    its palm normal: the calibrated shaft contact lies 3 units along it."""
     natural = fore[:3, :3] @ bind
     q = matrix_quat(natural.T @ hand)
     axis = natural.T @ fore[:3, 0]
     along = q[1:] @ axis
     twist = (np.degrees(2. * np.arctan2(along, q[0])) + 180.) % 360. - 180.
-    bend = np.degrees(2. * np.arctan2(np.linalg.norm(q[1:] - along * axis), np.hypot(q[0], along)))
-    return twist, bend
+    swing_q = q[1:] - along * axis
+    w = np.hypot(q[0], along)
+    bend = np.degrees(2. * np.arctan2(np.linalg.norm(swing_q), w))
+    palm = unit(np.array((0., 1., 0.)) - axis[1] * axis)
+    lateral = np.cross(axis, palm)
+    flex = np.degrees(2. * np.arctan2(swing_q @ lateral, w))
+    deviation = np.degrees(2. * np.arctan2(swing_q @ palm, w))
+    return twist, bend, flex, deviation
+
+
+def strain(r, side):
+    """Wrist and grip cost of a solved hand. The rig's bind pose is the
+    anatomical neutral (palms facing in, thumbs up), so twist is pronation or
+    supination with a human range of about 85 degrees each way. Sideways
+    deviation is the narrowest range (about 20 radial, 30 ulnar). Walls make
+    poses beyond those limits far costlier than any comfortable alternative.
+    The front palm supports the haft from below: its palm faces up."""
+    twist, flex, deviation = abs(r['twist']), abs(r['flex']), abs(r['deviation'])
+    cost = (twist / 70.) ** 2 + (flex / 45.) ** 2 + (deviation / 18.) ** 2
+    cost += (max(0., twist - 78.) / 6.) ** 2 + (max(0., flex - 55.) / 6.) ** 2 \
+        + (max(0., deviation - 22.) / 4.) ** 2
+    if side == 'L' and 'palm_up' in r:
+        cost += (max(0., .4 - r['palm_up']) / .2) ** 2
+    if 'reach' in r:
+        # A locked straight arm reads as stiff; keep a little bend.
+        cost += (max(0., r['reach'] - .93) / .02) ** 2
+    return cost
 
 
 def snap(x):
@@ -85,6 +112,7 @@ def out(x):
 
 
 class LungeSpear(Spear):
+    AIM = (5., 0., -115.)         # one line for every thrust, from the lower right
     REAR_STATION = -50.          # the rear fist sits at the butt cap (long thrust grip)
     SHAFT = (-53., 53.)
     # Visible body envelope in the guard camera frame. The body contract puts
@@ -94,8 +122,8 @@ class LungeSpear(Spear):
     POLES = {'R': (.35, -1., .45), 'L': (-.3, -1., .1)}   # elbows hang below and behind
     PHIS = np.radians(np.linspace(-50., 50., 21))
     TWIST_LIMIT, BEND_LIMIT = 115., 50.   # vanilla's own spear thrust twists the right wrist 92-108
-    GUARD_REAR = (14., -30., -10.)
-    FRONT_PALM = (8., -24.5, -23.)
+    GUARD_REAR = (14., -34., -6.)
+    FRONT_PALM = (8., -14.5, -23.)
 
     def __init__(self, rig, source, marks, native, fist, profile, single):
         self._ready = False
@@ -127,18 +155,17 @@ class LungeSpear(Spear):
         self.open_fingers = {n: blend(self.front_fingers[n], self.open_hand.local(n), .6) for n in left.fingers}
         self.binds = {'R': self.bind_wrist, 'L': self.left_bind_wrist}
         self.idle_guard = LocalPose(self.rig, {n: self.idle.local(n) for n in self.names})
-        self.GUARD = self.between(self.GUARD_REAR, self.FRONT_PALM, turn=-18.)
+        self.GUARD = self.between(self.GUARD_REAR, self.FRONT_PALM, turn=-22.)
         self.hand_grips = {'R': self.base_grips['R'], 'L': self.base_grips['L']}
         self._ready = True
-        self.hand_grips = self.choose_grips(self.grip_poses())
+        self.choose_grips()
         self.GUARD = self.fit_rolls(self.GUARD, spin=150.)
         self.keypose.cache_clear()
         self.guard = self.solve(self.GUARD).transforms
 
     def grip_poses(self):
-        return [self.GUARD, self.between((16., -34., -3.), (10., -26., -18.), turn=-24.),
-                self.held((2., -16., -30.), (0., -1., -120.), 17., turn=-4., lean=9.),
-                self.held((1., -14., -31.5), (0., 0., -120.), 16., turn=4., lean=13.)]
+        return [self.GUARD, self.between((16., -36., -1.), (9., -19., -20.), turn=-24.),
+                self.held((6., -16., -30.), self.AIM, 18., turn=-6., lean=11.)]
 
     def fit_rolls(self, pose, around=None, span=110., step=5., spin=55., sides='RL'):
         """Choose each hand's roll on the haft for this key pose (least wrist strain).
@@ -153,7 +180,7 @@ class LungeSpear(Spear):
                 trial = list(rolls)
                 trial[i] = float(roll)
                 r = self.solve_arms(pose._replace(rolls=tuple(trial)))[1][side]
-                cost = (r['twist'] / 70.) ** 2 + (r['bend'] / 35.) ** 2 + ((roll - around[i]) / spin) ** 2
+                cost = strain(r, side) + ((roll - around[i]) / spin) ** 2
                 if best is None or cost < best[0]:
                     best = (cost, roll)
             rolls[i] = best[1]
@@ -241,55 +268,59 @@ class LungeSpear(Spear):
         costs = []
         for phi in self.PHIS:
             upper, fore, _ = hinge_arm(grasp, shoulder, wrist, phi, pole)
-            twist, bend = wrist_angles(bind, fore, hand[:3, :3])
-            costs.append((twist / 70.) ** 2 + (bend / 35.) ** 2 + .25 * (phi / np.radians(50.)) ** 2)
+            twist, bend, flex, deviation = wrist_angles(bind, fore, hand[:3, :3])
+            costs.append(strain({'twist': twist, 'flex': flex, 'deviation': deviation}, 'R')
+                         + .25 * (phi / np.radians(50.)) ** 2)
         costs = np.array(costs)
         weights = np.exp(-6. * (costs - costs.min()))
         phi = weights @ self.PHIS / weights.sum()
         upper, fore, reached = hinge_arm(grasp, shoulder, wrist, phi, pole)
         hand = hand.copy()
         hand[:3, 3] = reached
-        twist, bend = wrist_angles(bind, fore, hand[:3, :3])
+        twist, bend, flex, deviation = wrist_angles(bind, fore, hand[:3, :3])
         report = {'reach': float(np.linalg.norm(wrist - shoulder) / (a + b)),
                   'gap': float(np.linalg.norm(wrist - reached)),
                   'elbow': float(np.degrees(np.arccos(np.clip(unit(fore[:3, 3] - upper[:3, 3])
                                                              @ unit(reached - fore[:3, 3]), -1., 1.)))),
-                  'twist': float(twist), 'bend': float(bend), 'swivel': float(np.degrees(phi))}
+                  'twist': float(twist), 'bend': float(bend), 'flex': float(flex),
+                  'deviation': float(deviation), 'swivel': float(np.degrees(phi)),
+                  'palm_up': float(hand[:3, 1] @ self.camera[:3, 1])}
         return (clavicle, upper, fore, hand), report
 
-    def choose_grips(self, poses, tilts=np.arange(-10., 10.1, 5.)):
-        """One grip per hand for every pose: thumb direction and the shaft's
-        diagonal across the palm (tilt). Each pose may roll the hands on the
-        haft (fit_rolls); the grip itself never slides in the fist."""
-        chosen = {}
-        self.grip_choice = {}
+    # Oblique grips, measured offline against wrist limits over guard, chamber
+    # and contact (lunge/t34, t35, t37): the haft crosses each palm at 45
+    # degrees, the front palm cradles it from below.
+    GRIPS = {'R': (0., -45.), 'L': (0., 45.)}     # (thumb flip, tilt in the palm plane)
+
+    def oblique(self, side, flip, tilt):
+        """The calibrated grip turned within the palm plane, about the palm
+        normal through the contact point, as a real hand holds a shaft
+        diagonally from the heel of the hand to the base of the index finger."""
+        from import_two_hand_viewmodel import quat_matrix
+        flipped = matrix(turn_about((1, 0, 0), flip), np.zeros(3)) @ self.base_grips[side]
+        normal = flipped[:3, :3] @ np.array((0., 1., 0.))
+        q = np.r_[normal * np.sin(np.radians(tilt) / 2.), np.cos(np.radians(tilt) / 2.)]
+        return matrix(quat_matrix(q), np.zeros(3)) @ flipped
+
+    def choose_grips(self, poses=None):
+        """Set both oblique grips and wrap each hand's fingers around the haft."""
+        straight = Pose(self.native_rig, {}, 0.)
+        self.grip_choice, self.finger_clearance = {}, {}
         for side in 'RL':
-            best = None
-            options = self.rear_options if side == 'R' else {'profile': (self.base_grips['L'], self.front_fingers)}
-            for option, (source, fingers) in options.items():
-                for flip in (0., 180.):
-                    for tx in tilts:
-                        for tz in tilts:
-                            # Pivot about the contact point on the shaft axis so
-                            # that the palm stays on the haft.
-                            turn = turn_about((1, 0, 0), tx) @ turn_about((0, 0, 1), tz) @ turn_about((1, 0, 0), flip)
-                            base = matrix(turn, np.zeros(3)) @ source
-                            self.hand_grips[side] = base
-                            worst = 0.
-                            for pose in poses:
-                                fitted = self.fit_rolls(pose, sides=side, step=15., span=180., spin=1e9)
-                                r = self.solve_arms(fitted)[1][side]
-                                worst = max(worst, (r['twist'] / 70.) ** 2 + (r['bend'] / 35.) ** 2)
-                                if best is not None and worst >= best[0]:
-                                    break
-                            if best is None or worst < best[0]:
-                                best = (worst, base, fingers, (option, flip, float(tx), float(tz)))
-            chosen[side] = best[1]
-            self.hand_grips[side] = best[1]
-            self.grip_choice[side] = best[3]
+            flip, tilt = self.GRIPS[side]
+            grip = self.oblique(side, flip, tilt)
+            inside = inverse(grip)
+            fingers, clearance = fit_fingers({n: straight.local(n) for n in self.hand_fingers[side]},
+                                             self.hand_fingers[side], side, (inside @ np.r_[0., 0., 0., 1.])[:3],
+                                             inside[:3, :3] @ np.array((0., 1., 0.)))
+            self.hand_grips[side] = grip
+            self.grip_choice[side] = ('profile oblique', flip, tilt)
+            self.finger_clearance[side] = clearance
             if side == 'R':
-                self.rear_fingers = best[2]
-        return chosen
+                self.rear_fingers = fingers
+            else:
+                self.front_fingers = fingers
+        return self.hand_grips
 
     def solve_arms(self, pose):
         result = self.trunk(pose)
@@ -406,7 +437,7 @@ class LungeSpear(Spear):
                 trial = list(rolls)
                 trial[i] = float(roll)
                 r = self.solve_arms(pose._replace(rolls=tuple(trial)))[1][side]
-                cost = (r['twist'] / 70.) ** 2 + (r['bend'] / 35.) ** 2 + ((roll - pose.rolls[i]) / hold) ** 2
+                cost = strain(r, side) + ((roll - pose.rolls[i]) / hold) ** 2
                 if best is None or cost < best[0]:
                     best = (cost, roll)
             # Parabolic refinement between grid points keeps successive frames smooth.
@@ -426,36 +457,33 @@ def author(spear):
     fit = lambda pose: S.fit_rolls(pose._replace(rolls=guard.rolls), around=guard.rolls)
     H = lambda *a, **k: fit(S.held(*a, **k))
     B = lambda *a, **k: fit(S.between(*a, **k))
-    # The chamber cocks the point up and pulls the rear fist back to the hip;
-    # the drive levels the haft into the line while both hands rise into view.
-    lines = {
-        'a': (0., -1., -120.),     # chest
-        'b': (0., 11., -115.),     # face
-        'c': (1., -15., -115.),    # belly
-        'd': (0., -2., -125.),     # full lunge
-    }
-    def chamber(depth=1., turn=-20.):
-        rear = lerp(np.array(S.GUARD_REAR), np.array((16., -34., -3.)), depth)
-        front = lerp(np.array(S.FRONT_PALM), np.array((10., -26., -18.)), depth)
+    # Every thrust runs on one line, from the lower right to the aim point.
+    # The front palm stays at the bottom edge of the view throughout: in the
+    # chamber only the rear fist draws back to the hip and the haft slides
+    # through the cradling palm; on the drive the palm moves a little forward
+    # with the haft while the rear fist and the trunk deliver it.
+    def chamber(depth=1., turn=-26.):
+        rear = lerp(np.array(S.GUARD_REAR), np.array((16., -37., 0.)), depth)
+        front = lerp(np.array(S.FRONT_PALM), np.array((8., -15., -22.)), depth)
         return B(tuple(rear), tuple(front), turn=turn, lean=-3. * depth,
                  carrier=(0., -2.5 * depth, .6 * depth), nod=1.5 * depth)
 
-    def extension(line, front, station, turn, lean, step, nod):
-        return H(front, lines[line], station, turn=turn, lean=lean, carrier=(0., step, -.25 * step), nod=nod)
+    def extension(front, station, turn, lean, step, nod):
+        return H(front, S.AIM, station, turn=turn, lean=lean, carrier=(0., step, -.25 * step), nod=nod)
 
     quick = {}
     for letter, (draw_t, hit_t, settle_t, recoil_t, stop_t, depth, front, station, turn, lean, step, nod) in {
-            'a': (.13, .24, .31, .40, .56, .55, (2., -16., -30.), 17., -4., 9., 6., -2.),
-            'b': (.12, .23, .30, .39, .54, .50, (1.5, -13., -29.5), 17., -6., 7., 5., -1.),
-            'c': (.14, .25, .32, .41, .57, .60, (3., -18.5, -29.5), 18., -4., 12., 6., -3.),
-            'd': (.17, .29, .38, .48, .66, .85, (1., -14., -31.5), 16., 4., 13., 11., -3.5),
+            'a': (.13, .24, .31, .40, .56, .55, (9., -21., -32.), 19., -14., 10., 6., -2.),
+            'b': (.12, .23, .30, .39, .54, .50, (8.5, -20.5, -31.5), 19., -16., 9., 5., -1.),
+            'c': (.14, .25, .32, .41, .57, .60, (9.5, -21.5, -31.), 19.5, -12., 12., 6., -3.),
+            'd': (.17, .29, .38, .48, .66, .85, (8., -20.5, -33.), 18., -10., 14., 11., -3.5),
     }.items():
-        hit = extension(letter, front, station, turn, lean, step, nod)
+        hit = extension(front, station, turn, lean, step, nod)
         over = S.along(hit, 1.2)
         settle = S.along(hit, -.6)
         back = S.mix(hit, guard, .55)
         path = [(0., guard, ease, 0.),
-                (draw_t, chamber(depth, -14. - 8. * depth), out, .3),
+                (draw_t, chamber(depth, -22. - 6. * depth), out, .3),
                 (hit_t - .02, over, snap, .35),
                 (hit_t, hit, out, 0.),
                 (settle_t, settle, ease, 0.),
@@ -463,13 +491,13 @@ def author(spear):
                 (stop_t, guard, ease, -.25)]
         quick[letter] = dict(path=path, draw=draw_t, hit=hit_t, settle=settle_t, stop=stop_t)
 
-    deep = chamber(1., -26.)
-    breath = B((16.3, -34.6, -2.4), (10.2, -26.4, -17.4), turn=-25.5, lean=-3.4,
+    deep = chamber(1., -28.)
+    breath = B((16.3, -37.5, .6), (8.1, -15.3, -21.6), turn=-28.5, lean=-3.4,
                carrier=(0., -2.7, .65), nod=1.8)
-    lunge = H((1., -14., -31.5), (0., -1., -125.), 16., turn=6., lean=14.,
+    lunge = H((8., -20.5, -33.), S.AIM, 18., turn=-10., lean=15.,
               carrier=(0., 13., -3.4), nod=-4.)
     charged = dict(
-        prepare=[(0., guard, ease, 0.), (.40, chamber(.75, -22.), out, .3), (.667, deep, ease, 0.)],
+        prepare=[(0., guard, ease, 0.), (.40, chamber(.75, -26.), out, .3), (.667, deep, ease, 0.)],
         release=[(0., deep, ease, 0.), (.185, S.along(lunge, 1.5), snap, .35), (.20, lunge, out, 0.),
                  (.30, S.along(lunge, -.8), ease, 0.), (.44, S.mix(lunge, guard, .5), ease, -.2),
                  (.80, guard, ease, -.25), (.95, guard, ease, 0.)],
@@ -626,6 +654,80 @@ def build(arms, native_skeleton, native_animation, body=None):
     manifest_path.write_text(json.dumps(manifest, indent=1) + '\n')
     return spear
 
+
+
+# --- finger fitting -----------------------------------------------------------
+
+def finger_chains(fingers, side):
+    chains = []
+    for digit in range(5):
+        names = [f'Bip01 {side} Finger{digit}{suffix}' for suffix in ('', '1', '2')]
+        if all(n in fingers for n in names):
+            chains.append(names)
+    return chains
+
+
+def fit_fingers(straight, closed, side, point, axis, radius=1.1, skin=.62, tip=.8):
+    """Curl each finger along its own calibrated fist pattern until it wraps
+    the shaft without entering it. Every joint of a finger moves the same
+    fraction k of the way from the straight (bind) finger to the calibrated
+    closed fist, so the curl stays natural and never bends backwards; k may
+    exceed 1 slightly for a thinner part of the grip. `point` and `axis` give
+    the shaft line in the hand bone's frame. Returns the fingers and the
+    smallest bone-to-surface clearance."""
+    fingers = {n: m.copy() for n, m in straight.items()}
+    axis = unit(np.asarray(axis, float))
+    point = np.asarray(point, float)
+    target = radius + skin
+
+    def distance(p):
+        d = p - point
+        return np.linalg.norm(d - axis * (d @ axis))
+
+    def chain_points(names):
+        world, points = np.eye(4), []
+        for name in names:
+            world = world @ fingers[name]
+            points.append(world)
+        end = points[-1] @ np.r_[fingers[names[-1]][:3, 3] * tip, 1.]
+        return [m[:3, 3] for m in points] + [end[:3]]
+
+    worst = np.inf
+    for names in finger_chains(fingers, side):
+        best = None
+        steps = np.linspace(0., 1.35, 13)
+        for spread in np.linspace(-15., 15., 7):
+            for kb in steps:
+                for km in steps:
+                    for kt in steps:
+                        base = _extrapolate(straight[names[0]], closed[names[0]], kb)
+                        fingers[names[0]] = matrix(base[:3, :3] @ turn_about((0, 1, 0), spread), base[:3, 3])
+                        fingers[names[1]] = _extrapolate(straight[names[1]], closed[names[1]], km)
+                        fingers[names[2]] = _extrapolate(straight[names[2]], closed[names[2]], kt)
+                        gaps = [distance(p) - target for p in chain_points(names)[1:]]
+                        inside = sum(max(0., -g - .05) for g in gaps)
+                        # Pads on the surface, nothing inside, a coherent curl.
+                        cost = min(abs(g) for g in gaps[-2:]) ** 2 + 40. * inside ** 2 \
+                            + .3 * ((kb - km) ** 2 + (km - kt) ** 2) + (spread / 40.) ** 2
+                        if best is None or cost < best[0]:
+                            best = (cost, spread, kb, km, kt)
+        _, spread, kb, km, kt = best
+        base = _extrapolate(straight[names[0]], closed[names[0]], kb)
+        fingers[names[0]] = matrix(base[:3, :3] @ turn_about((0, 1, 0), spread), base[:3, 3])
+        fingers[names[1]] = _extrapolate(straight[names[1]], closed[names[1]], km)
+        fingers[names[2]] = _extrapolate(straight[names[2]], closed[names[2]], kt)
+        worst = min(worst, min(distance(p) - target for p in chain_points(names)[1:]))
+    return fingers, worst
+
+
+def _extrapolate(a, b, k):
+    """Rotation from a toward b by fraction k (k > 1 continues past b)."""
+    q = matrix_quat(a[:3, :3].T @ b[:3, :3])
+    angle = 2. * np.arctan2(np.linalg.norm(q[1:]), q[0])
+    if angle < 1e-6:
+        return a.copy()
+    axis = q[1:] / np.linalg.norm(q[1:])
+    return matrix(a[:3, :3] @ turn_about(axis, np.degrees(angle * k)), a[:3, 3])
 
 if __name__ == '__main__':
     import argparse
