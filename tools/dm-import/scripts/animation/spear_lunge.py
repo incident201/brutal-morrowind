@@ -85,7 +85,7 @@ def out(x):
 
 
 class LungeSpear(Spear):
-    REAR_STATION = -46.          # the rear fist sits just above the butt cap
+    REAR_STATION = -50.          # the rear fist sits at the butt cap (long thrust grip)
     SHAFT = (-53., 53.)
     # Visible body envelope in the guard camera frame. The body contract puts
     # the eye straight above the pelvis (37.5 units); the torso is an
@@ -102,26 +102,30 @@ class LungeSpear(Spear):
         self.native_rig = native.rig
         super().__init__(rig, source, marks, native, fist, profile, single)
         left = self.grasps[1]
-        from import_two_hand_viewmodel import Grasp
-        vanilla = Grasp(native, 'R', False)
-        # Rear fist candidates: the fitted one-handed thrust fist and the
-        # native two-handed wide-weapon grip, each with its own fingers.
-        self.rear_options = {'power': (self.power_grip.copy(), dict(self.single_fingers)),
-                             'wide': (vanilla.grip.copy(), dict(vanilla.fingers))}
-        self.base_grips = {'R': self.power_grip.copy(), 'L': left.grip.copy()}
-        self.rear_fingers = dict(self.single_fingers)
-        self.front_fingers = dict(left.fingers)
-        self.open_fingers = {n: blend(left.fingers[n], self.open_hand.local(n), .6) for n in left.fingers}
+        # Both hands use the skin-calibrated power grip of the staff import
+        # (staff-native-grasp-profile.json): the palm contact point and the
+        # shaft direction measured on the native hand mesh, with its closed
+        # fingers; the right hand mirrors it. The contact point sits on the
+        # shaft axis at station 0; grip() adds the station along the haft.
+        self.base_grips, self.hand_fingers, self.anchors = {}, {}, {}
+        for side, grasp in zip('RL', self.grasps):
+            mirror = np.diag((1., 1., -1. if side == 'R' else 1.))
+            axis = unit(mirror @ np.array(profile['shaft_axis_native_hand_reference']))
+            anchor = mirror @ np.array(profile['shaft_anchor_native_hand'])
+            rotation = swing(axis, np.array((0., 1., 0.)))
+            self.base_grips[side] = matrix(rotation, -rotation @ anchor)
+            self.anchors[side] = anchor
+            fingers = dict(grasp.fingers)
+            for name, value in profile['closed_finger_local_rotations'].items():
+                name = name.replace(' L ', ' ' + side + ' ')
+                fingers[name] = matrix(mirror @ np.array(value) @ mirror, fingers[name][:3, 3])
+            self.hand_fingers[side] = fingers
+        self.rear_options = {'profile': (self.base_grips['R'], self.hand_fingers['R'])}
+        self.rear_fingers = self.hand_fingers['R']
+        self.front_fingers = self.hand_fingers['L']
+        left = self.grasps[1]
+        self.open_fingers = {n: blend(self.front_fingers[n], self.open_hand.local(n), .6) for n in left.fingers}
         self.binds = {'R': self.bind_wrist, 'L': self.left_bind_wrist}
-        # Palm centre in each hand's frame: mean of the finger bases, pulled
-        # slightly back toward the wrist. Its radial distance from the shaft in
-        # the fitted grip is the reference for the palm-contact audit.
-        self.palm_offset, self.palm_radius = {}, {}
-        for side, grip, fingers in (('R', self.power_grip, self.single_fingers), ('L', left.grip, left.fingers)):
-            bases = [fingers[f'Bip01 {side} Finger{d}'][:3, 3] for d in (1, 2, 3, 4)]
-            self.palm_offset[side] = .8 * np.mean(bases, axis=0)
-            centre = grip @ np.r_[self.palm_offset[side], 1.]
-            self.palm_radius[side] = float(np.hypot(centre[0], centre[2]))
         self.idle_guard = LocalPose(self.rig, {n: self.idle.local(n) for n in self.names})
         self.GUARD = self.between(self.GUARD_REAR, self.FRONT_PALM, turn=-18.)
         self.hand_grips = {'R': self.base_grips['R'], 'L': self.base_grips['L']}
@@ -133,8 +137,8 @@ class LungeSpear(Spear):
 
     def grip_poses(self):
         return [self.GUARD, self.between((16., -34., -3.), (10., -26., -18.), turn=-24.),
-                self.held((2., -16., -30.), (0., -1., -120.), 9., turn=-4., lean=9.),
-                self.held((1., -14., -31.5), (0., 0., -120.), 8., turn=4., lean=13.)]
+                self.held((2., -16., -30.), (0., -1., -120.), 17., turn=-4., lean=9.),
+                self.held((1., -14., -31.5), (0., 0., -120.), 16., turn=4., lean=13.)]
 
     def fit_rolls(self, pose, around=None, span=110., step=5., spin=55., sides='RL'):
         """Choose each hand's roll on the haft for this key pose (least wrist strain).
@@ -213,7 +217,7 @@ class LungeSpear(Spear):
     def grip(self, side, pose):
         roll = pose.rolls[0 if side == 'R' else 1]
         g = matrix(turn_about((0, 1, 0), roll), np.zeros(3)) @ self.hand_grips[side]
-        g[1, 3] = self.REAR_STATION + (0. if side == 'R' else (pose.front if pose.front is not None else 21.))
+        g[1, 3] += self.REAR_STATION + (0. if side == 'R' else (pose.front if pose.front is not None else 21.))
         return g
 
     def arm(self, side, body, hand, free=False):
@@ -253,7 +257,7 @@ class LungeSpear(Spear):
                   'twist': float(twist), 'bend': float(bend), 'swivel': float(np.degrees(phi))}
         return (clavicle, upper, fore, hand), report
 
-    def choose_grips(self, poses, tilts=np.arange(-30., 31., 10.)):
+    def choose_grips(self, poses, tilts=np.arange(-10., 10.1, 5.)):
         """One grip per hand for every pose: thumb direction and the shaft's
         diagonal across the palm (tilt). Each pose may roll the hands on the
         haft (fit_rolls); the grip itself never slides in the fist."""
@@ -261,16 +265,15 @@ class LungeSpear(Spear):
         self.grip_choice = {}
         for side in 'RL':
             best = None
-            options = self.rear_options if side == 'R' else {'support': (self.base_grips['L'], self.front_fingers)}
+            options = self.rear_options if side == 'R' else {'profile': (self.base_grips['L'], self.front_fingers)}
             for option, (source, fingers) in options.items():
                 for flip in (0., 180.):
                     for tx in tilts:
                         for tz in tilts:
                             # Pivot about the contact point on the shaft axis so
                             # that the palm stays on the haft.
-                            pivot = np.array((0., source[1, 3], 0.))
                             turn = turn_about((1, 0, 0), tx) @ turn_about((0, 0, 1), tz) @ turn_about((1, 0, 0), flip)
-                            base = matrix(turn, pivot - turn @ pivot) @ source
+                            base = matrix(turn, np.zeros(3)) @ source
                             self.hand_grips[side] = base
                             worst = 0.
                             for pose in poses:
@@ -303,8 +306,9 @@ class LungeSpear(Spear):
             chain, report[side] = self.arm(side, body, hand, free)
             # Radial distance of the palm centre from the shaft axis, versus the
             # fitted grip it came from (0 = palm still on the haft).
-            palm = inverse(item) @ chain[-1] @ np.r_[self.palm_offset[side], 1.]
-            report[side]['palm'] = float(abs(np.hypot(palm[0], palm[2]) - self.palm_radius[side]))
+            palm = inverse(item) @ chain[-1] @ np.r_[self.anchors[side], 1.]
+            report[side]['palm'] = float(np.hypot(palm[0], palm[2]))
+            report[side]['station'] = float(palm[1])
             parent = body.world(self.rig.parents[grasp.names[0]])
             for name, world in zip(grasp.names, chain):
                 result[name] = inverse(parent) @ world
@@ -441,10 +445,10 @@ def author(spear):
 
     quick = {}
     for letter, (draw_t, hit_t, settle_t, recoil_t, stop_t, depth, front, station, turn, lean, step, nod) in {
-            'a': (.13, .24, .31, .40, .56, .55, (2., -16., -30.), 9., -4., 9., 6., -2.),
-            'b': (.12, .23, .30, .39, .54, .50, (1.5, -13., -29.5), 9., -6., 7., 5., -1.),
-            'c': (.14, .25, .32, .41, .57, .60, (3., -18.5, -29.5), 10., -4., 12., 6., -3.),
-            'd': (.17, .29, .38, .48, .66, .85, (1., -14., -31.5), 8., 4., 13., 11., -3.5),
+            'a': (.13, .24, .31, .40, .56, .55, (2., -16., -30.), 17., -4., 9., 6., -2.),
+            'b': (.12, .23, .30, .39, .54, .50, (1.5, -13., -29.5), 17., -6., 7., 5., -1.),
+            'c': (.14, .25, .32, .41, .57, .60, (3., -18.5, -29.5), 18., -4., 12., 6., -3.),
+            'd': (.17, .29, .38, .48, .66, .85, (1., -14., -31.5), 16., 4., 13., 11., -3.5),
     }.items():
         hit = extension(letter, front, station, turn, lean, step, nod)
         over = S.along(hit, 1.2)
@@ -462,7 +466,7 @@ def author(spear):
     deep = chamber(1., -26.)
     breath = B((16.3, -34.6, -2.4), (10.2, -26.4, -17.4), turn=-25.5, lean=-3.4,
                carrier=(0., -2.7, .65), nod=1.8)
-    lunge = H((1., -14., -31.5), (0., -1., -125.), 8., turn=6., lean=14.,
+    lunge = H((1., -14., -31.5), (0., -1., -125.), 16., turn=6., lean=14.,
               carrier=(0., 13., -3.4), nod=-4.)
     charged = dict(
         prepare=[(0., guard, ease, 0.), (.40, chamber(.75, -22.), out, .3), (.667, deep, ease, 0.)],
