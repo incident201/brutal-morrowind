@@ -24,9 +24,9 @@ from import_spear_thrust import blend, ease
 from audit_staff_mesh_grip import nif
 
 # The straight jab inside DM's charged staff attack, relative to its hit2 key.
-JAB_CHAMBER, JAB_END = -.19, .26   # deepest draw (both hands on the haft), end of the hold
+JAB_CHAMBER, JAB_END = -.19, .18   # deepest draw (both hands on the haft), end of the steady hold
 SETTLE = .12          # each stroke holds the chamber while the engine blends into it
-RETURN = .30          # blend from the held thrust back to the staff guard
+RETURN = .38          # draw back from the held thrust to the guard
 RATE = 60.
 
 
@@ -69,9 +69,35 @@ def build(arms, body=None):
     end_local = at(jab1)
     drive = jab1 - chamber
 
+    reach = hit2 - chamber      # the drive itself, without the static hold
+
+    from import_spear_thrust import LocalPose, steer_arm
+    from import_two_hand_viewmodel import Grasp, ITEM as WEAPON, inverse
+    contact_pose, guard_pose = Pose(rig, channels, hit2), Pose(rig, channels, chamber)
+    left = Grasp(contact_pose, 'L', False)
+    grip_contact = inverse(contact_pose.world(WEAPON)) @ contact_pose.world(left.names[-1])
+    grip_guard = inverse(guard_pose.world(WEAPON)) @ guard_pose.world(left.names[-1])
+
     def returning(e):
-        # Draw the haft back along the same line: DM's own drive, reversed.
-        return at(jab1 - drive * ease(min(1., e / RETURN)))
+        # Draw the haft back along the same line: DM's own drive, reversed,
+        # from the contact pose. The static hold is not replayed; its last
+        # 0.6-unit settle is closed in the first 0.04 s. The left hand does
+        # not replay DM's regrip backwards: it slides smoothly from its
+        # contact pose to its guard pose, holding the haft.
+        if e < .04:
+            return at(jab1 - (jab1 - hit2) * e / .04)
+        u = ease(min(1., (e - .04) / (RETURN - .04)))
+        pose = at(hit2 - reach * u)
+        now = LocalPose(rig, pose)
+        # The left palm stays on the moving haft; its station and roll on
+        # the haft move from the contact grip to the guard grip.
+        hand = now.world(WEAPON) @ blend(grip_contact, grip_guard, u)
+        neck = now.world(rig.parents[left.names[0]])
+        pose.update(steer_arm(contact_pose, guard_pose, left, hand, u, parent=neck))
+        for n in left.fingers:
+            if n in pose:
+                pose[n] = blend(contact_pose.local(n), guard_pose.local(n), u)
+        return pose
 
     def jab(elapsed):
         # Each stroke starts and ends in the guard (the drawn chamber), so a
