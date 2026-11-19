@@ -530,10 +530,12 @@ class Importer:
                          '--arms', arms, '--clinch', self.stage('clinch'),
                          '--native-skeleton', self.meshes / 'xbase_anim.1st.nif',
                          '--native-animation', self.meshes / 'xbase_anim.1st.kf')
-                self.run('Spear thrusts', ANIMATION / 'import_spear_thrust.py', '--arms', arms,
-                         '--body', self.stage('body-jump'),
+                # The spear set is built from the staff's supported jab.
+                self.run('Staff thrust support', ANIMATION / 'staff_thrust_support.py', '--arms', arms,
                          '--native-skeleton', self.meshes / 'xbase_anim.1st.nif',
                          '--native-animation', self.meshes / 'xbase_anim.1st.kf')
+                self.run('Spear thrusts', ANIMATION / 'spear_dm.py', '--arms', arms,
+                         '--body', self.stage('body-jump'))
                 self.run('Footstep keys', ANIMATION / 'add_footstep_keys.py', self.stage('npc'))
             except BaseException:
                 # One failed or cancelled step stops the others instead of waiting for them.

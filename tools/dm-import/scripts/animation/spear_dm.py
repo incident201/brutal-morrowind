@@ -1,27 +1,30 @@
 #!/usr/bin/env python3
-"""Spear thrusts made of Dark Messiah's one straight staff jab.
+"""Spear strokes made of Dark Messiah's one straight staff jab.
 
 Every DM staff stroke that is labelled a thrust starts with an overhead swing,
 except one: the second jab of the charged staff attack. There the haft keeps
-pointing forward, the rear fist draws it back about 29 units while the left
-hand regrips, then drives it 50 units forward in 0.15 s to the crosshair and
-holds. Each stroke starts in that drawn chamber, so a series reads as
-thrust, draw back, thrust. This module builds the spear's quick strokes and its charged thrust
-from that jab. The guard, the staff swings and every transition stay the
-staff's. The returns to guard are short blends instead of DM's overhead
-recovery. Arms, fingers and regrips inside the jab are the artists'.
+pointing forward, the rear fist draws it back while the left hand regrips,
+then drives it 50 units forward in 0.15 s to the crosshair and holds. The
+spear's guard is that drawn chamber; every quick stroke and the charged
+thrust drive from it and draw back into it, each aimed a little differently.
+The side swing, draw and sheathe stay the staff's, joined to the guard along
+the spear's own path. Arms, fingers and regrips inside the jab are the
+artists'.
 """
 import argparse
 import hashlib
 import json
+import re
 import shutil
 from pathlib import Path
 
 import numpy as np
 
-from import_two_hand_viewmodel import ITEM, Pose, Rig, keys, load, matrix_quat, tracks
-from import_spear_thrust import blend, ease
-from audit_staff_mesh_grip import nif
+from import_two_hand_viewmodel import (
+    Grasp, ITEM, Pose, Rig, inverse, keys, lerp, load, matrix, matrix_quat, native_starts, nif, quat_matrix,
+    sample, slerp, tracks, turn_about,
+)
+from arm_steering import LocalPose, blend, ease, steer_arm
 
 # The straight jab inside DM's charged staff attack, relative to its hit2 key.
 JAB_CHAMBER, JAB_END = -.19, .18   # deepest draw (both hands on the haft), end of the steady hold
@@ -46,6 +49,64 @@ DRAW_EARLY = .1                       # leave DM's draw this long before the att
 AIM = {'fasta': (5.5, -2.2, -8.), 'fastb': (-6., 1.8, 9.), 'fastc': (1.6, -5.2, 4.),
        'fastd': (-3.6, -3., -10.), 'fastloopa': (6.4, 1., 6.), 'thrust': (0., -.8, 0.),
        'neutral': (-1.5, -1.5, -3.)}
+
+
+def body_footwork(body, weapon):
+    """Fit the imported walking footfalls to the spear's actual contact keys."""
+    folder = body / 'Animations/brutal_firstperson'
+    idle = folder / 'idle1h.kf'
+    walking = folder / 'walkforward1h.kf'
+    stride = tracks(walking)
+    period = native_starts(walking)['walkforward1h: loop stop']
+    stance = tracks(idle)
+    stream = load(idle)
+    text = keys(stream)
+    marks = {name.removeprefix('weapononehand: '): time for name, time in native_starts(weapon).items()}
+    group = 'brutal_spear_step: '
+    ranges = {}
+    for clip in ('fasta', 'fastb', 'fastc', 'fastd', 'fastloopa'):
+        start, plant, hit, stop = [marks[clip+' '+key] for key in ('start','plant','thrust hit','stop')]
+        lead = .5 if clip in ('fastb', 'fastd') else 0.
+        ranges[clip] = [(start, lead-.13, 0.), (plant, lead-.05, .36),
+                        (hit, lead+.22, .76), (hit+.085, lead+.29, .76), (stop, lead+.48, 0.)]
+    for letter in 'abcd':
+        name = 'fastend'+letter
+        ranges[name] = [(marks[name+' start'], 0., 0.), (marks[name+' stop'], 0., 0.)]
+    draw, back, release, hit, end = [marks['thrust '+key] for key in
+                                     ('start','max attack','min hit','hit','large follow stop')]
+    ranges['thrust'] = [(draw, .65, 0.), (back, .78, .45), (release, .78, .45),
+                        (hit, 1.22, .9), (hit+.13, 1.30, .86), (end, 1.53, 0.)]
+    ranges['thrust hold'] = [(marks['thrust hold '+key], .78, .45) for key in ('start','stop')]
+    labels = [(time, group+label) for label,time in marks.items() if label.startswith(('fast','thrust '))]
+    # Secondary animation.play() resolves the hold's generic loop range.
+    for key in ('loop start','loop stop'):
+        labels.append((marks['thrust hold '+key], group+key))
+    final_time = max(t for t,_ in labels)
+    labels.extend([(0., group+'start'), (final_time, group+'stop')])
+    text.keys = np.array(sorted(labels), dtype=text.keys.dtype)
+    frames = {}
+    for curve in ranges.values():
+        for (begin,p0,w0), (end,p1,w1) in zip(curve,curve[1:]):
+            for t in np.linspace(begin,end,max(2,int(np.ceil((end-begin)*60))+1)):
+                u = ease((t-begin)/(end-begin))
+                frames[t] = (lerp(p0,p1,u)%1.*period, lerp(w0,w1,u))
+    times = sorted(frames)
+    names = [e.string_data for e in stream.root.extra_datas if isinstance(e, nif.NiStringExtraData)]
+    for name, ctl in zip(names, stream.root.controllers):
+        for index, field in enumerate((ctl.data.rotations, ctl.data.translations)):
+            n, interpolate = (4, slerp) if index == 0 else (3, lerp)
+            rest = stance[name][index][0,1:]
+            values = []
+            for t in times:
+                phase, weight = frames[t]
+                donor = sample(stride[name][index], phase, n, interpolate)
+                value = interpolate(rest, donor, weight)
+                if index == 0 and values and value @ values[-1] < 0.:
+                    value = -value
+                values.append(value)
+            field.keys = np.column_stack((times,values)).astype(np.float32)
+        ctl.start_time, ctl.stop_time = 0., final_time
+    stream.save(folder / 'brutal_spear_step.kf')
 
 
 def build(arms, body=None):
@@ -89,12 +150,10 @@ def build(arms, body=None):
 
     reach = hit2 - chamber      # the drive itself, without the static hold
 
-    from import_spear_thrust import LocalPose, steer_arm
-    from import_two_hand_viewmodel import Grasp, ITEM as WEAPON, inverse
     contact_pose, guard_pose = Pose(rig, channels, hit2), Pose(rig, channels, chamber)
     left = Grasp(contact_pose, 'L', False)
-    grip_contact = inverse(contact_pose.world(WEAPON)) @ contact_pose.world(left.names[-1])
-    grip_guard = inverse(guard_pose.world(WEAPON)) @ guard_pose.world(left.names[-1])
+    grip_contact = inverse(contact_pose.world(ITEM)) @ contact_pose.world(left.names[-1])
+    grip_guard = inverse(guard_pose.world(ITEM)) @ guard_pose.world(left.names[-1])
 
     def returning(e):
         # Draw the haft back along the same line: DM's own drive, reversed,
@@ -109,7 +168,7 @@ def build(arms, body=None):
         now = LocalPose(rig, pose)
         # The left palm stays on the moving haft; its station and roll on
         # the haft move from the contact grip to the guard grip.
-        hand = now.world(WEAPON) @ blend(grip_contact, grip_guard, u)
+        hand = now.world(ITEM) @ blend(grip_contact, grip_guard, u)
         neck = now.world(rig.parents[left.names[0]])
         pose.update(steer_arm(contact_pose, guard_pose, left, hand, u, parent=neck))
         for n in left.fingers:
@@ -117,8 +176,6 @@ def build(arms, body=None):
                 pose[n] = blend(contact_pose.local(n), guard_pose.local(n), u)
         return pose
 
-    from import_two_hand_viewmodel import turn_about
-    from audit_staff_mesh_grip import matrix
     clavicles = [n for n in animated if n.endswith('Clavicle')]
 
     def aimed(pose, angles, weight):
@@ -199,8 +256,6 @@ def build(arms, body=None):
     hand_bones = {side: grasps[side].names[-1] for side in 'RL'}
     arm_chain = {n for g in grasps.values() for n in g.names}
 
-    from import_two_hand_viewmodel import quat_matrix
-    from audit_staff_mesh_grip import matrix
 
     class Mix:
         """Blend two moving poses without flips. The rotation between a staff
@@ -234,20 +289,20 @@ def build(arms, body=None):
             if not self.held:
                 return out
             A, B = LocalPose(rig, a), LocalPose(rig, b)
-            spear = self.turn('spear', A.world(WEAPON), B.world(WEAPON), w)
+            spear = self.turn('spear', A.world(ITEM), B.world(ITEM), w)
             # The guard's hands sit beside the head; on the way to a staff
             # pose they pass under the eye instead of across it.
             spear[:3, 3] += self.dip * np.sin(np.pi * w)
             now = LocalPose(rig, out)
             for side, grasp in grasps.items():
                 hand = hand_bones[side]
-                grip = self.turn('grip ' + side, inverse(A.world(WEAPON)) @ A.world(hand),
-                                 inverse(B.world(WEAPON)) @ B.world(hand), w)
+                grip = self.turn('grip ' + side, inverse(A.world(ITEM)) @ A.world(hand),
+                                 inverse(B.world(ITEM)) @ B.world(hand), w)
                 neck = now.world(rig.parents[grasp.names[0]])
                 # The blended bones are both ends: steer_arm only reaches the palm.
                 out.update(steer_arm(now, now, grasp, spear @ grip, 0., parent=neck))
                 now = LocalPose(rig, out)
-            out[WEAPON] = inverse(now.world(rig.parents[WEAPON])) @ spear
+            out[ITEM] = inverse(now.world(rig.parents[ITEM])) @ spear
             return out
 
     # Side swing: from the guard straight into DM's wind-up, which keeps
@@ -320,7 +375,6 @@ def build(arms, body=None):
     text.keys = np.array(kept, dtype=text.keys.dtype)
     stream.save(target / source.name)
     # Strokes start where the previous one ended: keep only a short blend.
-    import re
     rules = source.with_suffix('.yaml').read_text()
     rules = re.sub(r"(to: 'weapononehand:fast(?:end)?[abcd] start'\s+easing: linear\s+duration: )0\.2[0-9]*",
                    r"\g<1>0.045", rules)
@@ -347,7 +401,6 @@ def build(arms, body=None):
         if path.with_suffix('.yaml').exists():
             shutil.copyfile(path.with_suffix('.yaml'), target / path.with_suffix('.yaml').name)
     if body is not None:
-        from import_spear_thrust import body_footwork
         body_footwork(body, target / source.name)
     manifest_path = arms / 'weapon-families-import.json'
     manifest = json.loads(manifest_path.read_text())
