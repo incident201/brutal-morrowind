@@ -160,10 +160,14 @@ namespace MWPhysics
         float span = 0.f;
         float thickness = 0.f;
         float shieldDepth = 0.f;
+        // In model space, right hand first. The empty array is used for rim grips.
+        std::array<osg::Vec3f, 2> shieldGrips{};
+        std::array<float, 2> shieldGripRadii{};
         bool narrowEnd = false;
         bool dual = false;
         bool shaft = false;
         bool shield = false;
+        bool shieldStraps = false;
     };
 
     struct ThrownObjectHit

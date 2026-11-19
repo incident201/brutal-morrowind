@@ -2112,6 +2112,21 @@ namespace MWPhysics
                 }
                 grip.shieldDepth = grip.center[grip.depthAxis] - nearRim;
                 grip.span *= .90f;
+                // The vanilla rings and straps are reused by several shield meshes.
+                // Only fit their grips when both pieces of hardware are present.
+                const auto containsVertex = [&](const osg::Vec3f& sample) {
+                    return std::any_of(visitor.mVertices.begin(), visitor.mVertices.end(),
+                        [&](const auto& vertex) { return (vertex - sample).length2() < .04f; });
+                };
+                if (grip.depthAxis == 2 && grip.lengthAxis == 0
+                    && containsVertex({ 3.02f, -.21f, -5.36f })
+                    && containsVertex({ -11.84f, -.05f, -3.03f }))
+                {
+                    grip.shieldStraps = true;
+                    grip.shieldGrips = { osg::Vec3f(4.26f, -.21f, -4.32f) * scale,
+                        osg::Vec3f(-11.38f, .40f, -2.25f) * scale };
+                    grip.shieldGripRadii = { 1.18f * scale, 1.8f * scale };
+                }
             }
             // On a long prop, prefer the visibly narrower portion of its axis
             // rather than placing one hand on the heavy head.

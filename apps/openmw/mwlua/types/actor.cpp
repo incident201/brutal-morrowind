@@ -1057,21 +1057,23 @@ namespace MWLua
                         pose["z"] = osg::Matrixf::transform3x3(osg::Vec3f(0, 0, 1), *matrix);
                         bones[name] = std::move(pose);
                     }
-                for (int finger = 0; finger < 5; ++finger)
-                    for (int joint = 0; joint < 3; ++joint)
-                    {
-                        const std::string suffix = std::to_string(finger)
-                            + (joint ? std::to_string(joint) : "");
-                        if (const auto matrix = animation->getBoneWorldMatrix("Bip01 L Finger" + suffix))
+                for (const auto& [side, prefix] : { std::pair{ "left", "Bip01 L Finger" },
+                         std::pair{ "right", "Bip01 R Finger" } })
+                    for (int finger = 0; finger < 5; ++finger)
+                        for (int joint = 0; joint < 3; ++joint)
                         {
-                            sol::table pose(lua->unsafeState(), sol::create);
-                            pose["position"] = osg::Vec3f(matrix->getTrans());
-                            pose["x"] = osg::Matrixf::transform3x3(osg::Vec3f(1, 0, 0), *matrix);
-                            pose["y"] = osg::Matrixf::transform3x3(osg::Vec3f(0, 1, 0), *matrix);
-                            pose["z"] = osg::Matrixf::transform3x3(osg::Vec3f(0, 0, 1), *matrix);
-                            bones["leftFinger" + suffix] = std::move(pose);
+                            const std::string suffix = std::to_string(finger)
+                                + (joint ? std::to_string(joint) : "");
+                            if (const auto matrix = animation->getBoneWorldMatrix(prefix + suffix))
+                            {
+                                sol::table pose(lua->unsafeState(), sol::create);
+                                pose["position"] = osg::Vec3f(matrix->getTrans());
+                                pose["x"] = osg::Matrixf::transform3x3(osg::Vec3f(1, 0, 0), *matrix);
+                                pose["y"] = osg::Matrixf::transform3x3(osg::Vec3f(0, 1, 0), *matrix);
+                                pose["z"] = osg::Matrixf::transform3x3(osg::Vec3f(0, 0, 1), *matrix);
+                                bones[std::string(side) + "Finger" + suffix] = std::move(pose);
+                            }
                         }
-                    }
                 state["weaponCycleBones"] = std::move(bones);
                 const auto& audit = animation->getWeaponCycleForAudit();
                 sol::table cycle(lua->unsafeState(), sol::create);
