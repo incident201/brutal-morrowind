@@ -44,6 +44,7 @@ namespace Settings
         SettingValue<bool> mBrutalFastAttacks{ mIndex, "Game", "brutal fast attacks" };
         SettingValue<bool> mBrutalClinch{ mIndex, "Game", "brutal clinch" };
         SettingValue<bool> mBrutalCombatSounds{ mIndex, "Game", "brutal combat sounds" };
+        SettingValue<bool> mBrutalHeroVoice{ mIndex, "Game", "brutal hero voice" };
         SettingValue<bool> mBrutalBloodEffects{ mIndex, "Game", "brutal blood effects" };
         SettingValue<bool> mBrutalSparkEffects{ mIndex, "Game", "brutal spark effects" };
         SettingValue<bool> mMeleeContactAlwaysHits{ mIndex, "Game", "melee contact always hits" };

@@ -77,6 +77,8 @@ worldBlood: Blood on floors and walls
 worldBloodDescription: "Hits on living flesh leave splatters on nearby floors and walls."
 combatSounds: Dark Messiah sounds
 combatSoundsDescription: "Weapon, impact, kick, adrenaline, footstep, jump and landing sounds from Dark Messiah. Off: Morrowind sounds."
+heroVoice: Hero voice
+heroVoiceDescription: "The hero's grunts from Dark Messiah: on an adrenaline strike or super kick, on a throw and on a jump. Other Dark Messiah sounds stay."
 adrenalineHudEnabled: Adrenaline gauge
 adrenalineHudEnabledDescription: "A charge indicator beside the native status bars."
 adrenalineFxEnabled: Adrenaline screen effect

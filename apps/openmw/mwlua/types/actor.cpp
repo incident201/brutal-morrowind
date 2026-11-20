@@ -491,7 +491,7 @@ namespace MWLua
                 {"npcStagger", g.mNpcHurtHealthFraction > 0.f}, {"hitRecovery", !g.mPlayerHitRecovery},
                 {"stamina", g.mBrutalStamina}, {"wallBounce", g.mBrutalWallBounce},
                 {"controlsEnabled", g.mBrutalControlsEnabled}, {"slide", g.mBrutalSlide}, {"clinch", g.mBrutalClinch}, {"fastAttacks", g.mBrutalFastAttacks},
-                {"combatSounds", g.mBrutalCombatSounds}, {"bloodEffects", g.mBrutalBloodEffects},
+                {"combatSounds", g.mBrutalCombatSounds}, {"heroVoice", g.mBrutalHeroVoice}, {"bloodEffects", g.mBrutalBloodEffects},
                 {"sparkEffects", g.mBrutalSparkEffects}, {"kickAlwaysRagdoll", g.mBrutalKickAlwaysRagdoll},
                 {"objectGrab", g.mBrutalObjectGrab}
             };
@@ -581,6 +581,7 @@ namespace MWLua
                 g.mBrutalClinch.set(on("clinch"));
                 g.mBrutalFastAttacks.set(on("fastAttacks"));
                 g.mBrutalCombatSounds.set(on("combatSounds"));
+                g.mBrutalHeroVoice.set(on("heroVoice") && on("combatSounds"));
                 MWBase::World* world = MWBase::Environment::get().getWorld();
                 const auto player = MWMechanics::getPlayer();
                 const auto mechanics = MWBase::Environment::get().getMechanicsManager();

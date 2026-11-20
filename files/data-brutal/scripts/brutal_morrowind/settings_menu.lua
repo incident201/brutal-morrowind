@@ -41,7 +41,7 @@ for _,key in ipairs({
     'clinchEnabled','attackCombosEnabled','fastAttacksEnabled','wallBounceEnabled','npcAiTweaks','npcStagger','hitRecovery',
     'adrenalineEnabled','finisherEnabled','groundFinisherEnabled','groundFinisherHealth',
     'superKickEnabled','slowMotionEnabled','dismemberment','bloodEffects','sparkEffects',
-    'bloodDecals','weaponBlood','worldBlood','combatSounds','adrenalineHudEnabled','adrenalineFxEnabled','slideFxEnabled','clinchFxEnabled',
+    'bloodDecals','weaponBlood','worldBlood','combatSounds','heroVoice','adrenalineHudEnabled','adrenalineFxEnabled','slideFxEnabled','clinchFxEnabled',
 }) do
     if key=='ragdollWeaponDrop' or key=='groundFinisherHealth' then
         options[#options+1]=setting(key,'number',{integer=true,min=0,max=100})

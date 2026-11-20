@@ -292,6 +292,6 @@ namespace MWMechanics::BrutalFootsteps
 
     bool playJump(const MWWorld::Ptr& player)
     {
-        return available() && emit(player, "player.jump");
+        return available() && Settings::game().mBrutalHeroVoice && emit(player, "player.jump");
     }
 }

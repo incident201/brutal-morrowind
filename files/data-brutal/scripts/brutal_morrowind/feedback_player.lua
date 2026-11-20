@@ -15,8 +15,11 @@ local function pickFile(category)
     if vfs.fileExists(file) then return file end
     return nil
 end
+-- The player character's own voice: grunts on adrenaline strikes, throws and jumps.
+local HERO_VOICE={critical_voice=true,object_throw_voice=true}
 local function cue(category, volume, pitch)
     if not settings.get('combatSounds') then return end
+    if HERO_VOICE[category] and not settings.get('heroVoice') then return end
     local file = pickFile(category)
     if file then
         ambient.playSoundFile(file, {volume = volume, pitch=pitch or 1, scale = false})

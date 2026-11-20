@@ -49,6 +49,7 @@ local DEFAULTS={
     weaponBlood=true,
     worldBlood=true,
     combatSounds=true,
+    heroVoice=true,
     adrenalineHudEnabled=true,
     adrenalineFxEnabled=true,
     slideFxEnabled=true,
@@ -64,7 +65,7 @@ local DARK_MESSIAH_KEYS={'firstPersonBody','cameraMotionMovement','dualWieldEnab
     'kickEnabled','kickAlwaysRagdoll','superKickEnabled','slideEnabled','slideFxEnabled','activeBlockEnabled',
     'shieldBashEnabled','parryEnabled','clinchEnabled','clinchFxEnabled','attackCombosEnabled',
     'fastAttacksEnabled','wallBounceEnabled','adrenalineEnabled','finisherEnabled','groundFinisherEnabled','bloodEffects',
-    'sparkEffects','bloodDecals','weaponBlood','worldBlood','combatSounds'}
+    'sparkEffects','bloodDecals','weaponBlood','worldBlood','combatSounds','heroVoice'}
 local darkMessiahData=vfs.fileExists('animations/brutal_npc/brutal_hit.kf')
     and vfs.fileExists('animations/brutal_fp/brutal_blockhit1.kf')
     and vfs.fileExists('sound/brutal_dm/armor_heavy_01.wav')
@@ -138,6 +139,8 @@ local function refresh()
     deriveRagdoll(mode);deriveRagdoll(effective)
     if not effective.ragdollEnabled then effective.dismemberment=false end
     if not effective.ragdollEnabled or not effective.kickEnabled then effective.kickAlwaysRagdoll=false end
+    -- The hero's voice is part of the Dark Messiah sounds and has its own switch.
+    if not effective.combatSounds then effective.heroVoice=false end
     rawValues,modeValues,effectiveValues=values,mode,effective
     return true
 end
