@@ -3942,6 +3942,11 @@ namespace MWMechanics
             cancelBrutalCombo();
             return false;
         }
+        // A new jump can start as the previous strike ends. Recheck combo
+        // eligibility immediately, before the ordinary attack starts a windup.
+        if ((mBrutalCombo == BrutalCombo::Rush && !mAnimation->isPlaying(rush))
+            || (mBrutalCombo == BrutalCombo::FallStrike && !mAnimation->isPlaying(fall)))
+            mBrutalCombo = BrutalCombo::None;
         const float z = mPtr.getRefData().getPosition().pos[2];
         switch (mBrutalCombo)
         {
@@ -3979,10 +3984,7 @@ namespace MWMechanics
                 return true;
             case BrutalCombo::Rush:
             case BrutalCombo::FallStrike:
-                if (mAnimation->isPlaying(mBrutalCombo == BrutalCombo::Rush ? rush : fall))
-                    return true;
-                mBrutalCombo = BrutalCombo::None;
-                return mBrutalComboRelease;
+                return true;
             case BrutalCombo::FallRaise:
             case BrutalCombo::FallHold:
                 mBrutalFallPeakZ = std::max(mBrutalFallPeakZ, z);
