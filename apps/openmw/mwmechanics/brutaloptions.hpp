@@ -4,8 +4,19 @@
 #include <components/esm3/loadweap.hpp>
 #include <components/settings/values.hpp>
 
+namespace MWWorld
+{
+    class Ptr;
+}
+
 namespace MWMechanics
 {
+    // Dark Messiah's wounded NPC (life_tohurt): a living NPC other than the player whose health
+    // is below the wounded fraction of its maximum.
+    bool isBrutalWoundedNpc(const MWWorld::Ptr& actor);
+    // A charged melee blow: the player's held, non-fast strike or an NPC's chosen guard breaker.
+    bool isBrutalChargedAttack(const MWWorld::Ptr& attacker, float strength);
+
     // Dark Messiah first-person mode. The classic mode restores OpenMW's own arms,
     // attack animations, passive block and third-person toggle at run time.
     inline bool brutalDmFirstPerson()

@@ -8,6 +8,7 @@
 #include <cmath>
 #include <memory>
 
+#include <components/misc/rng.hpp>
 #include <components/esm3/loadacti.hpp>
 #include <components/esm3/loadalch.hpp>
 #include <components/esm3/loadarmo.hpp>
@@ -34,6 +35,7 @@
 #include "../mwbase/statemanager.hpp"
 #include "../mwbase/windowmanager.hpp"
 #include "../mwbase/world.hpp"
+#include "../mwmechanics/brutaloptions.hpp"
 #include "../mwmechanics/creaturestats.hpp"
 #include "../mwworld/action.hpp"
 #include "../mwworld/class.hpp"
@@ -508,14 +510,20 @@ namespace MWLua
             });
         };
         api["applyNpcKick"] = [context](const GObject& object, Misc::FiniteVec3f value, const GObject& attacker,
-                                       sol::optional<bool> knockDown, sol::optional<bool> slideTrip) {
+                                       sol::optional<bool> knockDown, sol::optional<bool> slideTrip,
+                                       sol::optional<bool> strike) {
             const osg::Vec3f kick=value;
             if (kick.length2()>1000.f*1000.f) throw std::runtime_error("NPC kick velocity must be <=1000 units/s");
             context.mLuaManager->addAction([object,attacker,kick,knockDown=knockDown.value_or(false),
-                                              slideTrip=slideTrip.value_or(false)] {
+                                              slideTrip=slideTrip.value_or(false),strike=strike.value_or(false)] {
                 const auto ptr=object.ptrOrEmpty(), source=attacker.ptrOrEmpty();
-                if (!ptr.isEmpty() && ptr.isInCell() && !source.isEmpty())
-                    MWBase::Environment::get().getWorld()->applyNpcKick(ptr,kick,source,knockDown,slideTrip);
+                if (ptr.isEmpty() || !ptr.isInCell() || source.isEmpty())
+                    return;
+                // A kick or shield bash knocks a wounded NPC down three times in ten (WoundedFallChance).
+                bool fall=knockDown;
+                if (strike && !fall && MWMechanics::isBrutalWoundedNpc(ptr))
+                    fall=Misc::Rng::rollClosedProbability(MWBase::Environment::get().getWorld()->getPrng())<.3f;
+                MWBase::Environment::get().getWorld()->applyNpcKick(ptr,kick,source,fall,slideTrip);
             },"ApplyNpcKick");
         };
         // The receipt reports the completed native handoff, rather than queue acceptance.

@@ -47,7 +47,13 @@ animations, camera motion and impact sounds come from Dark Messiah; hits stagger
 NPCs by hit location (head or body), and throwing with full adrenaline spends the
 charge to knock living targets into a physical ragdoll.
 
-This branch uses **Dark Messiah import recipe 15**. Its launcher asks to reimport
+NPCs below 15% health fight wounded with Dark Messiah's wounded guard animations:
+their guard gives way easily, blows stagger them, and a charged blow, kick or
+shield bash can knock them down. Below
+5% they flee for up to 20 seconds, then fight on. Argonians and Khajiit keep their
+own stance and walk. Both behaviours have switches in the settings.
+
+This branch uses **Dark Messiah import recipe 16**. Its launcher asks to reimport
 older data. See `CHANGELOG.md` for the other unreleased changes.
 
 ## Requirements

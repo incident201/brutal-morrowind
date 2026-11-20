@@ -2662,6 +2662,12 @@ namespace MWMechanics
             cls.getCreatureStats(mPtr).mBrutalParried = false;
             stagger("brutal_parrybroken");
         }
+        if (cls.isNpc() && mPtr != MWMechanics::getPlayer())
+        {
+            updateBrutalWounded();
+            if (mAnimation->isRagdollPose())
+                return;
+        }
 
         bool isPlayer = mPtr == MWMechanics::getPlayer();
         if (isPlayer && cls.isActor() && cls.getCreatureStats(mPtr).mBrutalCarryingObject)
@@ -5011,6 +5017,29 @@ namespace MWMechanics
         stats.mBrutalBlockImpact = false;
         stats.mBrutalBlockRaised = raised;
         stats.mBrutalParry = raised && !hasShield;
+    }
+
+    void CharacterController::updateBrutalWounded()
+    {
+        auto& stats = mPtr.getClass().getCreatureStats(mPtr);
+        if (!stats.mBrutalWoundedFallAttacker.isEmpty())
+        {
+            const osg::Vec3f push = stats.mBrutalWoundedFall;
+            const MWWorld::Ptr attacker = stats.mBrutalWoundedFallAttacker;
+            stats.mBrutalWoundedFall = osg::Vec3f();
+            stats.mBrutalWoundedFallAttacker = MWWorld::Ptr();
+            if (!stats.isDead() && !stats.getKnockedDown() && stats.mBrutalClinchOpponent.isEmpty())
+                MWBase::Environment::get().getWorld()->applyNpcKick(mPtr, push, attacker, true);
+        }
+        if (stats.isDead() || mAnimation->isRagdollPose())
+            return;
+        const bool wounded = isBrutalWoundedNpc(mPtr);
+        // A claimed paired animation keeps its pose; the change waits until it ends.
+        if (wounded == mBrutalWounded || stats.mBrutalClinchActive || !stats.mBrutalClinchOpponent.isEmpty())
+            return;
+        mBrutalWounded = wounded;
+        if (mAnimation->setBrutalWounded(wounded))
+            forceStateUpdate();
     }
 
     void CharacterController::forceStateUpdate()

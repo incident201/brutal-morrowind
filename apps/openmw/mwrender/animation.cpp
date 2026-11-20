@@ -1050,6 +1050,8 @@ namespace MWRender
         bool mImportedFamilyArms = false;
         bool mImportedFarArms = false; // Dagger and staff sets: see familyClinchArmBlendRules.
         bool mImportedDaggerArms = false;
+        // Dark Messiah's wounded NPC set: the same group names, used only while the actor is wounded.
+        bool mBrutalWounded = false;
         std::map<std::weak_ptr<float>, float, std::owner_less<std::weak_ptr<float>>> mDaggerClockStarts;
     };
 
@@ -1335,7 +1337,8 @@ namespace MWRender
         // Do not enable global vanilla/player smoothing or inherit global rules.
         const bool importedNpc = mPtr.getClass().isNpc()
             && mPtr != MWBase::Environment::get().getWorld()->getPlayerPtr()
-            && kfname.starts_with("animations/brutal_npc/");
+            && (kfname.starts_with("animations/brutal_npc/") || kfname.starts_with("animations/brutal_npc_wounded/"));
+        animsrc->mBrutalWounded = kfname.starts_with("animations/brutal_npc_wounded/");
         // Weapon families opt only their first-person arm tracks into local
         // source fade rules. Never turn on global smoothing for their camera,
         // root, classic animations or other actors.
@@ -1412,6 +1415,39 @@ namespace MWRender
         mAnimVelocities.clear();
     }
 
+    bool Animation::sourceInUse(const AnimSource& source) const
+    {
+        return !source.mBrutalWounded || mBrutalWounded;
+    }
+
+    bool Animation::setBrutalWounded(bool wounded)
+    {
+        if (wounded == mBrutalWounded)
+            return false;
+        mBrutalWounded = wounded;
+        std::set<std::string, std::less<>> groups;
+        for (const auto& source : mAnimSources)
+            if (source->mBrutalWounded)
+                for (const std::string& group : source->getTextKeys().getGroups())
+                    groups.insert(group);
+        if (groups.empty())
+            return false;
+        mAnimVelocities.clear();
+        // Playing states keep the clip they started with: end those the wounded set redefines.
+        for (auto state = mStates.begin(); state != mStates.end();)
+        {
+            if (groups.contains(state->first))
+            {
+                animationEnded(state->second);
+                state = mStates.erase(state);
+            }
+            else
+                ++state;
+        }
+        resetActiveGroups();
+        return true;
+    }
+
     bool Animation::hasAnimation(std::string_view anim) const
     {
         return mSupportedAnimations.find(anim) != mSupportedAnimations.end();
@@ -1456,6 +1492,8 @@ namespace MWRender
     {
         for (AnimSourceList::const_reverse_iterator iter(mAnimSources.rbegin()); iter != mAnimSources.rend(); ++iter)
         {
+            if (!sourceInUse(**iter))
+                continue;
             const SceneUtil::TextKeyMap& keys = (*iter)->getTextKeys();
 
             const auto found = keys.findGroupStart(groupname);
@@ -1469,6 +1507,8 @@ namespace MWRender
     {
         for (auto source = mAnimSources.rbegin(); source != mAnimSources.rend(); ++source)
         {
+            if (!sourceInUse(**source))
+                continue;
             bool ownerFound = false, keyFound = false;
             for (const auto& [time, text] : (*source)->getTextKeys())
             {
@@ -1485,6 +1525,8 @@ namespace MWRender
     {
         for (AnimSourceList::const_reverse_iterator iter(mAnimSources.rbegin()); iter != mAnimSources.rend(); ++iter)
         {
+            if (!sourceInUse(**iter))
+                continue;
             const SceneUtil::TextKeyMap& keys = (*iter)->getTextKeys();
 
             for (auto iterKey = keys.begin(); iterKey != keys.end(); ++iterKey)
@@ -1574,6 +1616,8 @@ namespace MWRender
         AnimSourceList::reverse_iterator iter(mAnimSources.rbegin());
         for (; iter != mAnimSources.rend(); ++iter)
         {
+            if (!sourceInUse(**iter))
+                continue;
             const SceneUtil::TextKeyMap& textkeys = (*iter)->getTextKeys();
             if (reset(state, textkeys, groupname, start, stop, startpoint, loopfallback))
             {
@@ -2236,6 +2280,8 @@ namespace MWRender
         AnimSourceList::const_reverse_iterator animsrc(mAnimSources.rbegin());
         for (; animsrc != mAnimSources.rend(); ++animsrc)
         {
+            if (!sourceInUse(**animsrc))
+                continue;
             const SceneUtil::TextKeyMap& keys = (*animsrc)->getTextKeys();
             if (keys.hasGroupStart(groupname))
                 break;
@@ -2265,6 +2311,8 @@ namespace MWRender
 
             while (!(velocity > 1.0f) && ++animiter != mAnimSources.rend())
             {
+                if (!sourceInUse(**animiter))
+                    continue;
                 const SceneUtil::TextKeyMap& keys2 = (*animiter)->getTextKeys();
 
                 const AnimSource::ControllerMap& ctrls2 = (*animiter)->mControllerMap[0];

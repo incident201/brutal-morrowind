@@ -157,6 +157,7 @@ namespace MWMechanics
         bool mAdjustMovementAnimSpeed{ false };
         bool mBrutalSprinting{ false }; // kinetic player sprints forward this frame
         bool mBrutalSprintAnim{ false }; // the current movement clip is the sprint
+        bool mBrutalWounded{ false }; // the NPC plays Dark Messiah's wounded clips
         float mBrutalStepPhase{ 0.f }; // player footstep clock, a fraction of the leg cycle
         int mBrutalStepGait{ 0 }; // BrutalFootsteps::Gait of the last player step
         bool mMovementAnimationHasMovement{ false };
@@ -404,6 +405,7 @@ namespace MWMechanics
         bool updateSwordClinch(float duration);
 
         void cancelAttackForKick();
+        void updateBrutalWounded();
         void updateBrutalShieldBlock();
         void updateBrutalNpcGuard();
         void updateBrutalNpcGuardTarget(bool enabled, bool shield);

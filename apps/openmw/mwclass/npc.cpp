@@ -37,6 +37,7 @@
 #include "../mwmechanics/actorutil.hpp"
 #include "../mwmechanics/aisetting.hpp"
 #include "../mwmechanics/autocalcspell.hpp"
+#include "../mwmechanics/brutaloptions.hpp"
 #include "../mwmechanics/combat.hpp"
 #include "../mwmechanics/creaturecustomdataresetter.hpp"
 #include "../mwmechanics/creaturestats.hpp"
@@ -767,6 +768,9 @@ namespace MWClass
         MWMechanics::diseaseContact(victim, ptr);
 
         brutalSuccessful = true;
+        // Only a charged blow can knock a wounded NPC down (see onHit).
+        othercls.getCreatureStats(victim).mBrutalChargedBlowBy
+            = MWMechanics::isBrutalChargedAttack(ptr, attackStrength) ? ptr : MWWorld::Ptr();
         MWBase::Environment::get().getLuaManager()->onHit(ptr, victim, weapon, MWWorld::Ptr(), type, attackStrength,
             damage, healthdmg, hitPosition, true, MWMechanics::DamageSourceType::Melee,
             brutalAttackId, brutalPowered, brutalBlocked, contactPart, groundFinisher);
@@ -901,6 +905,29 @@ namespace MWClass
                 stats.setKnockedDown(true);
             else
                 stats.setHitRecovery(true); // Is this supposed to always occur?
+
+            // Dark Messiah's wounded NPC: a charged melee blow knocks it down (WoundedFallChance
+            // 0.3), any melee blow may stagger it (WoundedStunChance 0.3). The fall is applied on
+            // its next update. A kick or shield bash rolls its fall where its push lands (applyNpcKick).
+            const bool charged = stats.mBrutalChargedBlowBy == attacker;
+            stats.mBrutalChargedBlowBy = MWWorld::Ptr();
+            if (hasHealthDamage && healthDamage > 0.f && !clinchLossDamage
+                && sourceType == MWMechanics::DamageSourceType::Melee && MWMechanics::isBrutalWoundedNpc(ptr)
+                && stats.mBrutalClinchOpponent.isEmpty())
+            {
+                const float roll = Misc::Rng::rollClosedProbability(prng);
+                osg::Vec3f direction
+                    = ptr.getRefData().getPosition().asVec3() - attacker.getRefData().getPosition().asVec3();
+                direction.z() = 0.f;
+                if (charged && roll < .3f && direction.normalize() > 1e-3f)
+                {
+                    constexpr float push = 225.f; // A combo blow's knockdown push (impact 1.5).
+                    stats.mBrutalWoundedFall = direction * push + osg::Vec3f(0.f, 0.f, push * .35f);
+                    stats.mBrutalWoundedFallAttacker = attacker;
+                }
+                else if (roll < .6f)
+                    stats.setHitRecovery(true);
+            }
         }
 
         if (hasHealthDamage && healthDamage > 0.0f)

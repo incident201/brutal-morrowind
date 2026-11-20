@@ -242,6 +242,33 @@ namespace MWMechanics
         float& actionCooldown = storage.mActionCooldown;
         std::unique_ptr<Action>& currentAction = storage.mCurrentAction;
 
+        // Dark Messiah's flee: a blow that leaves an NPC below the flee fraction of its health makes
+        // it run for TimeFleeStop seconds. Afterwards it fights on; a later blow below the
+        // fraction makes it run again.
+        if (Settings::game().mBrutalNpcFlee && actorClass.isNpc() && actor != getPlayer())
+        {
+            const double now = MWBase::Environment::get().getWorld()->getTimeManager()->getSimulationTime();
+            const float health = stats.getHealth().getCurrent();
+            const float maximum = stats.getHealth().getModified();
+            const bool struck = storage.mBrutalLastHealth >= 0.f && health < storage.mBrutalLastHealth;
+            storage.mBrutalLastHealth = health;
+            if (struck && maximum > 0.f && health < Settings::game().mBrutalNpcFleeHealthFraction * maximum
+                && now >= storage.mBrutalFleeUntil)
+                storage.mBrutalFleeUntil = now + Settings::game().mBrutalNpcFleeTime;
+            if (now < storage.mBrutalFleeUntil)
+            {
+                forceFlee = true;
+                storage.mBrutalFleeing = true;
+            }
+            else if (storage.mBrutalFleeing)
+            {
+                storage.mBrutalFleeing = false;
+                actionCooldown = 0.f; // Turn back at once rather than after the flight's cooldown.
+            }
+        }
+        else
+            storage.mBrutalFleeing = false;
+
         if (!forceFlee)
         {
             if (actionCooldown > 0)
@@ -440,6 +467,30 @@ namespace MWMechanics
                                 && getPathGridGraph(pathgrid).isPointConnected(closestPointIndex, i))
                             {
                                 points.push_back(pathgrid->mPoints[i]);
+                            }
+                        }
+
+                        // Dark Messiah's flight (FindFleeFromEnemy) runs away from the enemy:
+                        // keep the points farther from it, on the far side of the actor.
+                        if (storage.mBrutalFleeing)
+                        {
+                            const osg::Vec3f actorPos = actor.getRefData().getPosition().asVec3();
+                            const osg::Vec3f enemyPos = target.getRefData().getPosition().asVec3();
+                            const osg::Vec3f away = actorPos - enemyPos;
+                            ESM::Pathgrid::PointList awayPoints;
+                            for (ESM::Pathgrid::Point point : points)
+                            {
+                                coords.toWorld(point);
+                                const osg::Vec3f position(point.mX, point.mY, point.mZ);
+                                if ((position - enemyPos).length() > away.length() + 200.f
+                                    && (position - actorPos) * away > 0.f)
+                                    awayPoints.push_back(point);
+                            }
+                            if (!awayPoints.empty())
+                            {
+                                for (ESM::Pathgrid::Point& point : awayPoints)
+                                    coords.toLocal(point); // The common path below converts to world.
+                                points = std::move(awayPoints);
                             }
                         }
 

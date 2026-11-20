@@ -120,6 +120,7 @@ namespace MWMechanics
 
         /// Is the actor fleeing?
         bool isFleeing() const;
+        bool isBrutalFleeing() const; // Dark Messiah's timed flight, not the vanilla decision
 
         /// Removes all packages using the specified id.
         void removePackagesById(AiPackageTypeId id);

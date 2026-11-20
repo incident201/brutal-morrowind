@@ -57,6 +57,10 @@ npcAiTweaks: NPC AI tweaks
 npcAiTweaksDescription: "Dark Messiah combat pacing, windups and dodges."
 npcStagger: NPC hit reactions
 npcStaggerDescription: "Enemies flinch and stagger when hit."
+woundedNpcs: Wounded NPCs
+woundedNpcsDescription: "Below 15% health an NPC fights and walks wounded, as in Dark Messiah: its parry and shield block often give way, blows stagger it, and a charged blow, kick or shield bash can knock it down. Argonians and Khajiit keep their own stance and walk."
+npcFlee: NPC flight
+npcFleeDescription: "A blow that leaves an NPC below 5% health makes it run away for up to 20 seconds; then it fights on until the next blow."
 hitRecovery: Suppress player hit recoil
 hitRecoveryDescription: "Damage does not interrupt player actions."
 adrenalineEnabled: Adrenaline and finishers

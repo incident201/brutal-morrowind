@@ -163,6 +163,11 @@ namespace MWMechanics
         std::string mBrutalClinchLastReason;
         osg::Vec3f mBrutalClinchVelocity; // World-space collision-resolved alignment only.
         bool mBrutalParried = false; // NPC: the player timed a parry of this actor's blow; recoil next update.
+        // A wounded NPC knocked down by a blow (WoundedFallChance): the push, applied next update.
+        osg::Vec3f mBrutalWoundedFall;
+        MWWorld::Ptr mBrutalWoundedFallAttacker;
+        // The attacker of the charged melee blow now being resolved against this actor.
+        MWWorld::Ptr mBrutalChargedBlowBy;
         // Transient adaptive defence: pressure is observed from actual fast contacts,
         // not the player's input; none of these decisions survives a saved game.
         int mBrutalFastPressure = 0;

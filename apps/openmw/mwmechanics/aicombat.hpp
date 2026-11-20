@@ -58,6 +58,12 @@ namespace MWMechanics
         bool mUseCustomDestination;
         osg::Vec3f mCustomDestination;
 
+        // Dark Messiah's flee (life_toflee, TimeFleeStop): health at the last decision and the end
+        // of the current flight. Transient, as the rest of this storage.
+        float mBrutalLastHealth = -1.f;
+        double mBrutalFleeUntil = 0.0;
+        bool mBrutalFleeing = false;
+
         // Dark Messiah guard pacing (npc_guard.qct, mm_game_settings.txt).
         bool mDmBerserk = false;
         float mDmRhythmTimer = 0.f;

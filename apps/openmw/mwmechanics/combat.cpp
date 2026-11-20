@@ -56,6 +56,19 @@ namespace
 
 namespace MWMechanics
 {
+    bool isBrutalWoundedNpc(const MWWorld::Ptr& actor)
+    {
+        if (!Settings::game().mBrutalWoundedNpcs || actor.isEmpty() || !actor.getClass().isNpc()
+            || actor == getPlayer())
+            return false;
+        const CreatureStats& stats = actor.getClass().getCreatureStats(actor);
+        if (stats.isDead())
+            return false;
+        const float health = stats.getHealth().getCurrent();
+        const float maximum = stats.getHealth().getModified();
+        return maximum > 0.f && health > 0.f
+            && health < Settings::game().mBrutalNpcWoundedHealthFraction * maximum;
+    }
 
     bool applyOnStrikeEnchantment(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, const MWWorld::Ptr& object,
         const osg::Vec3f& hitPosition, const bool fromProjectile)
@@ -346,6 +359,11 @@ namespace MWMechanics
         return false;
     }
 
+    bool isBrutalChargedAttack(const MWWorld::Ptr& attacker, float strength)
+    {
+        return brutalGuardBreakingAttack(attacker, strength);
+    }
+
     bool blockMeleeAttack(const MWWorld::Ptr& attacker, const MWWorld::Ptr& blocker, const MWWorld::Ptr& weapon,
         float damage, float attackStrength, const osg::Vec3f& hitPosition, int contactPart)
     {
@@ -410,7 +428,12 @@ namespace MWMechanics
                 && now - blockerStats.mBrutalBlockRaisedAt <= Settings::game().mDarkMessiahParryWindow.get();
             if (now < blockerStats.mBrutalGuardBrokenUntil)
                 return false;
-            if (brutalGuardBreakingAttack(attacker, attackStrength) && !timedPlayerGuard)
+            // A wounded NPC's guard gives way: Dark Messiah's WoundedParryBreakChance (0.5) for a
+            // sword parry and WoundedBlockBreakChance (0.8) for a shield block.
+            const bool woundedGuardBreak = npcGuard && isBrutalWoundedNpc(blocker)
+                && Misc::Rng::rollClosedProbability(MWBase::Environment::get().getWorld()->getPrng())
+                    < (blockerStats.mBrutalParry ? .5f : .8f);
+            if ((brutalGuardBreakingAttack(attacker, attackStrength) && !timedPlayerGuard) || woundedGuardBreak)
             {
                 spendBrutalBlockStamina(attacker, blocker, true);
                 openBrutalGuard(blocker);

@@ -259,6 +259,10 @@ namespace MWRender
 
         mutable std::map<std::string, float, std::less<>> mAnimVelocities;
 
+        // Sources from animations/brutal_npc_wounded/ take part only while this is set.
+        bool mBrutalWounded = false;
+        bool sourceInUse(const AnimSource& source) const;
+
         osg::ref_ptr<SceneUtil::LightListCallback> mLightListCallback;
 
         bool mPlayScriptedOnly;
@@ -386,6 +390,11 @@ namespace MWRender
         virtual void updatePtr(const MWWorld::Ptr& ptr);
 
         bool hasAnimation(std::string_view anim) const;
+
+        // Dark Messiah's wounded NPC: prefer the wounded clips of the same groups. Ends the
+        // playing states those clips redefine; true when that changes the clips in use.
+        bool setBrutalWounded(bool wounded);
+        bool isBrutalWounded() const { return mBrutalWounded; }
 
         bool isLoopingAnimation(std::string_view group) const;
 

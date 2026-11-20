@@ -1485,7 +1485,11 @@ namespace MWRender
             loadAdditionalAnimations(VFS::Path::NormalizedView("meshes/brutal_firstperson.nif"), smodel);
         else if (!isWerewolf && mPtr != MWMechanics::getPlayer() && Settings::game().mUseAdditionalAnimSources
             && !Settings::game().mBrutalClassicNpcAnimations)
+        {
             loadAdditionalAnimations(VFS::Path::NormalizedView("meshes/brutal_npc.nif"), smodel);
+            // Dark Messiah's wounded guard: used only while the NPC is wounded.
+            loadAdditionalAnimations(VFS::Path::NormalizedView("meshes/brutal_npc_wounded.nif"), smodel);
+        }
 
         mWeaponAnimationTime->updateStartTime();
         updateBodyAwareness();
@@ -1496,10 +1500,12 @@ namespace MWRender
         // Dark Messiah's human legs do not fit digitigrade beast anatomy. Beast NPCs
         // and a beast player's visible body keep Morrowind's idle stance, walk, run,
         // sneak and (as the run) sprint; combat, kicks, clinch and recovery stay Dark Messiah.
+        // A wounded beast likewise keeps its stance and walk and fights with the wounded attacks.
         if (!mBeastRace)
             return false;
         const std::string_view path = kf.value();
-        const bool dmBody = path.starts_with("animations/brutal_npc/") || path.starts_with("animations/brutal_firstperson/");
+        const bool dmBody = path.starts_with("animations/brutal_npc/") || path.starts_with("animations/brutal_npc_wounded/")
+            || path.starts_with("animations/brutal_firstperson/");
         if (!dmBody)
             return false;
         const std::string_view stem = path.substr(path.find_last_of('/') + 1);

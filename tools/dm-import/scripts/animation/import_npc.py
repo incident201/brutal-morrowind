@@ -292,18 +292,20 @@ class GuardImporter(Importer):
             marks = [(0, 'start'), (float(t[-1]), 'stop')]
             self.write(out, group, [(0, t, p)], marks)
 
-    def weapon_guard(self,out):
+    def weapon_guard(self,out,attacks=(('chop','@attack_top'),('slash','@attack_left'),('thrust','@attack_bottom'))):
         segments=[];marks=[(0,'start'),(0,'brutal continuous release')];offset=0.
         for phase,clip in [('equip','@unsheathe_sword'),('unequip','@sheathe_sword')]:
             t,p=self.segment(self.clip('guard',clip));d=float(t[-1])
             segments.append((offset,t,p))
             marks += [(offset,phase+' start'),(offset+d*.4,phase+(' attach' if phase=='equip' else ' detach')),(offset+d,phase+' stop')]
             offset+=d+.05
-        for attack,clip in [('chop','@attack_top'),('slash','@attack_left'),('thrust','@attack_bottom')]:
+        for attack,clip in attacks:
             t,p=self.segment(self.clip('guard',clip));d=float(t[-1])
             events={e.event:float(e.cycle)*d for e in self.sequences[clip][0].events}
             if 2152 not in events or 2102 not in events:raise ValueError('Missing source swing/hit events: '+clip)
-            wind=events[2152];hit=events[2102]
+            # @attack_wounded_2 marks its hit (2102) before the swing event 2152:
+            # the windup must end before the hit.
+            hit=events[2102];wind=min(events[2152],hit-.05)
             segments.append((offset,t,p))
             marks += [(offset,attack+' start'),(offset+.15,attack+' min attack'),(offset+wind,attack+' max attack'),
                       (offset+wind,attack+' min hit'),(offset+hit,attack+' hit')]
@@ -464,6 +466,18 @@ def main():
                        ('brutal_parrybroken','@Parry_Broken')]:
         t,p=i.segment(i.clip('guard',clip))
         i.write(out,group,[(0,t,p)],[(0,'start'),(float(t[-1]),'stop')])
+    # Dark Messiah's wounded guard (life_tohurt): the same group names in their own folder. The
+    # engine prefers this folder's clips while an NPC is wounded. Hurtwalk is both the armed and
+    # the unarmed walk; its stride matches Combatwalk (41.1 against 41.8 units per loop).
+    wounded=a.output/'Animations/brutal_npc_wounded';wounded.mkdir(parents=True,exist_ok=True)
+    records,i.group_records=i.group_records,{}
+    i.loop_guard(wounded,'idle1h','@Wounded_idle')
+    for direction,compass in [('forward','N'),('back','S'),('left','W'),('right','E')]:
+        vector={'forward':(0,150,0),'back':(0,-150,0),'left':(-150,0,0),'right':(150,0,0)}[direction]
+        for suffix in ('','1h'):
+            i.loop_guard(wounded,'walk'+direction+suffix,'a_Hurtwalk'+compass,vector)
+    i.weapon_guard(wounded,(('chop','@attack_wounded_1'),('slash','@attack_wounded_2'),('thrust','@attack_wounded_1')))
+    wounded_records,i.group_records=i.group_records,records
     if a.native_guard_animation is not None:
         paired=write_native_paired_guards(a.skeleton,a.native_guard_animation,a.output)
         i.group_records.update(paired['groups'])
@@ -472,10 +486,13 @@ def main():
         'source_sha256':hashlib.sha256((a.work_dir/'npc_guard_combat_animations.mdl').read_bytes()).hexdigest(),
         'outputs':{path.name:hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(out.iterdir()) if path.suffix in ('.kf','.yaml')},
         'inputs':{str(path):hashlib.sha256(path.read_bytes()).hexdigest() for path in (a.skeleton,a.grip_animation,i.attachment_model,*native_guard_sources)},
-        'coverage':{'converted':['idle','one-handed sword','shield block','hanging weapon guard','small upper-body hit reactions','heavy full-body kick reaction','walk/run in four directions']
+        'coverage':{'converted':['idle','one-handed sword','shield block','hanging weapon guard','small upper-body hit reactions','heavy full-body kick reaction','walk/run in four directions',
+                                 'wounded idle, hurt walk and one-handed attacks']
                     +(['native paired close/wide weapon guards'] if native_guard_sources else []),
                     'fallback':['two-handed melee attacks and locomotion','hand-to-hand','bow','crossbow','thrown weapons','spell casting','sneak','jump','death/get-up']},
-        'groups':i.group_records,'arm_scales':i.arm_scale,
+        'groups':i.group_records,'wounded_groups':wounded_records,
+        'wounded_outputs':{path.name:hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(wounded.iterdir()) if path.suffix in ('.kf','.yaml')},
+        'arm_scales':i.arm_scale,
         'attachments':{name:{'parent':parent,'matrix':matrix.tolist()} for name,(parent,matrix) in i.attachments.items() if name in ('RightHand','LeftShield')},
         'hand_maps':{side:m.tolist() for side,m in i.hand_map.items()},
         'finger_calibration':{'right':'native idle1h: start','left':'native shield: block hit','channels':sorted(i.grip)},

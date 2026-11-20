@@ -489,6 +489,7 @@ namespace MWLua
                 {"kineticMovement", g.mKineticPlayerMovement}, {"activeBlocking", g.mPlayerActiveShieldBlock},
                 {"swordParry", g.mDarkMessiahSwordParry}, {"comboAttacks", g.mDarkMessiahComboAttacks},
                 {"npcStagger", g.mNpcHurtHealthFraction > 0.f}, {"hitRecovery", !g.mPlayerHitRecovery},
+                {"woundedNpcs", g.mBrutalWoundedNpcs}, {"npcFlee", g.mBrutalNpcFlee},
                 {"stamina", g.mBrutalStamina}, {"wallBounce", g.mBrutalWallBounce},
                 {"controlsEnabled", g.mBrutalControlsEnabled}, {"slide", g.mBrutalSlide}, {"clinch", g.mBrutalClinch}, {"fastAttacks", g.mBrutalFastAttacks},
                 {"combatSounds", g.mBrutalCombatSounds}, {"heroVoice", g.mBrutalHeroVoice}, {"bloodEffects", g.mBrutalBloodEffects},
@@ -573,6 +574,8 @@ namespace MWLua
                 g.mDarkMessiahComboAttacks.set(on("comboAttacks"));
                 g.mNpcHurtHealthFraction.set(on("npcStagger") ? .001f : 0.f);
                 g.mPlayerHitRecovery.set(!on("hitRecovery"));
+                g.mBrutalWoundedNpcs.set(on("woundedNpcs"));
+                g.mBrutalNpcFlee.set(on("npcFlee"));
                 g.mBrutalStamina.set(on("stamina"));
                 g.mPlayerFatigueRegenFraction.set(on("stamina") ? 1.f/18.f : 0.f);
                 g.mBrutalWallBounce.set(on("wallBounce"));
@@ -1224,6 +1227,11 @@ namespace MWLua
             result["guardBreakingAttack"] = stats.mBrutalGuardBreakingAttack;
             result["guardBlocks"] = stats.mBrutalGuardBlocks;
             result["attackKind"] = stats.mBrutalAttackKind;
+            result["wounded"] = MWMechanics::isBrutalWoundedNpc(ptr);
+            const MWRender::Animation* animation = MWBase::Environment::get().getWorld()->getAnimation(ptr);
+            result["woundedClips"] = animation && animation->isBrutalWounded();
+            result["fleeing"] = stats.getAiSequence().isFleeing();
+            result["brutalFleeing"] = stats.getAiSequence().isBrutalFleeing();
             return result;
         };
         actor["_getNpcGuardGeometryForAudit"] = [lua = context.mLua](const Object& object) {

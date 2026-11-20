@@ -55,6 +55,14 @@ namespace Settings
         SettingValue<bool> mKineticPlayerMovement{ mIndex, "Game", "kinetic player movement" };
         SettingValue<float> mNpcHurtHealthFraction{ mIndex, "Game", "npc hurt health fraction",
             makeClampSanitizerFloat(0, 1) };
+        SettingValue<bool> mBrutalWoundedNpcs{ mIndex, "Game", "brutal wounded npcs" };
+        SettingValue<float> mBrutalNpcWoundedHealthFraction{ mIndex, "Game", "brutal npc wounded health fraction",
+            makeClampSanitizerFloat(0, 1) };
+        SettingValue<bool> mBrutalNpcFlee{ mIndex, "Game", "brutal npc flee" };
+        SettingValue<float> mBrutalNpcFleeHealthFraction{ mIndex, "Game", "brutal npc flee health fraction",
+            makeClampSanitizerFloat(0, 1) };
+        SettingValue<float> mBrutalNpcFleeTime{ mIndex, "Game", "brutal npc flee time",
+            makeClampSanitizerFloat(0, 600) };
         SettingValue<bool> mPlayerHitRecovery{ mIndex, "Game", "player hit recovery" };
         SettingValue<float> mPlayerFatigueRegenFraction{ mIndex, "Game", "player fatigue regen fraction",
             makeClampSanitizerFloat(0, 10) };

@@ -212,7 +212,7 @@ local function updateBash(dt, scale)
         damage = {health = C.bashHealthDamage, fatigue = C.bashFatigueDamage},
         hitPos = target.position + util.vector3(0, 0, 70),
     })
-    target:sendEvent('BrutalImpulse', {attacker = self, direction = direction, speed = C.bashPushSpeed})
+    target:sendEvent('BrutalImpulse', {attacker = self, direction = direction, speed = C.bashPushSpeed, bash = true})
 end
 
 local function updateBlock()
