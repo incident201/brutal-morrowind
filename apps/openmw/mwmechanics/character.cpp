@@ -3170,9 +3170,16 @@ namespace MWMechanics
 
             if (!mSkipAnim)
             {
+                // A paired sprint frees the left hand. Keep its displayed pose until
+                // the next gait or idle is ready to blend it back onto the grip.
+                std::optional<MWRender::Animation::ScopedDeferActiveGroupReset> sprintReset;
+                const bool sprinting = mBrutalSprinting && movestate == CharState_RunForward;
+                if (sprinting != mCurrentMovement.starts_with("brutal_sprint") && usesBrutalPairedWeapon())
+                    sprintReset.emplace(*mAnimation);
                 if (mBrutalSprinting != mBrutalSprintAnim && movestate == CharState_RunForward)
                     refreshMovementAnims(movestate, true);
                 refreshCurrentAnims(idlestate, movestate, jumpstate, updateWeaponState());
+                sprintReset.reset();
                 updateBrutalShieldBlock();
                 updateIdleStormState(inwater);
             }

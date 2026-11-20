@@ -1050,6 +1050,7 @@ namespace MWRender
         bool mImportedFamilyArms = false;
         bool mImportedFarArms = false; // Dagger and staff sets: see familyClinchArmBlendRules.
         bool mImportedDaggerArms = false;
+        bool mImportedPairedArms = false;
         // Dark Messiah's wounded NPC set: the same group names, used only while the actor is wounded.
         bool mBrutalWounded = false;
         std::map<std::weak_ptr<float>, float, std::owner_less<std::weak_ptr<float>>> mDaggerClockStarts;
@@ -1352,6 +1353,8 @@ namespace MWRender
         animsrc->mImportedFarArms = importedFamily
             && (polearm || kfname.starts_with("animations/brutal_fp_dagger/"));
         animsrc->mImportedDaggerArms = importedFamily && kfname.starts_with("animations/brutal_fp_dagger/");
+        animsrc->mImportedPairedArms = kfname.starts_with("animations/brutal_fp_paired/")
+            || kfname.starts_with("animations/brutal_fp_paired_blunt/");
         if (Settings::game().mSmoothAnimTransitions || importedNpc || importedFamily)
         {
             constexpr VFS::Path::ExtensionView yaml("yaml");
@@ -1890,7 +1893,8 @@ namespace MWRender
     namespace
     {
         osg::ref_ptr<const SceneUtil::AnimBlendRules> primaryCrouchBlendRules(
-            const osg::ref_ptr<const SceneUtil::AnimBlendRules>& base, bool cameraAncestor)
+            const osg::ref_ptr<const SceneUtil::AnimBlendRules>& base, bool cameraAncestor,
+            bool pairedSprintArms = false)
         {
             using Rule = SceneUtil::AnimBlendRules::BlendRule;
             osg::ref_ptr<SceneUtil::AnimBlendRules> rules = base
@@ -1909,6 +1913,12 @@ namespace MWRender
                 for (const auto* from : {"idle*", "walk*", "run*"})
                     for (const auto* to : {"idle*", "walk*", "run*"})
                         overrides.push_back({from, "", to, "", .22f, "sineInOut", false});
+            if (pairedSprintArms)
+            {
+                // Blend the free arm back onto the grip when the player stops sprinting.
+                overrides.push_back({"brutal_sprint*", "", "*", "", .22f, "sineInOut", false});
+                overrides.push_back({"*", "", "brutal_sprint*", "", .22f, "sineInOut", false});
+            }
             overrides.push_back({"", "", "*", "", 0.f, "linear", false});
             rules->addOverrideRules(SceneUtil::AnimBlendRules(overrides));
             return rules;
@@ -2151,7 +2161,8 @@ namespace MWRender
                                 : slideArmState ? slideArmBlendRules(stateData.mGroupname, stateData.mStartKey)
                                 : familyArmState ? animsrc->mAnimBlendRules : nullptr;
                             if (primaryCrouchNode)
-                                rules = primaryCrouchBlendRules(rules, primaryCameraAncestor);
+                                rules = primaryCrouchBlendRules(
+                                    rules, primaryCameraAncestor, playerArm && animsrc->mImportedPairedArms);
                             callback = handleBlendTransform<NifAnimBlendController>(node, it->second,
                                 mAnimBlendControllers, stateData, rules, active->second);
                         }

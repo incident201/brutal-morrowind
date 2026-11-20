@@ -66,6 +66,11 @@ def lerp(a, b, weight):
     return a + weight * (b - a)
 
 
+def smoothstep(weight):
+    weight = np.clip(weight, 0., 1.)
+    return weight * weight * (3. - 2. * weight)
+
+
 class Pose:
     def __init__(self, rig, channels, time):
         self.rig = rig
@@ -213,18 +218,19 @@ class Retarget:
             item[:3, 3] += np.array((-3., -2., -4.)) * contest
         return self.fit_item(item)
 
-    def fit_item(self, item, swing=False):
+    def fit_item(self, item, swing=False, one_hand=False):
+        grasps = self.grasps[:1] if one_hand else self.grasps
         for _ in range(4):
-            for grasp in self.grasps:
+            for grasp in grasps:
                 wrist = (item @ grasp.grip)[:3, 3]
                 delta = wrist - grasp.shoulder
                 length = norm(delta)
                 reachable = np.clip(length, 11. if swing else 8., sum(grasp.segments) - 1.3)
                 item[:3, 3] += delta * (reachable / length - 1.)
-        arms = [grasp.fit(item, smooth_bend=swing) for grasp in self.grasps]
+        arms = [grasp.fit(item, smooth_bend=swing) for grasp in grasps]
         return item, arms
 
-    def swing_item(self, source, delta, turn, falling):
+    def swing_item(self, source, delta, turn, falling, chop):
         # The paired guard is higher than the sword's. As the hands leave it,
         # remove most of that offset so the authored swing crosses the view.
         angle = 2. * np.arccos(np.clip(abs(turn[0]), 0., 1.))
@@ -244,20 +250,37 @@ class Retarget:
             rotation = turn_about((1., 0., 0.), -loft) @ rotation
             # Leave room for the near plane and a broad axe head in the windup.
             position += raised * raised * (3. - 2. * raised) * np.array((16., 6., -3.))
+        if chop:
+            # The forward step raises a paired guard beside the eye. Stand the
+            # blade up and move the grip out so the lower hand stays below aim.
+            rotation = turn_about((1, 0, 0), 72 * chop) @ rotation
+            position += chop * np.array((13., 8., -9.))
         return matrix(rotation, position)
 
-    def adapt(self, pose, turn, attacking, contest, swing, falling):
+    def sprint_item(self, source, sword_start):
+        # Carry the long weapon lower on the right. Follow the sword's cycle
+        # with a short stroke so the tip stays clear of the centre of the view.
+        travel = .20
+        turn = matrix_quat(source[:3, :3] @ sword_start[:3, :3].T)
+        carry = turn_about((0, 0, 1), -16) @ turn_about((1, 0, 0), 20) @ sword_start[:3, :3]
+        position = np.array((23., 24., 95.)) + travel * (source[:3, 3] - sword_start[:3, 3])
+        return matrix(scale_turn(turn, travel) @ carry, position)
+
+    def adapt(self, pose, turn, attacking, contest, swing, falling, *, chop, running, sprint_start):
         source = pose.world(ITEM)
         delta = source[:3, 3] - self.source_idle[:3, 3]
         # Transfer the sword's world-space swing about our different idle
         # orientation. Translation is measured from the same sword idle.
-        if swing:
-            _, arms = self.fit_item(self.swing_item(source, delta, turn, falling), swing=True)
+        if sprint_start is not None:
+            # Keep the authored free left arm and fingers from the sword sprint.
+            _, arms = self.fit_item(self.sprint_item(source, sprint_start), swing=True, one_hand=True)
+        elif swing:
+            _, arms = self.fit_item(self.swing_item(source, delta, turn, falling, chop), swing=True)
         else:
             travel = (.66, .53, .66) if attacking else (.47, .52, .53)
             position = self.idle[:3, 3] + delta * travel
             position[1] = max(17., position[1])
-            weight = .78 if attacking else .80
+            weight = .32 if running else .78 if attacking else .80
             _, arms = self.fit(turn, position, weight, contest)
             excess = max(0., max(flex for _, flex in arms) - .88)
             if excess:
@@ -284,11 +307,15 @@ def convert(source, target, retarget):
     times = np.sort(np.r_[original_times, midpoints[np.diff(original_times) > .022]])
     attacking = group in ('weapononehand', 'brutal_ground_finisher')
     falling = group == 'brutal_fallattack'
-    swing_start = np.inf
-    if falling:
-        swing_start = 0.
-    elif group == 'weapononehand':
-        swing_start = next(float(t) for t, text in marks.keys if 'weapononehand: chop start' in text.splitlines())
+    running = group.startswith('run')
+    sprint_start = Pose(retarget.rig, channels, 0.).world(ITEM) if group == 'brutal_sprint1h' else None
+    chop_keys = {}
+    swing_start = 0. if falling else np.inf
+    if group == 'weapononehand':
+        chop_keys = {label.removeprefix('weapononehand: chop '): float(time)
+                     for time, labels in marks.keys for label in labels.splitlines()
+                     if label.startswith('weapononehand: chop ')}
+        swing_start = chop_keys['start']
     poses = []
     previous = None
     for time in times:
@@ -302,7 +329,16 @@ def convert(source, target, retarget):
             if group != 'brutal_clinch':
                 t = max(0., 1. - time / .45)
                 contest = t * t * (3. - 2. * t)
-        poses.append(retarget.adapt(pose, turn, attacking, contest, time >= swing_start, falling))
+        chop = 0.
+        if chop_keys:
+            low, high = chop_keys['min attack'], chop_keys['max attack']
+            release, hit = chop_keys['min hit'], chop_keys['hit']
+            if low < time < hit:
+                chop = smoothstep((time - low) / (high - low)) * smoothstep((hit - time) / (hit - release))
+            elif chop_keys['hold start'] <= time <= chop_keys['hold stop']:
+                chop = 1.
+        poses.append(retarget.adapt(pose, turn, attacking, contest, time >= swing_start, falling,
+                                    chop=chop, running=running, sprint_start=sprint_start))
         previous = turn
     names = [extra.string_data for extra in stream.root.extra_datas if isinstance(extra, nif.NiStringExtraData)]
     for name, controller in zip(names, stream.root.controllers):
