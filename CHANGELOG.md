@@ -1,7 +1,8 @@
 Brutal Morrowind (unreleased)
 ----------------------------
 
-    The forward windup for two-handed swords, battle axes and warhammers clears the centre of the view. These weapons sway less while running and are carried low in the right hand while sprinting. These animations use import recipe 20.
+    First-person two-handed swords, battle axes and warhammers keep the neutral charge low and prepare the left-step sweep on the right. The forward chop follows the one-handed sword motion and returns to the paired grip. These animations use import recipe 21.
+    First-person two-handed swords, battle axes and warhammers sway less while running and are carried low in the right hand while sprinting.
     First-person two-handed swords, battle axes and warhammers swing through a wider arc with both hands on the grip. Pressing attack in midair raises the weapon and delivers a falling strike on release or landing.
     After the player's death, the scene starts darkening later and eases to black behind the menu, which opens at the same time as before.
     Polearm side attacks use both front sweeps from the Dark Messiah staff. The hands and camera ease into each sweep and follow it into recovery. These animations use import recipe 18.

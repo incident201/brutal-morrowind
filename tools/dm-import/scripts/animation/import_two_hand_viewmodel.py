@@ -16,6 +16,8 @@ ROOT = 'ModelRoot'
 SIDES = ('R', 'L')
 ARM = ('Clavicle', 'UpperArm', 'Forearm', 'Hand')
 SWIVELS = np.linspace(-1.2, 1.2, 17)
+# Offset from the paired grip, outward tilt, and time to finish easing out after contact.
+WINDUPS = {'neutral': ((2., 9., -23.), 0., .15), 'slashright': ((16., 7., -7.), 24., 0.)}
 
 
 def bone(side, joint):
@@ -69,6 +71,30 @@ def lerp(a, b, weight):
 def smoothstep(weight):
     weight = np.clip(weight, 0., 1.)
     return weight * weight * (3. - 2. * weight)
+
+
+def charge_weight(time, marks, draw_time, return_start, return_stop):
+    if marks['hold start'] <= time <= marks['hold stop']:
+        return 1.
+    start = marks['start']
+    if not start < time < return_stop:
+        return 0.
+    return smoothstep((time - start) / draw_time) * smoothstep((return_stop - time) / (return_stop - return_start))
+
+
+def blend_with_sword(pose, paired, weight):
+    # Keep the closed right fist and weapon socket. Let the authored arm motion
+    # carry the swing, with the left hand opening and returning to the paired grip.
+    for name, transform in paired.items():
+        if name == ITEM or name.startswith(bone('R', 'Finger')):
+            continue
+        sword = pose.local(name)
+        if weight >= 1.:
+            paired[name] = sword
+        else:
+            first, second = (matrix_quat(m[:3, :3]) for m in (transform, sword))
+            rotation = quat_matrix(slerp(first, second, weight)[[1, 2, 3, 0]])
+            paired[name] = matrix(rotation, lerp(transform[:3, 3], sword[:3, 3], weight))
 
 
 class Pose:
@@ -230,7 +256,7 @@ class Retarget:
         arms = [grasp.fit(item, smooth_bend=swing) for grasp in grasps]
         return item, arms
 
-    def swing_item(self, source, delta, turn, falling, chop):
+    def swing_item(self, source, delta, turn, falling, windup):
         # The paired guard is higher than the sword's. As the hands leave it,
         # remove most of that offset so the authored swing crosses the view.
         angle = 2. * np.arccos(np.clip(abs(turn[0]), 0., 1.))
@@ -250,11 +276,10 @@ class Retarget:
             rotation = turn_about((1., 0., 0.), -loft) @ rotation
             # Leave room for the near plane and a broad axe head in the windup.
             position += raised * raised * (3. - 2. * raised) * np.array((16., 6., -3.))
-        if chop:
-            # The forward step raises a paired guard beside the eye. Stand the
-            # blade up and move the grip out so the lower hand stays below aim.
-            rotation = turn_about((1, 0, 0), 72 * chop) @ rotation
-            position += chop * np.array((13., 8., -9.))
+        if windup is not None:
+            offset, tilt, amount = windup
+            rotation = turn_about((0, 1, 0), tilt * amount) @ rotation
+            position += amount * np.asarray(offset)
         return matrix(rotation, position)
 
     def sprint_item(self, source, sword_start):
@@ -266,7 +291,7 @@ class Retarget:
         position = np.array((23., 24., 95.)) + travel * (source[:3, 3] - sword_start[:3, 3])
         return matrix(scale_turn(turn, travel) @ carry, position)
 
-    def adapt(self, pose, turn, attacking, contest, swing, falling, *, chop, running, sprint_start):
+    def adapt(self, pose, turn, attacking, contest, swing, falling, *, windup, running, sprint_start):
         source = pose.world(ITEM)
         delta = source[:3, 3] - self.source_idle[:3, 3]
         # Transfer the sword's world-space swing about our different idle
@@ -275,7 +300,7 @@ class Retarget:
             # Keep the authored free left arm and fingers from the sword sprint.
             _, arms = self.fit_item(self.sprint_item(source, sprint_start), swing=True, one_hand=True)
         elif swing:
-            _, arms = self.fit_item(self.swing_item(source, delta, turn, falling, chop), swing=True)
+            _, arms = self.fit_item(self.swing_item(source, delta, turn, falling, windup), swing=True)
         else:
             travel = (.66, .53, .66) if attacking else (.47, .52, .53)
             position = self.idle[:3, 3] + delta * travel
@@ -309,13 +334,20 @@ def convert(source, target, retarget):
     falling = group == 'brutal_fallattack'
     running = group.startswith('run')
     sprint_start = Pose(retarget.rig, channels, 0.).world(ITEM) if group == 'brutal_sprint1h' else None
-    chop_keys = {}
+    windup_sections = []
+    chop = None
     swing_start = 0. if falling else np.inf
     if group == 'weapononehand':
-        chop_keys = {label.removeprefix('weapononehand: chop '): float(time)
-                     for time, labels in marks.keys for label in labels.splitlines()
-                     if label.startswith('weapononehand: chop ')}
-        swing_start = chop_keys['start']
+        charged = {}
+        for attack in ('chop', *WINDUPS):
+            prefix = f'{group}: {attack} '
+            charged[attack] = {label.removeprefix(prefix): float(time)
+                               for time, labels in marks.keys for label in labels.splitlines()
+                               if label.startswith(prefix)}
+        chop = charged['chop']
+        swing_start = chop['start']
+        windup_sections = [(charged[attack], *bias) for attack, bias in WINDUPS.items()]
+    chop_guard = None
     poses = []
     previous = None
     for time in times:
@@ -329,16 +361,25 @@ def convert(source, target, retarget):
             if group != 'brutal_clinch':
                 t = max(0., 1. - time / .45)
                 contest = t * t * (3. - 2. * t)
-        chop = 0.
-        if chop_keys:
-            low, high = chop_keys['min attack'], chop_keys['max attack']
-            release, hit = chop_keys['min hit'], chop_keys['hit']
-            if low < time < hit:
-                chop = smoothstep((time - low) / (high - low)) * smoothstep((hit - time) / (hit - release))
-            elif chop_keys['hold start'] <= time <= chop_keys['hold stop']:
-                chop = 1.
-        poses.append(retarget.adapt(pose, turn, attacking, contest, time >= swing_start, falling,
-                                    chop=chop, running=running, sprint_start=sprint_start))
+        windup = None
+        for section, offset, tilt, follow in windup_sections:
+            weight = charge_weight(time, section, .28, section['min hit'], section['hit'] + follow)
+            if weight:
+                windup = offset, tilt, weight
+        result = retarget.adapt(pose, turn, attacking, contest, time >= swing_start,
+                                falling, windup=windup, running=running, sprint_start=sprint_start)
+        if chop:
+            recover, end = chop['hit'] + .25, chop['large follow stop']
+            if time == chop['start']:
+                chop_guard = result
+            elif recover < time <= end:
+                # Regrip the drawn guard as the sword settles, without fitting a
+                # second pair of arms to the changing wrist during recovery.
+                result = chop_guard.copy()
+            weight = charge_weight(time, chop, .24, recover, end)
+            if weight:
+                blend_with_sword(pose, result, weight)
+        poses.append(result)
         previous = turn
     names = [extra.string_data for extra in stream.root.extra_datas if isinstance(extra, nif.NiStringExtraData)]
     for name, controller in zip(names, stream.root.controllers):
