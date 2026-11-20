@@ -192,31 +192,45 @@ void OMW::Engine::executeLocalScripts()
 
 void OMW::Engine::updatePlayerDeath(float duration, bool paused)
 {
-    if (mStateManager->getState() != MWBase::StateManager::State_Running)
-        return;
-
-    const auto player = mWorld->getPlayerPtr();
-    if (!player.getClass().getCreatureStats(player).isDead())
+    const auto state = mStateManager->getState();
+    if (state == MWBase::StateManager::State_NoGame)
     {
-        if (mPlayerDeathElapsed)
-        {
-            mPlayerDeathElapsed.reset();
-            mWorld->getCamera()->setPlayerDeathTime(std::nullopt);
-            mWindowManager->setPlayerDeathFade(std::nullopt);
-        }
+        mPlayerDeathElapsed.reset();
         return;
     }
-    if (paused)
+
+    constexpr float menuDelay = 2.65f;
+    constexpr float fadeDelay = 1.55f;
+    constexpr float fadeDuration = 2.7f;
+    constexpr float fadeEnd = fadeDelay + fadeDuration;
+    const bool running = state == MWBase::StateManager::State_Running;
+    if (running)
+    {
+        const auto player = mWorld->getPlayerPtr();
+        if (!player.getClass().getCreatureStats(player).isDead())
+        {
+            if (mPlayerDeathElapsed)
+            {
+                mPlayerDeathElapsed.reset();
+                mWorld->getCamera()->setPlayerDeathTime(std::nullopt);
+                mWindowManager->setPlayerDeathFade(std::nullopt);
+            }
+            return;
+        }
+        if (paused)
+            return;
+    }
+    else if (!mPlayerDeathElapsed || *mPlayerDeathElapsed >= fadeEnd)
         return;
 
-    constexpr float bodyHold = 1.25f;
-    constexpr float fadeDuration = 1.4f;
-    mPlayerDeathElapsed = mPlayerDeathElapsed ? *mPlayerDeathElapsed + duration : 0.f;
+    // The menu pauses the scene, while the fade continues over its backdrop.
+    mPlayerDeathElapsed = mPlayerDeathElapsed ? std::min(*mPlayerDeathElapsed + duration, fadeEnd) : 0.f;
     const float elapsed = *mPlayerDeathElapsed;
-    const float fade = std::clamp((elapsed - bodyHold) / fadeDuration, 0.f, 1.f);
-    mWorld->getCamera()->setPlayerDeathTime(elapsed);
-    mWindowManager->setPlayerDeathFade(fade);
-    if (fade >= 1.f)
+    if (running)
+        mWorld->getCamera()->setPlayerDeathTime(elapsed);
+    const float progress = std::clamp((elapsed - fadeDelay) / fadeDuration, 0.f, 1.f);
+    mWindowManager->setPlayerDeathFade(progress * progress * (3.f - 2.f * progress));
+    if (running && elapsed >= menuDelay)
     {
         mStateManager->endGame();
         mStateManager->askLoadRecent();

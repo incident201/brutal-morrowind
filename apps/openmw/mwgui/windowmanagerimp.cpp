@@ -2363,6 +2363,8 @@ namespace MWGui
 
     void WindowManager::setPlayerDeathFade(std::optional<float> fade)
     {
+        if (!fade && !mPlayerDeathFading)
+            return;
         if (mPlayerDeathFading != fade.has_value())
         {
             mPlayerDeathFading = fade.has_value();
