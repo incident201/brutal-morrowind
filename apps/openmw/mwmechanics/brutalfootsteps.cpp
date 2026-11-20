@@ -19,6 +19,7 @@
 #include <components/esm/util.hpp>
 #include <components/esm3/loadland.hpp>
 #include <components/esm3/loadltex.hpp>
+#include <components/esm3/loadnpc.hpp>
 #include <components/misc/strings/lower.hpp>
 #include <components/resource/resourcesystem.hpp>
 #include <components/sceneutil/positionattitudetransform.hpp>
@@ -37,6 +38,7 @@
 #include "../mwworld/class.hpp"
 #include "../mwworld/esmstore.hpp"
 #include "../mwworld/inventorystore.hpp"
+#include "../mwworld/livecellref.hpp"
 
 #include "actorutil.hpp"
 #include "npcstats.hpp"
@@ -292,6 +294,10 @@ namespace MWMechanics::BrutalFootsteps
 
     bool playJump(const MWWorld::Ptr& player)
     {
-        return available() && Settings::game().mBrutalHeroVoice && emit(player, "player.jump");
+        if (!available() || !Settings::game().mBrutalHeroVoice)
+            return false;
+        // Dark Messiah's hero is male; a female player character has her own grunt.
+        const bool female = player.getType() == ESM::NPC::sRecordId && !player.get<ESM::NPC>()->mBase->isMale();
+        return (female && emit(player, "player.jumpfemale")) || emit(player, "player.jump");
     }
 }

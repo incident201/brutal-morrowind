@@ -57,6 +57,10 @@ SOUNDS = {
     'object_hit_glass': ('collisions', 'GlassSmall_on_Stone'),
     'object_hit_pottery': ('collisions', 'PotterySmall_on_Stone'),
     'object_hit_book': ('collisions', 'Book_on_Stone'),
+    # The hero is male in Dark Messiah. A female player character uses selected
+    # combat grunts of its female NPCs: (script, event, chosen rndwave indices).
+    'critical_voice_female': ('npc_sounds_leanna', 'Leanna_striking', (0, 3)),
+    'object_throw_voice_female': ('npc_sounds_villager_female', 'villager_femaleB_striking', (0,)),
 }
 MATERIALS = {
     'blood': 'effects/blood_part_001',
@@ -85,7 +89,8 @@ def keyvalues(text):
         while pos < len(tokens):
             key = tokens[pos]; pos += 1
             if key == '}':
-                if not nested: raise ValueError('Unexpected KeyValues closing brace')
+                # Source skips a stray top-level brace; npc_sounds_leanna.txt has one.
+                if not nested: continue
                 return result
             if pos >= len(tokens): raise ValueError('Missing KeyValues value')
             value = tokens[pos]; pos += 1
@@ -140,12 +145,14 @@ def main():
         dest = args.output/path; dest.parent.mkdir(parents=True, exist_ok=True); dest.write_bytes(data)
         outputs[path] = {'sha256':sha(data), 'bytes':len(data)}
     sound_data = {}; script_cache = {}
-    for category, (script, event) in SOUNDS.items():
-        source_script = f'mm/scripts/game_sounds_{script}.txt'
+    for category, (script, event, *chosen) in SOUNDS.items():
+        source_script = f'mm/scripts/{script if script.startswith("npc_sounds_") else "game_sounds_" + script}.txt'
         if script not in script_cache: script_cache[script] = dict(keyvalues(read(source_script).decode('cp1252')))
         tree = script_cache[script][event]
+        waves = leaves(tree, 'wave')
+        if chosen: waves = [waves[index] for index in chosen[0]]
         records = []
-        for i, reference in enumerate(leaves(tree, 'wave'), 1):
+        for i, reference in enumerate(waves, 1):
             relative = re.sub(r'^[*#@~!><^)+?]+', '', reference).replace('%language%', args.language)
             original = 'mm/sound/' + relative.replace('\\','/').lower()
             data = read(original)

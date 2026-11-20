@@ -2,6 +2,7 @@ Brutal Morrowind (unreleased)
 ----------------------------
 
     Sounds: A separate Hero voice setting turns off the hero's grunts on adrenaline strikes, super kicks, throws and jumps while keeping the other Dark Messiah sounds.
+    Sounds: A female player character grunts with female voices from Dark Messiah instead of its male hero. Recipe 15 requires reimporting the Dark Messiah assets.
     Combat: Pick up and carry small physical objects with G and drop or throw them with Use (left click), auto-holstering and restoring equipped gear with Dark Messiah first-person animations, camera motion and sounds, directional hit-location NPC staggers, and adrenaline-powered ragdoll knockdowns. Recipe 14 requires reimporting the Dark Messiah assets.
     Combat: NPCs brace against repeated fast attacks and prefer a charged guard breaker against a prolonged player block.
     Combat: Guard impacts drain both actors' stamina, with a greater cost for the attacker; charged blows and kicks open defence.

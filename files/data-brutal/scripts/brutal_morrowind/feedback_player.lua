@@ -16,14 +16,21 @@ local function pickFile(category)
     return nil
 end
 -- The player character's own voice: grunts on adrenaline strikes, throws and jumps.
+-- Dark Messiah's hero is male; a female character uses the imported female grunts.
 local HERO_VOICE={critical_voice=true,object_throw_voice=true}
+local function voiceCategory(category)
+    if not HERO_VOICE[category] or types.NPC.record(self).isMale then return category end
+    return pickFile(category..'_female') and category..'_female' or category
+end
 local function cue(category, volume, pitch)
     if not settings.get('combatSounds') then return end
     if HERO_VOICE[category] and not settings.get('heroVoice') then return end
-    local file = pickFile(category)
+    local source = voiceCategory(category)
+    local file = pickFile(source)
     if file then
         ambient.playSoundFile(file, {volume = volume, pitch=pitch or 1, scale = false})
         played[category]=(played[category] or 0)+1
+        if source~=category then played[source]=(played[source] or 0)+1 end
     end
 end
 local function cue3d(category, target, volume, pitch)
