@@ -164,7 +164,7 @@ namespace MWPhysics
         void holdObject(const std::shared_ptr<Object>& object, const std::vector<osg::Vec3f>& vertices,
             float mass, const btCollisionObject* owner);
         float holdDetachedFragment(const std::vector<btRigidBody*>& bodies, btTypedConstraint* joint,
-            const btCollisionObject* owner, osg::Vec3f& minimum, osg::Vec3f& maximum);
+            const btCollisionObject* owner, osg::Vec3f& minimum, osg::Vec3f& maximum, osg::Matrixf& pickupTransform);
         void setHeldPose(const osg::Vec3f& center, const osg::Quat& rotation, const Object* object);
         float sweepHeldPose(const osg::Vec3f& from, const osg::Vec3f& to,
             const osg::Quat& rotation) const;

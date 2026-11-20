@@ -179,7 +179,7 @@ namespace MWRender
         return mStyleAvailable[style] == 1;
     }
 
-    osg::ref_ptr<osg::StateSet> BrutalBlood::createState(unsigned style, float fade, float dry)
+    osg::ref_ptr<osg::StateSet> BrutalBlood::createState(unsigned style, float fade, float dry, bool weapon)
     {
         // Same look as the wounds on bodies: Dark Messiah's DecalModulate,
         // multiplying the already lit surface around a neutral grey.
@@ -207,6 +207,7 @@ namespace MWRender
         state->setRenderBinDetails(1, "RenderBin", osg::StateSet::PROTECTED_RENDERBIN_DETAILS);
         state->addUniform(new osg::Uniform("bloodFade", fade), flags);
         state->addUniform(new osg::Uniform("bloodDry", dry), flags);
+        state->addUniform(new osg::Uniform("bloodFeather", weapon), flags);
         mResourceSystem->getSceneManager()->setUpNormalsRTForStateSet(state, false);
         mResourceSystem->getSceneManager()->recreateShaders(geometry, "blooddecal");
         osg::ref_ptr<osg::StateSet> result = geometry->getStateSet();
@@ -217,16 +218,22 @@ namespace MWRender
         return result;
     }
 
-    osg::StateSet* BrutalBlood::state(unsigned style, float fade, float dry)
+    osg::StateSet* BrutalBlood::weaponState(unsigned style, float fade, float dry)
+    {
+        return state(style, fade, dry, true);
+    }
+
+    osg::StateSet* BrutalBlood::state(unsigned style, float fade, float dry, bool weapon)
     {
         if (!hasStyle(style))
             return nullptr;
         const int f = std::clamp(int(std::lround(fade * FadeLevels)), 0, FadeLevels);
         const int d = std::clamp(int(std::lround(dry * DryLevels)), 0, DryLevels);
-        const std::uint64_t key = (std::uint64_t(style) << 16) | (std::uint64_t(f) << 8) | std::uint64_t(d);
+        const std::uint64_t key
+            = (std::uint64_t(weapon) << 24) | (std::uint64_t(style) << 16) | (std::uint64_t(f) << 8) | std::uint64_t(d);
         auto& entry = mStates[key];
         if (!entry)
-            entry = createState(style, float(f) / FadeLevels, float(d) / DryLevels);
+            entry = createState(style, float(f) / FadeLevels, float(d) / DryLevels, weapon);
         return entry;
     }
 

@@ -1989,7 +1989,7 @@ namespace MWPhysics
             const auto& ragdoll = *found->second;
             osg::Vec3f lo, hi;
             const float mass = mTaskScheduler->holdDetachedFragment(
-                ragdoll.detachedBodies(fragment), ragdoll.detachedJoint(fragment), owner, lo, hi);
+                ragdoll.detachedBodies(fragment), ragdoll.detachedJoint(fragment), owner, lo, hi, mHeldPickupTransform);
             if (mass <= 0.f)
                 return false;
             mHeldObject = ptr;
@@ -2003,8 +2003,16 @@ namespace MWPhysics
             grip.half = (hi - lo) * .5f;
             if (fragment == Ragdoll::HeadFragment)
             {
-                grip.depthAxis = 1;
-                grip.contact.y() = lo.y();
+                // The capsule only defines the neck axis. Use the rendered
+                // head bone to find the face and crown in that capsule's frame.
+                const auto& bone = ragdoll.getHeadBoneFromBody();
+                grip.head = true;
+                grip.headUp = osg::Matrixf::transform3x3(osg::Vec3f(1, 0, 0), bone);
+                grip.headUp.normalize();
+                grip.headForward = osg::Matrixf::transform3x3(osg::Vec3f(0, 1, 0), bone);
+                grip.headForward -= grip.headUp * (grip.headForward * grip.headUp);
+                grip.headForward.normalize();
+                grip.contact -= grip.headUp * grip.half.y();
                 grip.thickness = grip.half[2];
             }
             else
@@ -2056,6 +2064,8 @@ namespace MWPhysics
         }
         const float weight = std::max(0.f, ptr.getClass().getWeight(ptr));
         const float mass = std::clamp(weight * .5f, .25f, 50.f);
+        mHeldPickupTransform.makeRotate(baseNode->getAttitude());
+        mHeldPickupTransform.setTrans(baseNode->getPosition());
         mTaskScheduler->holdObject(object, visitor.mVertices, mass, owner);
         mHeldObject = ptr;
         mHeldFragment = 0;

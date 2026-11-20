@@ -85,6 +85,7 @@ namespace MWPhysics
         std::vector<btRigidBody*> detachedBodies(unsigned fragment) const;
         btTypedConstraint* detachedJoint(unsigned fragment) const;
         std::vector<std::pair<std::string, osg::Matrixf>> detachedBonePoses(unsigned fragment) const;
+        const osg::Matrixf& getHeadBoneFromBody() const;
         // One bounded momentum change for exactly the struck connected fragment.
         bool applyKick(std::size_t part, const osg::Vec3f& velocity, const osg::Vec3f& point);
         int kickCount() const { return mKickCount; }

@@ -923,8 +923,12 @@ namespace MWMechanics
         if (fatigue.getCurrent() >= fatigue.getBase())
             return;
 
+        const bool player = ptr == getPlayer();
+        if (player && Settings::game().mBrutalStamina && stats.mBrutalBlockRequested && stats.mBrutalBlockRaised)
+            duration /= 3.f;
+
         const float regenFraction = Settings::game().mPlayerFatigueRegenFraction;
-        if (regenFraction > 0.f && ptr == getPlayer())
+        if (regenFraction > 0.f && player)
         {
             fatigue.setCurrent(std::min(fatigue.getModified(),
                 fatigue.getCurrent() + regenFraction * fatigue.getModified() * duration));

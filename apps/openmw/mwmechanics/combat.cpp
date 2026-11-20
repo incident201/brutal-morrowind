@@ -187,6 +187,21 @@ namespace MWMechanics
                 stats.mBrutalParried = true;
         }
 
+        constexpr float heavyBlockStaminaFraction = 2.f / 9.f;
+
+        float blockStaminaCost(const DynamicStat<float>& fatigue, float fraction)
+        {
+            return std::max(0.f, fatigue.getBase()) * fraction;
+        }
+
+        bool canAbsorbChargedAttack(const CreatureStats& playerStats)
+        {
+            if (!Settings::game().mBrutalStamina || MWBase::Environment::get().getWorld()->getGodModeState())
+                return true;
+            const auto& fatigue = playerStats.getFatigue();
+            return fatigue.getCurrent() >= blockStaminaCost(fatigue, heavyBlockStaminaFraction);
+        }
+
         // Impacts against a guard cost more to deliver than to absorb. Fractions of
         // maximum match the player's nine-unit stamina scale and do not favour a
         // particular race/level. Ordinary open hits and misses keep their old costs.
@@ -200,11 +215,11 @@ namespace MWMechanics
                     return;
                 auto& stats = actor.getClass().getCreatureStats(actor);
                 auto fatigue = stats.getFatigue();
-                fatigue.setCurrent(std::max(0.f, fatigue.getCurrent() - std::max(0.f, fatigue.getBase()) * fraction));
+                fatigue.setCurrent(std::max(0.f, fatigue.getCurrent() - blockStaminaCost(fatigue, fraction)));
                 stats.setFatigue(fatigue);
             };
             spend(attacker, heavy ? 3.f / 9.f : 2.f / 9.f);
-            spend(blocker, heavy ? 2.f / 9.f : 1.f / 9.f);
+            spend(blocker, heavy ? heavyBlockStaminaFraction : 1.f / 9.f);
             if (blocker.getClass().getCreatureStats(blocker).getFatigue().getCurrent() <= 0.f)
                 openBrutalGuard(blocker);
         }
@@ -216,9 +231,6 @@ namespace MWMechanics
                                           : stats.mBrutalGuardBreakingAttack;
         }
 
-        // A fresh timed player parry still deflects a deliberately charged guard
-        // breaker. Holding an old guard cannot silently convert an ordinary blow
-        // into a breaker; the AI must have chosen and telegraphed that attack.
         bool parryMeleeAttack(const MWWorld::Ptr& attacker, const MWWorld::Ptr& blocker, float damage)
         {
             MWMechanics::CreatureStats& stats = blocker.getClass().getCreatureStats(blocker);
@@ -433,7 +445,11 @@ namespace MWMechanics
             const bool woundedGuardBreak = npcGuard && isBrutalWoundedNpc(blocker)
                 && Misc::Rng::rollClosedProbability(MWBase::Environment::get().getWorld()->getPrng())
                     < (blockerStats.mBrutalParry ? .5f : .8f);
-            if ((brutalGuardBreakingAttack(attacker, attackStrength) && !timedPlayerGuard) || woundedGuardBreak)
+            // A timed player guard can deflect even when it cannot pay the
+            // full charge cost. The ensuing impact still drains the reserve.
+            const bool chargeBreaksGuard = brutalGuardBreakingAttack(attacker, attackStrength)
+                && (npcGuard || (!timedPlayerGuard && !canAbsorbChargedAttack(blockerStats)));
+            if (chargeBreaksGuard || woundedGuardBreak)
             {
                 spendBrutalBlockStamina(attacker, blocker, true);
                 openBrutalGuard(blocker);

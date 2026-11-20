@@ -16,6 +16,7 @@
 #include "releasedequipmentcapture.hpp"
 #include "renderprewarm.hpp"
 #include "vismask.hpp"
+#include <algorithm>
 #include <chrono>
 #include <components/debug/debuglog.hpp>
 #include <components/esm3/loadarmo.hpp>
@@ -514,6 +515,7 @@ namespace MWRender
             // must not inherit their last uniform values.
             state->addUniform(new osg::Uniform("bloodFade", 0.f), flags);
             state->addUniform(new osg::Uniform("bloodDry", 0.f), flags);
+            state->addUniform(new osg::Uniform("bloodFeather", false), flags);
             mResourceSystem->getSceneManager()->setUpNormalsRTForStateSet(state, false);
             mResourceSystem->getSceneManager()->recreateShaders(geometry, "blooddecal");
             // Override the source's program as well as its material state.
@@ -1070,14 +1072,23 @@ namespace MWRender
             view.lastLength = length;
             const bool thrust = kind == "thrust";
             const bool head = bluntHead(held.type);
+            const bool polearm = held.type == ESM::Weapon::SpearTwoWide;
+            const bool cuttingBlade = !head && !polearm && !thrust;
+            const float along = cuttingBlade
+                ? std::clamp((power ? .9f : .78f) * length, 5.f, 72.f)
+                : std::clamp((head ? .38f : .34f) * length, 5.f, 26.f) * (power ? 1.25f : 1.f);
             float t = (contact - frame->hilt) * frame->axis;
-            if (thrust || held.type == ESM::Weapon::SpearTwoWide)
+            if (thrust || polearm)
                 t = length * (.84f + .1f * store->random01());
             else if (head)
                 t = length * (.8f + .1f * store->random01());
             else if (!std::isfinite(t))
                 t = length * .65f;
-            t = std::clamp(t + (store->random01() - .5f) * .1f * length, .3f * length, .93f * length);
+            t += (store->random01() - .5f) * .1f * length;
+            if (cuttingBlade)
+                t = std::clamp(t, .5f * along + .05f * length, .84f * length);
+            else
+                t = std::clamp(t, .3f * length, .93f * length);
             const osg::Vec3f centre = frame->hilt + frame->axis * t;
 
             // The blade's flat faces: the thinnest direction across the blade here.
@@ -1143,17 +1154,13 @@ namespace MWRender
             const osg::Vec3f middle = mean - frame->axis * ((mean - centre) * frame->axis);
 
             unsigned style = BrutalBlood::Style_Slash;
-            float along = std::clamp(.4f * length, 8.f, 34.f);
             if (thrust || head)
             {
                 style = BrutalBlood::Style_World + store->random() % 6;
                 if (!store->hasStyle(style))
                     style = store->hasStyle(BrutalBlood::Style_Small) ? BrutalBlood::Style_Small
                                                                        : BrutalBlood::Style_Slash;
-                along = std::clamp((head ? .35f : .3f) * length, 6.f, 24.f);
             }
-            if (power)
-                along *= 1.3f;
             const float height = std::clamp(2.4f * extentB, 3.f, head ? 22.f : 14.f);
 
             // Both flat faces, and for blades both edges too: a blade seen edge-on,
@@ -1174,42 +1181,54 @@ namespace MWRender
             view.lastThickness = extentA;
             view.lastWidth = extentB;
             view.lastSides = sides.size();
+            // Weld the whole weapon for traversal so a material seam can lie
+            // inside a single smear. Keep the source mapping for saved anchors.
+            std::vector<osg::Vec3d> positions;
+            std::vector<SceneUtil::DecalProjector::Triangle> triangles;
+            std::vector<std::size_t> surfaceOfVertex;
+            std::vector<unsigned> vertexOffsets(surfaces.size());
+            for (std::size_t i = 0; i < surfaces.size(); ++i)
+            {
+                if (!posedSurfaces[i])
+                    continue;
+                const auto* vertices = dynamic_cast<const osg::Vec3Array*>(posedSurfaces[i]->getVertexArray());
+                if (!vertices)
+                    continue;
+                const auto offset = static_cast<unsigned>(positions.size());
+                vertexOffsets[i] = offset;
+                positions.insert(positions.end(), vertices->begin(), vertices->end());
+                surfaceOfVertex.resize(positions.size(), i);
+                for (const auto& triangle : surfaces[i].triangles)
+                    if (std::ranges::all_of(triangle, [&](unsigned index) { return index < vertices->size(); }))
+                        triangles.push_back({ triangle[0] + offset, triangle[1] + offset, triangle[2] + offset });
+            }
+            const double hour = store->now();
             std::vector<BrutalBlood::WeaponMark> marks;
             for (const auto& side : sides)
             {
                 const osg::Vec3f outward = side.outward;
-                SceneUtil::DecalProjector::Result best;
-                Surface* selected = nullptr;
+                auto projection = SceneUtil::DecalProjector::project(positions, triangles,
+                    osg::Vec3d(middle + outward * (side.offset + 1.f)), osg::Vec3d(outward),
+                    osg::Vec3d(frame->axis), along, side.height, side.depth, side.offset + 6.0);
+                std::vector<std::vector<SceneUtil::SurfaceDecals::Anchor>> anchors(surfaces.size());
+                for (auto& vertex : projection.vertices)
+                {
+                    const auto index = surfaceOfVertex[vertex.indices[0]];
+                    for (auto& sourceIndex : vertex.indices)
+                        sourceIndex -= vertexOffsets[index];
+                    anchors[index].push_back(vertex);
+                }
                 for (std::size_t i = 0; i < surfaces.size(); ++i)
                 {
-                    if (!posedSurfaces[i])
+                    if (anchors[i].empty())
                         continue;
-                    const auto* vertices = dynamic_cast<const osg::Vec3Array*>(posedSurfaces[i]->getVertexArray());
-                    if (!vertices)
-                        continue;
-                    std::vector<osg::Vec3d> world(vertices->begin(), vertices->end());
-                    auto projection = SceneUtil::DecalProjector::project(world, surfaces[i].triangles,
-                        osg::Vec3d(middle + outward * (side.offset + 1.f)), osg::Vec3d(outward),
-                        osg::Vec3d(frame->axis), along, side.height, side.depth, side.offset + 6.0);
-                    if (!projection.vertices.empty() && projection.distance < best.distance)
-                    {
-                        best = std::move(projection);
-                        selected = &surfaces[i];
-                    }
+                    const auto& surface = surfaces[i];
+                    marks.push_back({ style, surface.model, surface.ordinal, surface.fingerprint,
+                        std::move(anchors[i]), hour });
                 }
-                if (!selected)
-                    continue;
-                BrutalBlood::WeaponMark mark;
-                mark.style = style;
-                mark.model = selected->model;
-                mark.ordinal = selected->ordinal;
-                mark.fingerprint = selected->fingerprint;
-                mark.anchors = std::move(best.vertices);
-                mark.hour = store->now();
-                marks.push_back(std::move(mark));
             }
             view.lastMarks = marks.size();
-            if (marks.empty())
+            if (marks.empty() || marks.size() > BrutalBlood::MaxWeaponMarks)
             {
                 ++view.rejected;
                 return false;
@@ -1221,10 +1240,15 @@ namespace MWRender
             if (!key.isSet())
                 return false;
             auto& blood = store->createItem(key);
+            // Retire the oldest hit as a group to keep its seam-spanning
+            // patches together when multiple hits cover the same surface.
+            while (blood.marks.size() + marks.size() > BrutalBlood::MaxWeaponMarks)
+            {
+                const double oldest = blood.marks.front().hour;
+                std::erase_if(blood.marks, [oldest](const auto& mark) { return mark.hour == oldest; });
+            }
             for (auto& mark : marks)
                 blood.marks.push_back(std::move(mark));
-            while (blood.marks.size() > BrutalBlood::MaxWeaponMarks)
-                blood.marks.erase(blood.marks.begin());
             blood.revision = store->nextRevision();
             blood.dripUntil = store->realTime() + (power ? 4.f : 2.5f);
             store->noteWeaponAdd();
@@ -1290,7 +1314,7 @@ namespace MWRender
                 {
                     const double age = now - mark.hour + blood->wash;
                     looks.states.push_back(
-                        store->state(mark.style, BrutalBlood::markFade(age), BrutalBlood::markDry(age)));
+                        store->weaponState(mark.style, BrutalBlood::markFade(age), BrutalBlood::markDry(age)));
                 }
             const unsigned revision = blood ? blood->revision : ~0u - 1;
             if (part != view.part || key != view.key || revision != view.revision || !(looks == view.looks))

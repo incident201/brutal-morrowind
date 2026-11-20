@@ -99,7 +99,7 @@ namespace MWRender
         static BrutalBlood* get();
 
         // Immutable render states, shared by every mark of the same look.
-        osg::StateSet* state(unsigned style, float fade, float dry);
+        osg::StateSet* weaponState(unsigned style, float fade, float dry);
         bool hasStyle(unsigned style);
 
         double now() const;
@@ -140,7 +140,8 @@ namespace MWRender
     private:
         void buildSplat(const Splat& splat, std::size_t index);
         void removeBuilt(std::uint32_t id);
-        osg::ref_ptr<osg::StateSet> createState(unsigned style, float fade, float dry);
+        osg::StateSet* state(unsigned style, float fade, float dry, bool weapon = false);
+        osg::ref_ptr<osg::StateSet> createState(unsigned style, float fade, float dry, bool weapon);
 
         Resource::ResourceSystem* mResourceSystem;
         osg::ref_ptr<osg::Group> mParent;

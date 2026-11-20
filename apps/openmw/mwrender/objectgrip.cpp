@@ -270,21 +270,39 @@ namespace MWRender
         }
     }
 
-    bool NpcAnimation::fitHeldObjectGrip(const MWPhysics::HeldObjectGrip& grip, const osg::Vec3f& eye,
-        const osg::Quat& view, const std::function<float(const osg::Vec3f&, const osg::Vec3f&, const osg::Quat&)>& sweep,
-        const osg::FrameStamp& frameStamp, osg::Vec3f& position, osg::Quat& rotation)
+    bool NpcAnimation::fitHeldObjectGrip(const MWPhysics::HeldObjectGrip& grip, const osg::Matrixf& pickupTransform,
+        const osg::Vec3f& eye, const osg::Quat& view,
+        const std::function<float(const osg::Vec3f&, const osg::Vec3f&, const osg::Quat&)>& sweep,
+        const osg::FrameStamp& frameStamp, osg::Vec3f& position, osg::Quat& rotation, bool& lifted)
     {
         if (mViewMode != VM_FirstPerson || !mObjectRoot)
             return false;
 
         const bool throwing = isPlaying(grip.dual ? "brutal_throw_dual" : "brutal_throw_solo");
         const std::string grab = grip.dual ? "brutal_grab_dual" : "brutal_grab_solo";
+        const float time = getCurrentTime(grab);
+        const float pickupStart = getTextKeyTime(grab + ": pickup start");
+        const float pickupContact = getTextKeyTime(grab + ": pickup contact");
+        const float pickupStop = getTextKeyTime(grab + ": pickup stop");
+        const bool animatedPickup = pickupStart >= 0.f && pickupContact > pickupStart && pickupStop > pickupContact;
+        if (animatedPickup && time < pickupStart && !throwing)
+            return false;
+        const auto ease = [](float value) {
+            const float t = std::clamp(value, 0.f, 1.f);
+            return t * t * (3.f - 2.f * t);
+        };
+        const bool picking = animatedPickup && time < pickupStop && !throwing;
+        const float pickupWeight = picking ? ease((time - pickupContact) / (pickupStop - pickupContact)) : 1.f;
+        const float reachWeight = picking
+            ? ease((time - pickupStart) / (pickupContact - pickupStart)) * (1.f - pickupWeight) : 0.f;
+        const float graspWeight = picking ? ease((time - pickupStart) / (pickupContact - pickupStart) - .5f) : 1.f;
+        lifted = !picking || time > pickupContact;
+
         const float raise = getTextKeyTime(grab + ": raise start");
         const float raised = getTextKeyTime(grab + ": raise stop");
-        const float time = getCurrentTime(grab);
         const float raiseWeight = raise >= 0.f && raised > raise && time >= raise && time <= raised + .001f
-            ? std::clamp((time - raise) / (raised - raise), 0.f, 1.f) : 0.f;
-        const float holdWeight = throwing ? 0.f : 1.f - raiseWeight * raiseWeight * (3.f - 2.f * raiseWeight);
+            ? ease((time - raise) / (raised - raise)) : 0.f;
+        const float holdWeight = throwing ? 0.f : (1.f - raiseWeight) * pickupWeight;
         const auto& nodes = getNodeMap();
         const bool wrapsShaft = grip.narrowEnd || grip.shaft;
         const bool fists = grip.shaft || grip.shieldStraps;
@@ -310,6 +328,22 @@ namespace MWRender
         osg::Vec3f lateral, depth, center;
         const auto soloPose = [&](const osg::Matrixf& hand) {
             const auto normal = direction(palms[0].normal, hand);
+            if (grip.head)
+            {
+                // Keep the neck supported by the solved palm and use the eye
+                // and its screen-up direction to orient the visible face.
+                const auto support = palms[0].center * hand + normal * .35f;
+                auto facing = eye - (support + up * (grip.center - grip.contact).length());
+                if (facing.normalize() < .001f || std::abs(facing * up) > .98f)
+                    facing = -ahead;
+                osg::Quat look;
+                look.makeRotate(grip.headForward, facing);
+                const auto crown = look * grip.headUp;
+                const float roll = std::atan2(facing * (crown ^ up), crown * up);
+                rotation = look * osg::Quat(roll, facing);
+                position = support - rotation * grip.contact;
+                return;
+            }
             const auto along = direction(palms[0].forward, hand);
             osg::Vec3f length = along;
             if (grip.narrowEnd)
@@ -378,11 +412,24 @@ namespace MWRender
             const auto delta = from - position;
             return delta * std::min(1.f, 1.f - fraction + (fraction < 1.f ? .65f / std::max(delta.length(), 1.f) : 0.f));
         };
+        // Reach towards the prop's actual contact point before pulling it in.
+        // The arm solver limits extension for props near the edge of pickup range.
+        const osg::Vec3f startingContact = picking ? pivot * pickupTransform : osg::Vec3f();
+        osg::Vec3f reachOffset;
+        if (reachWeight > 0.f)
+        {
+            reachOffset = startingContact - (position + rotation * pivot);
+            if (const float distance = reachOffset.length(); distance > 38.f)
+                reachOffset *= 38.f / distance;
+            reachOffset *= reachWeight;
+            position += reachOffset;
+        }
         const auto wallCorrection = retreat();
+        const auto correction = reachOffset + wallCorrection;
         position += wallCorrection;
         if (grip.dual)
         {
-            center += wallCorrection;
+            center += correction;
             for (unsigned i = 0; i < 2; ++i)
             {
                 const auto out = lateral * (i == 0 ? 1.f : -1.f);
@@ -420,7 +467,7 @@ namespace MWRender
             }
         }
         else
-            goals[0].setTrans(goals[0].getTrans() + wallCorrection);
+            goals[0].setTrans(goals[0].getTrans() + correction);
 
         const unsigned count = grip.dual ? 2 : 1;
         std::array<osg::Matrixf, 2> corrections;
@@ -544,9 +591,20 @@ namespace MWRender
                 axis[grip.lengthAxis] = 1.f;
                 clearance = { position + rotation * grip.contact, rotation * axis, grip.thickness + .43f, false };
             }
-            curlGripFingers(nodes, prefix, hand, palms[i], curl, clearance, setPose);
+            curlGripFingers(nodes, prefix, hand, palms[i], curl * graspWeight, clearance, setPose);
             if (wrapsShaft || grip.shield)
-                closeGripThumb(nodes, prefix, hand, palms[i], thickness, fists ? .84f : .65f, clearance, setPose);
+                closeGripThumb(nodes, prefix, hand, palms[i], thickness, (fists ? .84f : .65f) * graspWeight,
+                    clearance, setPose);
+        }
+        if (picking)
+        {
+            // Leave the item on its surface until the reach arrives, then
+            // take it smoothly from its resting pose to the fitted hands.
+            const auto carriedContact = position + rotation * pivot;
+            const auto pickupPoint = startingContact + (carriedContact - startingContact) * pickupWeight;
+            const auto carriedRotation = rotation;
+            rotation.slerp(pickupWeight, pickupTransform.getRotate(), carriedRotation);
+            position = pickupPoint - rotation * pivot;
         }
         if (mSkeleton)
             mSkeleton->markDirty();

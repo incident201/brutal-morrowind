@@ -1054,7 +1054,7 @@ namespace MWPhysics
     }
 
     float PhysicsTaskScheduler::holdDetachedFragment(const std::vector<btRigidBody*>& bodies, btTypedConstraint* joint,
-        const btCollisionObject* owner, osg::Vec3f& minimum, osg::Vec3f& maximum)
+        const btCollisionObject* owner, osg::Vec3f& minimum, osg::Vec3f& maximum, osg::Matrixf& pickupTransform)
     {
         MaybeExclusiveLock lock(mCollisionWorldMutex, mLockingPolicy);
         if (hasHeldObject() || bodies.empty()
@@ -1063,7 +1063,10 @@ namespace MWPhysics
             }))
             return 0.f;
 
-        const auto rootInverse = bodies.front()->getWorldTransform().inverse();
+        const auto& root = bodies.front()->getWorldTransform();
+        pickupTransform.makeRotate(Misc::Convert::toOsg(root.getRotation()));
+        pickupTransform.setTrans(Misc::Convert::toOsg(root.getOrigin()));
+        const auto rootInverse = root.inverse();
         std::vector<HeldState::Part> fragment;
         btVector3 lower(BT_LARGE_FLOAT, BT_LARGE_FLOAT, BT_LARGE_FLOAT), upper = -lower;
         float mass = 0.f;

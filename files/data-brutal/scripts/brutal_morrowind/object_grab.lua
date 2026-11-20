@@ -23,6 +23,8 @@ local dualGrip = false
 local savedStance = nil
 local stateTime = 0
 local useDown = false
+local pickupCuePlayed = false
+local throwAfterPickup = false
 local throwQueued = false
 local releaseFired = false
 local throwAdrenaline = false
@@ -84,6 +86,8 @@ local function restoreStance()
     end
     heldItem, requestedItem, heldFragment = nil, nil, nil
     state, stateTime = 'idle', 0
+    pickupCuePlayed = false
+    throwAfterPickup = false
     throwQueued, releaseFired, throwAdrenaline = false, false, false
 end
 
@@ -231,7 +235,11 @@ local function onGrabTrigger()
 end
 
 local function beginThrowWindup()
-    if state == 'picking' or state == 'holding' then
+    if state == 'picking' then
+        throwAfterPickup = true
+        return true
+    end
+    if state == 'holding' then
         state, stateTime = 'raising', 0
         throwQueued = false
         playSection(grabGroup(), 'raise start', 'raise stop', 0, false)
@@ -241,7 +249,7 @@ local function beginThrowWindup()
 end
 
 local function queueThrowRelease()
-    if state == 'raising' then
+    if state == 'raising' or (state == 'picking' and throwAfterPickup) then
         throwQueued = true
         return true
     end
@@ -257,9 +265,7 @@ local function onUseChanged(down)
             beginThrowWindup()
         end
     else
-        if state == 'raising' then
-            queueThrowRelease()
-        end
+        queueThrowRelease()
     end
 end
 
@@ -307,9 +313,24 @@ local function onUpdate(dt)
 
     if state == 'picking' then
         local pickDur = textKeyDuration(grabGroup(), 'pickup start', 'pickup stop', dualGrip and 0.30 or 0.25)
+        local contact = useDmAnims() and textKeyDuration(grabGroup(), 'pickup start', 'pickup contact', 0) or 0
+        if heldItem and not pickupCuePlayed and stateTime >= contact then
+            pickupCuePlayed = true
+            self:sendEvent('BrutalObjectGrabSound', { kind = 'pickup', dualGrip = dualGrip })
+            if I.BrutalCameraMotion and I.BrutalCameraMotion.pulse then
+                I.BrutalCameraMotion.pulse(0.04, -0.025, 1.5, 0.20)
+            end
+        end
         if heldItem and stateTime >= pickDur then
             state, stateTime = 'holding', 0
-            playSection(grabGroup(), 'hold start', 'hold stop', 100000, false)
+            if throwAfterPickup then
+                local released = throwQueued
+                throwAfterPickup = false
+                beginThrowWindup()
+                if released then queueThrowRelease() end
+            else
+                playSection(grabGroup(), 'hold start', 'hold stop', 100000, false)
+            end
         elseif not heldItem and stateTime > 0.6 then
             -- Hold request timed out / rejected cleanly.
             restoreStance()
@@ -367,10 +388,6 @@ return {
             dualGrip = data.dualGrip == true
             stateTime = 0
             stats.grabs = stats.grabs + 1
-            self:sendEvent('BrutalObjectGrabSound', { kind = 'pickup', dualGrip = dualGrip })
-            if I.BrutalCameraMotion and I.BrutalCameraMotion.pulse then
-                I.BrutalCameraMotion.pulse(0.04, -0.025, 1.5, 0.20)
-            end
             playSection(grabGroup(), 'pickup start', 'pickup stop', 0, false)
         end,
         BrutalObjectHoldFailed = function()
@@ -392,6 +409,8 @@ return {
         onLoad = function()
             heldItem, requestedItem, heldFragment, dualGrip, savedStance = nil, nil, nil, false, nil
             state, stateTime, useDown, throwQueued, releaseFired, throwAdrenaline = 'idle', 0, false, false, false, false
+            pickupCuePlayed = false
+            throwAfterPickup = false
             cancelAnims()
             if types.Actor.setBrutalCarryingObject then
                 types.Actor.setBrutalCarryingObject(self, false)

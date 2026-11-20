@@ -1971,6 +1971,9 @@ namespace MWRender
         std::set<std::string, std::less<>> wanted;
         for (const auto& [group, source] : mStates)
         {
+            if (mViewmodelSet == BrutalViewmodel_Spear && group == "weapononehand"
+                && source.mStartKey.starts_with("faststrafe"))
+                continue; // Keep the lateral step instead of overlaying forward thrust footwork.
             const bool spearStep = mViewmodelSet == BrutalViewmodel_Spear && group == "weapononehand"
                 && (source.mStartKey.starts_with("fast") || source.mStartKey.starts_with("thrust "))
                 && body.hasAnimation("brutal_spear_step");

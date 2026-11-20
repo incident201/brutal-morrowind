@@ -24,6 +24,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import import_viewmodel as iv  # noqa: E402
+from import_two_hand_viewmodel import native_starts  # noqa: E402
+from spear_dm import SWEEPS  # noqa: E402
 
 LOCOMOTION = ([f'@walk_{d}' for d in ('N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW')]
               + [f'@run_{d}' for d in ('N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW')]
@@ -148,8 +150,27 @@ def main():
     # The thrusts have their own shoulder motion. Preserve staff head layers
     # for the actions still played from that set, including the ground finisher.
     staff = sets['brutal_fp_staff']
-    sets['brutal_fp_spear'] = {**staff, 'weapononehand': [
-        part for part in staff['weapononehand'] if not part['start'].startswith(('thrust ', 'fast'))]}
+    staff_keys = native_starts(a.arms / 'Animations/brutal_fp_staff/weapononehand.kf')
+    spear_parts = []
+    for part in staff['weapononehand']:
+        donor = part['start'].split(' ', 1)[0]
+        if donor in SWEEPS:
+            sweep, _ = SWEEPS[donor]
+            start, swing, stop = (staff_keys[f'weapononehand: {donor} {key}'] for key in ('start', 'swing', 'stop'))
+            source = clips[part['clip']]
+            # The spear joins the real attack at "swing". Remove the old
+            # staff windup from the camera clip on the same normalized clock.
+            last = min(round(part['duration'] * source['fps']), len(source['frames']) - 1)
+            first = round(last * (swing - start) / (stop - start))
+            frames = source['frames'][first:last + 1]
+            name = part['clip'] + '_spear_swing'
+            duration = (len(frames) - 1) / source['fps']
+            clips[name] = dict(source, frames=frames)
+            spear_parts.append(dict(start=sweep + ' swing', stop=sweep + ' recovery', clip=name,
+                                    duration=duration, natural=duration))
+        elif not part['start'].startswith(('thrust ', 'fast')):
+            spear_parts.append(part)
+    sets['brutal_fp_spear'] = {**staff, 'weapononehand': spear_parts}
 
     def lua(value, indent=''):
         if isinstance(value, dict):

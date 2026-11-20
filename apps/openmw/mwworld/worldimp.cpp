@@ -2331,12 +2331,13 @@ namespace MWWorld
         {
             osg::Vec3f position;
             osg::Quat rotation;
+            bool lifted = false;
             const osg::Vec3f eye = osg::Matrixf::inverse(camera->getViewMatrix()).getTrans();
             const auto sweep = [&](const osg::Vec3f& from, const osg::Vec3f& to, const osg::Quat& orientation) {
                 return mPhysics->sweepHeldObject(from, to, orientation);
             };
-            if (animation->fitHeldObjectGrip(mPhysics->getHeldGrip(), eye, camera->getOrient(),
-                    sweep, frameStamp, position, rotation))
+            if (animation->fitHeldObjectGrip(mPhysics->getHeldGrip(), mPhysics->getHeldPickupTransform(),
+                    eye, camera->getOrient(), sweep, frameStamp, position, rotation, lifted))
             {
                 mPhysics->placeHeldObject(position, rotation, mTimeManager->isPaused() ? 0.f : duration);
                 if (corpse)
@@ -2346,9 +2347,9 @@ namespace MWWorld
                     mRendering->moveObject(item, position);
                     mRendering->rotateObject(item, rotation);
                 }
-                if (mHeldVisuals.size() != nodes.size()
+                if (lifted && (mHeldVisuals.size() != nodes.size()
                     || !std::equal(nodes.begin(), nodes.end(), mHeldVisuals.begin(),
-                        [](auto* current, const auto& tracked) { return current == tracked.first.get(); }))
+                        [](auto* current, const auto& tracked) { return current == tracked.first.get(); })))
                 {
                     clearHeldVisual();
                     mHeldVisualCull = animation->makeHeldObjectCullCallback();

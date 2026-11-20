@@ -108,6 +108,8 @@ def build_grab_group(vm, folder, group, neutral_pose, hold_pose, hold_alt_pose, 
         ))
         segments.append((offset, times, poses))
         marks.append((offset, f'{name} start'))
+        if name == 'pickup':
+            marks.append((offset + dur * .43, 'pickup contact'))
         offset += dur
         marks.append((offset, f'{name} stop'))
 
@@ -201,12 +203,12 @@ def main():
     report = {}
     report['brutal_grab_solo'] = build_grab_group(
         vm, folder, 'brutal_grab_solo', neutral_pose, solo_hold_pose, solo_alt_pose, solo_throw_0,
-        pickup_dur=0.25, hold_dur=1.20, raise_dur=0.20, drop_dur=0.22,
+        pickup_dur=0.40, hold_dur=1.20, raise_dur=0.20, drop_dur=0.22,
         raise_head_clip='@layer_throw_solo_raise',
     )
     report['brutal_grab_dual'] = build_grab_group(
         vm, folder, 'brutal_grab_dual', neutral_pose, dual_hold_pose, dual_alt_pose, dual_throw_0,
-        pickup_dur=0.30, hold_dur=1.40, raise_dur=0.24, drop_dur=0.25,
+        pickup_dur=0.46, hold_dur=1.40, raise_dur=0.24, drop_dur=0.25,
         raise_head_clip='@layer_throw_dual_raise',
     )
     report['brutal_throw_solo'] = build_throw_group(

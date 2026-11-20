@@ -471,9 +471,10 @@ namespace MWRender
         std::optional<NpcGuardRigAudit> getNpcGuardRigForAudit() const;
 
         void configureSwordWallSweep(std::uint64_t swing, std::string_view group, std::string_view key);
-        bool fitHeldObjectGrip(const MWPhysics::HeldObjectGrip& grip, const osg::Vec3f& eye,
-            const osg::Quat& view, const std::function<float(const osg::Vec3f&, const osg::Vec3f&, const osg::Quat&)>& sweep,
-            const osg::FrameStamp& frameStamp, osg::Vec3f& position, osg::Quat& rotation);
+        bool fitHeldObjectGrip(const MWPhysics::HeldObjectGrip& grip, const osg::Matrixf& pickupTransform,
+            const osg::Vec3f& eye, const osg::Quat& view,
+            const std::function<float(const osg::Vec3f&, const osg::Vec3f&, const osg::Quat&)>& sweep,
+            const osg::FrameStamp& frameStamp, osg::Vec3f& position, osg::Quat& rotation, bool& lifted);
         osg::ref_ptr<osg::Callback> makeHeldObjectCullCallback() const;
         std::vector<osg::Node*> getDetachedFragmentNodes(unsigned fragment) const;
         bool sampleSwordWallContact(float duration, const osg::FrameStamp& frameStamp);

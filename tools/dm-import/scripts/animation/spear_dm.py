@@ -4,12 +4,11 @@
 Every DM staff stroke that is labelled a thrust starts with an overhead swing,
 except one: the second jab of the charged staff attack. There the haft keeps
 pointing forward, the rear fist draws it back while the left hand regrips,
-then drives it 50 units forward in 0.15 s to the crosshair and holds. The
-spear's guard is that drawn chamber; every quick stroke and the charged
-thrust drive from it and draw back into it, each aimed a little differently.
-The side swing, draw and sheathe stay the staff's, joined to the guard along
-the spear's own path. Arms, fingers and regrips inside the jab are the
-artists'.
+then drives it forward to the crosshair and holds. The spear's guard is
+that chamber. Quick thrusts drive from it and return to it. A charged
+thrust pulls the haft farther back through the front hand before driving.
+Sidesteps use the staff's swings. The staff's parry, draw and sheathe
+join the spear guard along a continuous path for the haft and both hands.
 """
 import argparse
 import hashlib
@@ -31,6 +30,11 @@ JAB_CHAMBER, JAB_END = -.19, .18   # deepest draw (both hands on the haft), end 
 SETTLE = .12          # each stroke holds the chamber while the engine blends into it
 RETURN = .38          # draw back from the held thrust to the guard
 RATE = 60.
+CHARGE_DRAW = np.array((8., -15., -7.))
+CHARGE_SLIDE = 19.      # the front palm lets the shaft slide as the rear palm pulls
+CHARGE_RELEASE = .16   # time to regain the donor's drive after the extra draw
+SWEEPS = {'fasta': ('faststrafeleft', 'slashright'), 'fastc': ('faststraferight', 'slash')}
+SWEEP_ENTRY, SWEEP_RETURN = .18, .32
 # The staff's own sections (side swing, draw, sheathe) start and end in the
 # staff guard, haft across the view with the point up and left. Blending from
 # the spear guard straight into it swings the haft through the camera in a
@@ -49,6 +53,41 @@ DRAW_EARLY = .1                       # leave DM's draw this long before the att
 AIM = {'fasta': (5.5, -2.2, -8.), 'fastb': (-6., 1.8, 9.), 'fastc': (1.6, -5.2, 4.),
        'fastd': (-3.6, -3., -10.), 'fastloopa': (6.4, 1., 6.), 'thrust': (0., -.8, 0.),
        'neutral': (-1.5, -1.5, -3.)}
+
+
+def sampled_poses(segments):
+    samples = {}
+    for begin, stop, fn in segments:
+        for t in np.linspace(begin, stop, max(2, int(np.ceil((stop - begin) * RATE)) + 1)):
+            samples[float(t)] = fn(float(t - begin))
+    return samples
+
+
+def replace_frames(stream, samples, intervals, stop_time=None):
+    """Merge generated frames into the donor's controllers."""
+    times = np.array(sorted(samples))
+    names = (e.string_data for e in stream.root.extra_datas if isinstance(e, nif.NiStringExtraData))
+    for name, controller in zip(names, stream.root.controllers):
+        if name not in samples[times[0]]:
+            continue
+        for index, field in enumerate((controller.data.rotations, controller.data.translations)):
+            original = field.keys
+            if original is None or not len(original):
+                continue
+            keep = np.ones(len(original), dtype=bool)
+            for begin, stop in intervals:
+                keep &= (original[:, 0] < begin - 1e-5) | (original[:, 0] > stop + 1e-5)
+            values = [matrix_quat(samples[t][name][:3, :3]) if index == 0 else samples[t][name][:3, 3]
+                      for t in times]
+            merged = np.vstack((original[keep], np.column_stack((times, values)))).astype(np.float32)
+            merged = merged[np.argsort(merged[:, 0], kind='stable')]
+            if index == 0:
+                for i in range(1, len(merged)):
+                    if merged[i - 1, 1:] @ merged[i, 1:] < 0.:
+                        merged[i, 1:] *= -1
+            field.keys = merged
+        if stop_time is not None:
+            controller.stop_time = max(controller.stop_time, stop_time)
 
 
 def body_footwork(body, weapon):
@@ -77,7 +116,8 @@ def body_footwork(body, weapon):
     ranges['thrust'] = [(draw, .65, 0.), (back, .78, .45), (release, .78, .45),
                         (hit, 1.22, .9), (hit+.13, 1.30, .86), (end, 1.53, 0.)]
     ranges['thrust hold'] = [(marks['thrust hold '+key], .78, .45) for key in ('start','stop')]
-    labels = [(time, group+label) for label,time in marks.items() if label.startswith(('fast','thrust '))]
+    labels = [(time, group+label) for label,time in marks.items()
+              if label.startswith(('fast', 'thrust ')) and not label.startswith('faststrafe')]
     # Secondary animation.play() resolves the hold's generic loop range.
     for key in ('loop start','loop stop'):
         labels.append((marks['thrust hold '+key], group+key))
@@ -120,17 +160,15 @@ def build(arms, body=None):
              for t, label in text.keys for line in label.splitlines()}
     channels = tracks(source)               # source data, sampled below
     rig = Rig(arms / 'meshes/brutal_fp/xbase_anim.1st.nif')
-    names = [e.string_data for e in stream.root.extra_datas if isinstance(e, nif.NiStringExtraData)]
-    controllers = dict(zip(names, stream.root.controllers))
-    animated = [n for n in names if n in channels]
+    animated = list(channels)
 
     hit2 = marks['thrust hit2']
     chamber, jab1 = hit2 + JAB_CHAMBER, hit2 + JAB_END
     # The spear's guard is the jab's drawn chamber: haft forward, both hands
     # on it. Thrusts start and end there without sweeping across the view.
 
-    def at(t):
-        pose = Pose(rig, channels, t)
+    def at(t, source_channels=channels):
+        pose = Pose(rig, source_channels, t)
         return {n: pose.local(n) for n in animated}
 
     guard_local = at(chamber)
@@ -142,16 +180,13 @@ def build(arms, body=None):
         segments.append((start, start + length, fn))
         labels.extend((start + t, 'weapononehand: ' + name + ' ' + e) for t, e in events)
 
-    def back_to_guard(end_pose):
-        return lambda e: {n: blend(end_pose[n], guard_local[n], ease(e / RETURN)) for n in animated}
-
-    end_local = at(jab1)
     drive = jab1 - chamber
 
     reach = hit2 - chamber      # the drive itself, without the static hold
 
     contact_pose, guard_pose = Pose(rig, channels, hit2), Pose(rig, channels, chamber)
-    left = Grasp(contact_pose, 'L', False)
+    grasps = {side: Grasp(contact_pose, side, False) for side in 'RL'}
+    left = grasps['L']
     grip_contact = inverse(contact_pose.world(ITEM)) @ contact_pose.world(left.names[-1])
     grip_guard = inverse(guard_pose.world(ITEM)) @ guard_pose.world(left.names[-1])
 
@@ -198,15 +233,35 @@ def build(arms, body=None):
         # Weight of the stroke's own aim while drawing back.
         return 1. - ease(min(1., max(0., (e - .04) / (RETURN - .04))))
 
-    def jab_for(angles):
+    def draw_haft(pose, weight):
+        if not weight:
+            return pose
+        old = LocalPose(rig, pose)
+        base = old.world(ITEM)
+        turn = turn_about((0., 0., 1.), -5. * weight) @ turn_about((1., 0., 0.), -3. * weight)
+        spear = matrix(turn @ base[:3, :3], base[:3, 3] + weight * CHARGE_DRAW)
+        pose = dict(pose)
+        for side, grasp in grasps.items():
+            grip = inverse(base) @ old.world(grasp.names[-1])
+            if side == 'L':
+                grip[1, 3] += CHARGE_SLIDE * weight
+            pose.update(steer_arm(old, old, grasp, spear @ grip, 0.))
+        pose[ITEM] = inverse(LocalPose(rig, pose).world(rig.parents[ITEM])) @ spear
+        return pose
+
+    def jab_for(angles, charged=False):
         # Each stroke starts and ends in the guard (the drawn chamber), so a
         # series chains without the engine blending between far-apart poses:
         # settle, DM's drive and held extension, then draw back to guard.
         def jab(elapsed):
             if elapsed <= SETTLE:
-                return guard_local
+                return draw_haft(guard_local, 1.) if charged else guard_local
             if elapsed <= SETTLE + drive:
-                return aimed(at(chamber + elapsed - SETTLE), angles, ease(min(1., (elapsed - SETTLE) / reach)))
+                drive_time = elapsed - SETTLE
+                pose = at(chamber + drive_time)
+                if charged:
+                    pose = draw_haft(pose, 1. - ease(drive_time / CHARGE_RELEASE))
+                return aimed(pose, angles, ease(drive_time / reach))
             e = elapsed - SETTLE - drive
             return aimed(returning(e), angles, drawn(e))
         return jab
@@ -227,19 +282,19 @@ def build(arms, body=None):
     # it. The standing charge ("neutral") gets the same thrust: the engine
     # starts it on every click before it knows the click is a quick stroke,
     # and the staff's overhead start showed as a jump of the spear.
-    chamber_local = at(chamber)
+    chamber_local = draw_haft(guard_local, 1.)
     holds = []
     total = drive + RETURN + .25
     for kind in ('thrust', 'neutral'):
         start, maximum, release = (marks[kind + ' ' + k] for k in ('start', 'max attack', 'min hit'))
         section(start, maximum - start,
-                lambda e, s=maximum - start: {n: blend(guard_local[n], chamber_local[n], ease(e / s)) for n in animated},
+                lambda e, s=maximum - start: draw_haft(guard_local, ease(e / s)),
                 kind, [(0., 'start'), (marks[kind + ' min attack'] - start, 'min attack'), (maximum - start, 'max attack')])
         hold, hold_stop = marks[kind + ' hold start'], marks[kind + ' hold stop']
         holds.append((hold, hold_stop))
         section(hold, hold_stop - hold, lambda e: chamber_local, kind + ' hold',
                 [(0., 'start'), (0., 'loop start'), (hold_stop - hold, 'loop stop'), (hold_stop - hold, 'stop')])
-        jab = jab_for(AIM[kind])
+        jab = jab_for(AIM[kind], charged=True)
         section(release, total, lambda e, jab=jab: jab(e + SETTLE),
                 kind, [(0., 'min hit'), (0., 'plant'), (hit2 - chamber, 'hit'),
                        (hit2 - chamber + .035, 'weight forward'), (hit2 - chamber + .07, 'settle end'),
@@ -252,20 +307,15 @@ def build(arms, body=None):
     # spins the hands and the spear in them. The spear moves on its own
     # world path instead; both palms follow it on their grips and the arms
     # reach them.
-    grasps = {side: Grasp(contact_pose, side, False) for side in 'RL'}
-    hand_bones = {side: grasps[side].names[-1] for side in 'RL'}
-    arm_chain = {n for g in grasps.values() for n in g.names}
-
-
     class Mix:
         """Blend two moving poses without flips. The rotation between a staff
         pose and the guard can be near 180 degrees, so the shortest way round
         changes side from one sample to the next. Each channel keeps the side
         it starts on for the whole transition."""
-        def __init__(self, held=True):
+        def __init__(self, held=True, dip=DIP):
             self.signs = {}
             self.held = held
-            self.dip = np.array(DIP)
+            self.dip = np.array(dip)
 
         def turn(self, key, a, b, w):
             qa, qb = matrix_quat(a[:3, :3]), matrix_quat(b[:3, :3])
@@ -295,7 +345,7 @@ def build(arms, body=None):
             spear[:3, 3] += self.dip * np.sin(np.pi * w)
             now = LocalPose(rig, out)
             for side, grasp in grasps.items():
-                hand = hand_bones[side]
+                hand = grasp.names[-1]
                 grip = self.turn('grip ' + side, inverse(A.world(ITEM)) @ A.world(hand),
                                  inverse(B.world(ITEM)) @ B.world(hand), w)
                 neck = now.world(rig.parents[grasp.names[0]])
@@ -319,6 +369,27 @@ def build(arms, body=None):
     section(leave, LEAVE, lambda e, mix=Mix(): mix(at(leave + e), guard_local, ease(e / LEAVE)),
             'slash', [(LEAVE, size + ' follow stop') for size in ('small', 'medium', 'large')])
 
+    # Staff A and C swing in opposite directions. Cut away the combo-specific
+    # windup, join their striking frames from the spear guard, and recover to
+    # the same guard so taps can chain into either sweep or thrust.
+    for donor, (name, kind) in SWEEPS.items():
+        strike, contact, stop, recovery = (marks[key] for key in
+            (f'{donor} swing', f'{donor} {kind} hit', f'{donor} stop', f'fastend{donor[-1]} start'))
+        finish = marks[f'fastend{donor[-1]} stop']
+        strike_start = cursor + SWEEP_ENTRY
+        strike_end = strike_start + (stop - strike)
+        entrance = at(strike)
+        section(cursor, SWEEP_ENTRY,
+                lambda e, mix=Mix(), entry=entrance: mix(guard_local, entry, ease(e / SWEEP_ENTRY)),
+                name, [(0., 'start')])
+        section(strike_start, stop - strike, lambda e, start=strike: at(start + e), name,
+                [(0., 'swing'), (contact - strike, kind + ' hit')])
+        section(strike_end, SWEEP_RETURN,
+                lambda e, mix=Mix(), a=recovery, b=finish:
+                    mix(at(lerp(a, b, e / SWEEP_RETURN)), guard_local, ease(e / SWEEP_RETURN)),
+                name, [(0., 'recovery'), (SWEEP_RETURN, 'stop')])
+        cursor = strike_end + SWEEP_RETURN + .2
+
     # Draw and sheathe: DM's draw brings the haft over the shoulder into the
     # staff guard; the spear leaves that path for its own guard while it is
     # still coming down. Sheathing lets go of the spear at once (detach key),
@@ -332,30 +403,7 @@ def build(arms, body=None):
             'unequip', [])
 
     # Sample and merge: replace keys inside every authored interval.
-    samples = {}
-    for begin, stop, fn in segments:
-        for t in np.linspace(begin, stop, max(2, int(np.ceil((stop - begin) * RATE)) + 1)):
-            samples[float(t)] = fn(float(t - begin))
-    times = np.array(sorted(samples))
-    for name in animated:
-        controller = controllers[name]
-        for index, field in enumerate((controller.data.rotations, controller.data.translations)):
-            old = field.keys
-            if old is None or not len(old):
-                continue
-            keep = np.ones(len(old), dtype=bool)
-            for begin, stop, _ in segments:
-                keep &= (old[:, 0] < begin - 1e-5) | (old[:, 0] > stop + 1e-5)
-            values = [matrix_quat(samples[t][name][:3, :3]) if index == 0 else samples[t][name][:3, 3]
-                      for t in times]
-            merged = np.vstack((old[keep], np.column_stack((times, values)))).astype(np.float32)
-            merged = merged[np.argsort(merged[:, 0], kind='stable')]
-            if index == 0:
-                for i in range(1, len(merged)):
-                    if merged[i - 1, 1:] @ merged[i, 1:] < 0.:
-                        merged[i, 1:] *= -1
-            field.keys = merged
-        controller.stop_time = max(controller.stop_time, cursor)
+    replace_frames(stream, sampled_poses(segments), [(begin, stop) for begin, stop, _ in segments], cursor)
 
     replaced = ('fasta ', 'fastb ', 'fastc ', 'fastd ', 'fastend', 'fastloopa ', 'thrust ', 'neutral ')
     kept = []
@@ -378,8 +426,29 @@ def build(arms, body=None):
     rules = source.with_suffix('.yaml').read_text()
     rules = re.sub(r"(to: 'weapononehand:fast(?:end)?[abcd] start'\s+easing: linear\s+duration: )0\.2[0-9]*",
                    r"\g<1>0.045", rules)
-    rules += "  - from: '*'\n    to: 'weapononehand:fastloopa start'\n    easing: linear\n    duration: 0.045\n"
+    for name in ('fastloopa', *(name for name, _ in SWEEPS.values())):
+        rules += f"  - from: '*'\n    to: 'weapononehand:{name} start'\n    easing: linear\n    duration: 0.045\n"
     (target / 'weapononehand.yaml').write_text(rules)
+
+    # A partial raise may be reversed before the block is fully posed. Use the
+    # same frames in both directions, so matching the raise/lower phases in
+    # CharacterController also matches the actual pose of both hands.
+    block = folder / 'brutal_block.kf'
+    block_channels = tracks(block)
+    block_marks = native_starts(block)
+    start, hold, lower, end = (block_marks[f'brutal_block: {key}']
+                                for key in ('start', 'loop start', 'lower start', 'stop'))
+    block_pose = at(hold, block_channels)
+    parry_mix = Mix(dip=(0., 2., -9.))
+    phases = np.linspace(0., 1., int(np.ceil(max(hold - start, end - lower) * RATE)) + 1)
+    poses = [guard_local, *(parry_mix(guard_local, block_pose, ease(p)) for p in phases[1:-1]), block_pose]
+    block_samples = dict(zip(lerp(start, hold, phases), poses))
+    block_samples.update(zip(lerp(lower, end, phases), reversed(poses)))
+    block_stream = load(block)
+    replace_frames(block_stream, block_samples, [(start, hold), (lower, end)])
+    block_stream.save(target / block.name)
+    shutil.copyfile(block.with_suffix('.yaml'), target / block.with_suffix('.yaml').name)
+
     # Idle and gait: hold the spear guard in the arms and on the weapon; the
     # gait's own trunk, head and camera motion stay.
     arm_bones = [n for n in animated if n == ITEM or ((' L ' in n or ' R ' in n) and not n.endswith(('Thigh', 'Calf', 'Foot', 'Toe0')))]

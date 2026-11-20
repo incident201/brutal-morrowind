@@ -163,6 +163,8 @@ namespace MWPhysics
         // In model space, right hand first. The empty array is used for rim grips.
         std::array<osg::Vec3f, 2> shieldGrips{};
         std::array<float, 2> shieldGripRadii{};
+        osg::Vec3f headForward, headUp;
+        bool head = false;
         bool narrowEnd = false;
         bool dual = false;
         bool shaft = false;
@@ -267,6 +269,7 @@ namespace MWPhysics
         bool holdObject(const MWWorld::Ptr& ptr, const MWWorld::Ptr& holder, HeldObjectInfo* info = nullptr,
             unsigned fragment = 0);
         const HeldObjectGrip& getHeldGrip() const { return mHeldGrip; }
+        const osg::Matrixf& getHeldPickupTransform() const { return mHeldPickupTransform; }
         unsigned getHeldFragment() const { return mHeldFragment; }
         void poseHeldFragment(MWRender::Animation& animation) const;
         void placeHeldObject(const osg::Vec3f& origin, const osg::Quat& rotation, float duration);
@@ -506,6 +509,7 @@ namespace MWPhysics
         unsigned mHeldFragment = 0;
         float mHeldMass = 0.f;
         HeldObjectGrip mHeldGrip;
+        osg::Matrixf mHeldPickupTransform;
         osg::Vec3f mHeldLastCenter, mHeldVelocity;
         bool mHeldPoseReady = false;
 

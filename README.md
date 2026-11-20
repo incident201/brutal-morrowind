@@ -43,17 +43,24 @@ the Brutal Morrowind settings.
 Aim at small loose items and press `G` (rebindable) to grab and carry them in one
 or two hands while your equipped weapon and shield are hidden and restored after
 dropping (`G`) or throwing (`Use` / left click). First-person carry and throw
-animations, camera motion and impact sounds come from Dark Messiah; hits stagger
-NPCs by hit location (head or body), and throwing with full adrenaline spends the
-charge to knock living targets into a physical ragdoll.
+animations, camera motion and impact sounds come from Dark Messiah. The hands
+reach towards the object before lifting it, and a severed head faces the player
+when held. Hits stagger NPCs by hit location (head or body). Throwing with full
+adrenaline spends the charge to knock living targets into a physical ragdoll.
 
-NPCs below 15% health fight wounded with Dark Messiah's wounded guard animations:
-their guard gives way easily, blows stagger them, and a charged blow, kick or
-shield bash can knock them down. Below
-5% they flee for up to 20 seconds, then fight on. Argonians and Khajiit keep their
+Spears and halberds sweep like Dark Messiah's staff when you attack during a
+sidestep. A charged thrust draws back before release. A nearby NPC charges in
+response to a guard held for at least four seconds. A frontal guard can absorb
+that hit with two ninths of base stamina available. Stamina regenerates at one
+third of the normal rate while you hold guard.
+
+NPCs below 30% health fight wounded with Dark Messiah's wounded guard animations.
+Their guard gives way easily, blows stagger them, and a charged blow, kick or
+shield bash can knock them down. A hit that leaves them below 10% makes them flee
+for up to 20 seconds. Argonians and Khajiit keep their
 own stance and walk. Both behaviours have switches in the settings.
 
-This branch uses **Dark Messiah import recipe 16**. Its launcher asks to reimport
+This branch uses **Dark Messiah import recipe 17**. Its launcher asks to reimport
 older data. See `CHANGELOG.md` for the other unreleased changes.
 
 ## Requirements

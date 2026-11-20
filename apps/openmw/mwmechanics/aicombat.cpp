@@ -60,6 +60,7 @@ namespace MWMechanics
         constexpr float DmDodgeChance = 0.5f; // base_dodge_chance, against an incoming attack
         constexpr float DmPreventiveDodgeChance = 0.2f;
         constexpr float DmDodgeDuration = 0.5f;
+        constexpr float DmGuardChargeDelay = 4.f;
 
         bool darkMessiahMelee(const MWWorld::Ptr& actor, bool ranged)
         {
@@ -195,6 +196,7 @@ namespace MWMechanics
         else
         {
             clearDefence();
+            storage.mDmTargetGuardTime = 0.f;
             updateFleeing(actor, target, duration, characterController.getSupportedMovementDirections(), storage);
         }
         storage.mActionCooldown -= duration;
@@ -789,8 +791,13 @@ namespace MWMechanics
         const bool available = !stats.isDead() && !stats.isParalyzed() && !stats.getKnockedDown()
             && !stats.mBrutalClinchActive && now >= stats.mBrutalGuardBrokenUntil && !exhausted
             && mLOS && getDistanceToBounds(actor, target) <= mAttackRange + 48.f;
-        mDmTargetGuardTime = targetStats.mBrutalBlockRaised && target == getPlayer()
-            ? mDmTargetGuardTime + duration : 0.f;
+        // Count only a continuous guard the NPC can see at close range. A
+        // newly raised guard starts over even if the lowered frame fell between updates.
+        const bool observingGuard = available && target == getPlayer() && targetStats.mBrutalBlockRequested
+            && targetStats.mBrutalBlockRaised;
+        mDmTargetGuardTime = observingGuard
+            ? std::min(mDmTargetGuardTime + duration, static_cast<float>(now - targetStats.mBrutalBlockRaisedAt))
+            : 0.f;
         if (stats.mBrutalNpcGuardRequested)
         {
             // A visible windup/release is still pressure even after the player
@@ -874,7 +881,7 @@ namespace MWMechanics
                 mStrength = Misc::Rng::rollClosedProbability(prng);
                 const bool darkMessiah = darkMessiahMelee(actor, distantCombat);
                 auto& stats = actor.getClass().getCreatureStats(actor);
-                stats.mBrutalGuardBreakingAttack = darkMessiah && mDmTargetGuardTime >= 2.f;
+                stats.mBrutalGuardBreakingAttack = darkMessiah && mDmTargetGuardTime >= DmGuardChargeDelay;
                 mDmChargedHold = stats.mBrutalGuardBreakingAttack ? .45f : 0.f;
                 if (darkMessiah)
                     mStrength = 1.f; // guards play the whole authored wind-up

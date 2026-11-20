@@ -2291,8 +2291,14 @@ namespace MWMechanics
                             && mAnimation->getTextKeyTime(mCurrentWeapon + ": slashright max attack") >= 0.f
                             && mAnimation->getTextKeyTime(mCurrentWeapon + ": slashright hit") >= 0.f;
                         mBrutalNeutralAttack = false;
-                        if (brutalFastAvailable())
+                        const bool spear = mPtr == getPlayer() && mWeaponType == ESM::Weapon::SpearTwoWide
+                            && brutalDmFirstPerson()
+                            && brutalActiveKey("brutal spear grip");
+                        if (brutalFastAvailable() || spear)
+                        {
                             chooseBrutalChargedAttack();
+                            mBrutalSpearStrafe = getBrutalSpearStrafe();
+                        }
                         const std::string attackAnimation = getAttackAnimationType();
                         startKey = attackAnimation + ' ' + startKey;
                         stopKey = attackAnimation + " max attack";
@@ -3297,15 +3303,7 @@ namespace MWMechanics
             {
                 const float strideTo = mAnimation->getCurrentTime(mCurrentWeapon);
                 const bool quick = mBrutalFast == BrutalFast::Attack;
-                std::string section = "thrust";
-                if (quick)
-                {
-                    section = std::string("fast") + static_cast<char>('a' + mBrutalFastIndex - 1);
-                    const float loop = mAnimation->getTextKeyTime(mCurrentWeapon + ": fastloopa start");
-                    if (mBrutalFastIndex == 1 && loop >= 0.f && strideFrom >= loop)
-                        section = "fastloopa";
-                }
-                const std::string prefix = mCurrentWeapon + ": " + section;
+                const std::string prefix = mCurrentWeapon + ": " + (quick ? mBrutalFastClip : "thrust");
                 const float begin = mAnimation->getTextKeyTime(prefix + " plant");
                 const float end = mAnimation->getTextKeyTime(prefix + " weight forward");
                 if (begin >= 0.f && end > begin && strideTo > strideFrom && strideTo > begin && strideFrom < end)
@@ -4076,6 +4074,7 @@ namespace MWMechanics
         auto& stats = mPtr.getClass().getCreatureStats(mPtr);
         if (phase == BrutalFast::Attack)
         {
+            mBrutalFastClip = key;
             // Announce the authored stroke before its impact, rather than
             // leaving defenders to react to the preceding combo's hit key.
             for (const auto& [name, kind] : std::array<std::pair<const char*, int>, 4>{ {
@@ -4101,6 +4100,17 @@ namespace MWMechanics
         mBrutalFastGrace = 0.f;
         mBrutalFastResumeIndex = 0;
         mBrutalFastWindupIndex = 0;
+        mBrutalSpearStrafe = 0;
+    }
+
+    int CharacterController::getBrutalSpearStrafe() const
+    {
+        if (mWeaponType != ESM::Weapon::SpearTwoWide)
+            return 0;
+        const auto* move = mPtr.getClass().getMovementSettings(mPtr).mPosition;
+        if (std::abs(move[0]) <= std::abs(move[1]) + .2f)
+            return 0;
+        return move[0] < 0.f ? -1 : 1;
     }
 
     void CharacterController::startBrutalFastNext()
@@ -4113,6 +4123,8 @@ namespace MWMechanics
         if (next > last)
             next = last == 5 && !dagger ? 2 : 1;
         const bool spearLoop = next == 1 && mBrutalFastIndex == last && brutalActiveKey("fastloopa start");
+        const std::string side = mBrutalSpearStrafe < 0 ? "faststrafeleft" : "faststraferight";
+        const bool spearSweep = mBrutalSpearStrafe != 0 && brutalActiveKey(side + " start");
         mBrutalFastIndex = next;
         resetBrutalFastContinuation();
         mBrutalFastQueued = false;
@@ -4122,7 +4134,8 @@ namespace MWMechanics
         mAttackSuccess = false;
         mAttackVictim = MWWorld::Ptr();
         const char letter = static_cast<char>('a' + next - 1);
-        startBrutalFastClip(spearLoop ? "fastloopa" : std::string("fast") + letter, BrutalFast::Attack);
+        const std::string attack = spearSweep ? side : spearLoop ? "fastloopa" : std::string("fast") + letter;
+        startBrutalFastClip(attack, BrutalFast::Attack);
     }
 
     bool CharacterController::startBrutalChargedHold()
@@ -4160,6 +4173,8 @@ namespace MWMechanics
         }
         const bool button = getAttackingOrSpell();
         const bool pressed = button && !mBrutalFastButton;
+        if (pressed && !mBrutalFastQueued)
+            mBrutalSpearStrafe = getBrutalSpearStrafe();
         mBrutalFastButton = button;
         const float dt = MWBase::Environment::get().getFrameDuration();
         mBrutalFastHeld = pressed || !button ? 0.f : mBrutalFastHeld + dt;
@@ -4356,12 +4371,12 @@ namespace MWMechanics
             mBrutalChargedHold, mBrutalGuardCharge, mBrutalUseHeld, mBrutalAcceptedStrikes });
         const auto& stats = mPtr.getClass().getCreatureStats(mPtr);
         const bool fast = mBrutalFast == BrutalFast::Attack;
-        const std::string attack = fast ? std::string("fast") + char('a' + std::max(1, mBrutalFastIndex) - 1)
-                                       : getAttackAnimationType();
+        const std::string attack = fast ? mBrutalFastClip : getAttackAnimationType();
         // Every striking sword can meet a wall. The source has only three recoil
         // directions; quick slashes use their corresponding side, overhead/backward
         // strikes use the neutral recoil with the actual contact-plane response.
-        const std::string key = fast ? (mBrutalFastIndex % 2 ? "bouncer" : "bouncel")
+        const bool fastRight = attack == "faststrafeleft" || (attack != "faststraferight" && mBrutalFastIndex % 2 != 0);
+        const std::string key = fast ? (fastRight ? "bouncer" : "bouncel")
             : attack == "slash" ? "bouncel" : attack == "slashright" ? "bouncer" : "bounce";
         const float time = mAnimation->getCurrentTime(mCurrentWeapon);
         const float start = mAnimation->getTextKeyTime(mCurrentWeapon + ": " + attack + (fast ? " start" : " max attack"));

@@ -210,6 +210,7 @@ namespace MWMechanics
         };
         BrutalFast mBrutalFast{ BrutalFast::None };
         int mBrutalFastIndex{ 0 }; // First_basic chain counter: 1 is A.
+        std::string mBrutalFastClip;
         bool mBrutalFastQueued{ false };
         bool mBrutalFastButton{ false };
         float mBrutalFastHeld{ 0.f };
@@ -218,6 +219,7 @@ namespace MWMechanics
         float mBrutalFastGrace{ 0.f };
         int mBrutalFastResumeIndex{ 0 };
         int mBrutalFastWindupIndex{ 0 };
+        int mBrutalSpearStrafe{ 0 }; // Side sampled when the next stroke is pressed.
         bool mBrutalNeutralAttack{ false }; // Stationary charged swing: its own source clip.
         bool mBrutalGuardPress{ false }; // Attack pressed while the guard is up.
         std::uint64_t mBrutalWallSwing = 0;
@@ -423,6 +425,7 @@ namespace MWMechanics
         bool isBrutalWallWeapon() const;
         void startBrutalFastClip(const std::string& key, BrutalFast phase);
         void startBrutalFastNext();
+        int getBrutalSpearStrafe() const;
         void resetBrutalFastContinuation();
         bool startBrutalChargedHold();
         void updateBrutalFast(bool& animPlaying, float& complete);

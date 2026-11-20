@@ -1138,6 +1138,11 @@ namespace MWPhysics
         return poses;
     }
 
+    const osg::Matrixf& Ragdoll::getHeadBoneFromBody() const
+    {
+        return mParts[sHeadPart]->mRenderFromBody;
+    }
+
     bool Ragdoll::applyKick(std::size_t part, const osg::Vec3f& velocity, const osg::Vec3f& point)
     {
         if (!mRegistered || part >= mParts.size()) return false;
