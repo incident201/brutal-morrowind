@@ -1241,7 +1241,9 @@ namespace MWRender
     void NpcAnimation::updateWeaponBlood(float dt)
     {
         auto* store = BrutalBlood::get();
-        if (!store || mBodyAwareness)
+        // The inventory preview shares the player's item references, but its
+        // attachments belong to a separate scene and have no world blade pose.
+        if (!store || mBodyAwareness || mInsert.get() != mPtr.getRefData().getBaseNode())
             return;
         const bool enabled = Settings::game().mBrutalEnabled && Settings::game().mBrutalWeaponBlood;
         const auto world = MWBase::Environment::get().getWorld();

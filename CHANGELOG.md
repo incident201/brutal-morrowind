@@ -1,6 +1,7 @@
 Brutal Morrowind (unreleased)
 ----------------------------
 
+    Inventory: Fix repeated frame errors when opening the inventory with blood on an equipped weapon.
     Combat: Wounded NPCs from Dark Messiah. Below 15% health an NPC stands, walks and attacks with the wounded guard's animations (Argonians and Khajiit keep their own stance and walk). Its sword parry gives way half the time and its shield block four times in five; any blow may stagger it, and a charged blow, a kick or a shield bash knocks it down three times in ten. A blow that leaves an NPC below 5% health makes it flee for up to 20 seconds. Both have their own settings. Recipe 16 requires reimporting the Dark Messiah assets.
     Sounds: A separate Hero voice setting turns off the hero's grunts on adrenaline strikes, super kicks, throws and jumps while keeping the other Dark Messiah sounds.
     Sounds: A female player character grunts with female voices from Dark Messiah instead of its male hero. Recipe 15 requires reimporting the Dark Messiah assets.
