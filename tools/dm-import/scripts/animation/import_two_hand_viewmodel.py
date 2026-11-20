@@ -82,13 +82,14 @@ def charge_weight(time, marks, draw_time, return_start, return_stop):
     return smoothstep((time - start) / draw_time) * smoothstep((return_stop - time) / (return_stop - return_start))
 
 
-def blend_with_sword(pose, paired, weight):
-    # Keep the closed right fist and weapon socket. Let the authored arm motion
-    # carry the swing, with the left hand opening and returning to the paired grip.
+def blend_with_sword(pose, paired, weight, *, sword_grip, left_pose=None):
+    # The thrust needs the sword's own wrist compensation to follow the line
+    # of aim. The chop can keep the closed paired fist and weapon socket.
     for name, transform in paired.items():
-        if name == ITEM or name.startswith(bone('R', 'Finger')):
+        if not sword_grip and (name == ITEM or name.startswith(bone('R', 'Finger'))):
             continue
-        sword = pose.local(name)
+        source = left_pose if left_pose is not None and name.startswith(bone('L', '')) else pose
+        sword = source.local(name)
         if weight >= 1.:
             paired[name] = sword
         else:
@@ -119,6 +120,34 @@ class Pose:
         if name not in self.cache:
             self.cache[name] = self.world(self.rig.parents[name]) @ self.local(name)
         return self.cache[name]
+
+
+def blend_thrust(pose, paired, section, weight):
+    # The last part of the sword's draw pulls a short axe head out of view.
+    # Stop the draw before that point and keep the extension on release.
+    start, peak, release = section['start'], section['max attack'], section['min hit']
+    draw_brake = .30
+    brake_start = peak - draw_brake
+    extension_start, extension_end = release + .05, release + .16
+    time = pose.time
+    sword, left = pose, None
+    if time <= peak:
+        if time > brake_start:
+            drawn = time - (time - brake_start) ** 2 / (2 * draw_brake)
+            sword = Pose(pose.rig, pose.channels, drawn)
+        # Stop the free hand while it is still on the left. The sword donor's
+        # later reach would cross the less deeply drawn right wrist.
+        left_draw = section['min attack'] - start
+        remaining = (peak - time) / (peak - start)
+        left_time = start + left_draw * (1. - remaining ** ((peak - start) / left_draw))
+        left = Pose(pose.rig, pose.channels, left_time)
+    elif time < extension_end or section['hold start'] <= time <= section['hold stop']:
+        sword = Pose(pose.rig, pose.channels, peak - draw_brake / 2)
+        left = Pose(pose.rig, pose.channels, section['min attack'])
+    blend_with_sword(sword, paired, weight, sword_grip=True, left_pose=left)
+    if extension_start < time < extension_end:
+        extension = smoothstep((time - extension_start) / (extension_end - extension_start))
+        blend_with_sword(pose, paired, extension, sword_grip=True)
 
 
 class Grasp:
@@ -335,19 +364,19 @@ def convert(source, target, retarget):
     running = group.startswith('run')
     sprint_start = Pose(retarget.rig, channels, 0.).world(ITEM) if group == 'brutal_sprint1h' else None
     windup_sections = []
-    chop = None
+    single_hand_sections = {}
     swing_start = 0. if falling else np.inf
     if group == 'weapononehand':
         charged = {}
-        for attack in ('chop', *WINDUPS):
+        for attack in ('chop', 'thrust', *WINDUPS):
             prefix = f'{group}: {attack} '
             charged[attack] = {label.removeprefix(prefix): float(time)
                                for time, labels in marks.keys for label in labels.splitlines()
                                if label.startswith(prefix)}
-        chop = charged['chop']
-        swing_start = chop['start']
+        swing_start = charged['chop']['start']
         windup_sections = [(charged[attack], *bias) for attack, bias in WINDUPS.items()]
-    chop_guard = None
+        single_hand_sections = {attack: charged[attack] for attack in ('chop', 'thrust')}
+    paired_guards = {}
     poses = []
     previous = None
     for time in times:
@@ -368,17 +397,20 @@ def convert(source, target, retarget):
                 windup = offset, tilt, weight
         result = retarget.adapt(pose, turn, attacking, contest, time >= swing_start,
                                 falling, windup=windup, running=running, sprint_start=sprint_start)
-        if chop:
-            recover, end = chop['hit'] + .25, chop['large follow stop']
-            if time == chop['start']:
-                chop_guard = result
+        for attack, section in single_hand_sections.items():
+            recover, end = section['hit'] + .25, section['large follow stop']
+            if time == section['start']:
+                paired_guards[attack] = result
             elif recover < time <= end:
                 # Regrip the drawn guard as the sword settles, without fitting a
                 # second pair of arms to the changing wrist during recovery.
-                result = chop_guard.copy()
-            weight = charge_weight(time, chop, .24, recover, end)
+                result = paired_guards[attack].copy()
+            weight = charge_weight(time, section, .24, recover, end)
             if weight:
-                blend_with_sword(pose, result, weight)
+                if attack == 'thrust':
+                    blend_thrust(pose, result, section, weight)
+                else:
+                    blend_with_sword(pose, result, weight, sword_grip=False)
         poses.append(result)
         previous = turn
     names = [extra.string_data for extra in stream.root.extra_datas if isinstance(extra, nif.NiStringExtraData)]

@@ -60,7 +60,7 @@ shield bash can knock them down. A hit that leaves them below 10% makes them fle
 for up to 20 seconds. Argonians and Khajiit keep their
 own stance and walk. Both behaviours have switches in the settings.
 
-This branch uses **Dark Messiah import recipe 21**. Its launcher asks to reimport
+This branch uses **Dark Messiah import recipe 22**. Its launcher asks to reimport
 older data. See `CHANGELOG.md` for the other unreleased changes.
 
 ## Requirements

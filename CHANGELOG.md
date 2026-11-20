@@ -1,7 +1,8 @@
 Brutal Morrowind (unreleased)
 ----------------------------
 
-    First-person two-handed swords, battle axes and warhammers keep the neutral charge low and prepare the left-step sweep on the right. The forward chop follows the one-handed sword motion and returns to the paired grip. These animations use import recipe 21.
+    First-person two-handed swords, battle axes and warhammers release the left hand during the back-step thrust and return to the paired grip. Quick swings play at 86 percent of the previous rate. These animations use import recipe 22.
+    First-person two-handed swords, battle axes and warhammers keep the neutral charge low and prepare the left-step sweep on the right. The forward chop follows the one-handed sword motion and returns to the paired grip.
     First-person two-handed swords, battle axes and warhammers sway less while running and are carried low in the right hand while sprinting.
     First-person two-handed swords, battle axes and warhammers swing through a wider arc with both hands on the grip. Pressing attack in midair raises the weapon and delivers a falling strike on release or landing.
     After the player's death, the scene starts darkening later and eases to black behind the menu, which opens at the same time as before.

@@ -4102,10 +4102,11 @@ namespace MWMechanics
         const bool sliding = stats.mBrutalSlidePhase != 0;
         MWRender::Animation::AnimPriority priority(Priority_Weapon);
         priority[MWRender::BoneGroup_LowerBody] = Priority_WeaponLowerBody;
+        const float speed = phase == BrutalFast::Attack && usesBrutalPairedWeapon() ? .86f : 1.f;
         mAnimation->disable(mCurrentWeapon);
         playBlendedAnimation(mCurrentWeapon, priority,
             sliding ? MWRender::BlendMask_LeftArm | MWRender::BlendMask_RightArm : int(MWRender::BlendMask_All), false,
-            1.f, key + " start", key + " stop", 0.f, 0);
+            speed, key + " start", key + " stop", 0.f, 0);
         mBrutalFast = phase;
     }
 
