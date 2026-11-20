@@ -24,8 +24,11 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import import_viewmodel as iv  # noqa: E402
+from arm_steering import ease  # noqa: E402
 from import_two_hand_viewmodel import native_starts  # noqa: E402
-from spear_dm import SWEEPS  # noqa: E402
+from spear_dm import (  # noqa: E402
+    LEAVE, RATE, SWEEPS, SWEEP_ENTRY, SWEEP_RETURN, SWING_LEAVE, recovery_clock, sweep_clock,
+)
 
 LOCOMOTION = ([f'@walk_{d}' for d in ('N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW')]
               + [f'@run_{d}' for d in ('N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW')]
@@ -151,25 +154,48 @@ def main():
     # for the actions still played from that set, including the ground finisher.
     staff = sets['brutal_fp_staff']
     staff_keys = native_starts(a.arms / 'Animations/brutal_fp_staff/weapononehand.kf')
-    spear_parts = []
-    for part in staff['weapononehand']:
-        donor = part['start'].split(' ', 1)[0]
-        if donor in SWEEPS:
-            sweep, _ = SWEEPS[donor]
-            start, swing, stop = (staff_keys[f'weapononehand: {donor} {key}'] for key in ('start', 'swing', 'stop'))
-            source = clips[part['clip']]
-            # The spear joins the real attack at "swing". Remove the old
-            # staff windup from the camera clip on the same normalized clock.
-            last = min(round(part['duration'] * source['fps']), len(source['frames']) - 1)
-            first = round(last * (swing - start) / (stop - start))
-            frames = source['frames'][first:last + 1]
-            name = part['clip'] + '_spear_swing'
-            duration = (len(frames) - 1) / source['fps']
-            clips[name] = dict(source, frames=frames)
-            spear_parts.append(dict(start=sweep + ' swing', stop=sweep + ' recovery', clip=name,
-                                    duration=duration, natural=duration))
-        elif not part['start'].startswith(('thrust ', 'fast')):
-            spear_parts.append(part)
+    spear_parts = [part for part in staff['weapononehand']
+                   if not part['start'].startswith(('thrust ', 'fast')) and part['start'] != 'slash min hit']
+    slash = next((part for part in staff['weapononehand'] if part['start'] == 'slash min hit'), None)
+    if slash:
+        def key(name):
+            return staff_keys[f'weapononehand: {name}']
+
+        source = clips[slash['clip']]
+        first, last = key(slash['start']), key(slash['stop'])
+        frames = np.array(source['frames'])
+
+        def head(t):
+            i = float(np.clip((t - first) * slash['duration'] * source['fps'] / (last - first), 0, len(frames) - 1))
+            lower = int(i)
+            return (1. - (i - lower)) * frames[lower] + (i - lower) * frames[min(lower + 1, len(frames) - 1)]
+
+        def camera_part(name, start_key, stop_key, duration, clock):
+            count = max(1, int(np.ceil(duration * RATE)))
+            samples = []
+            for elapsed in np.linspace(0., duration, count + 1):
+                source_time, weight = clock(elapsed)
+                samples.append((head(source_time) * weight).tolist())
+            clips[name] = dict(fps=count / duration, loop=False, frames=samples)
+            spear_parts.append(dict(start=start_key, stop=stop_key, clip=name, duration=duration, natural=duration))
+
+        # The head follows the same moving source window as the hands. Fade
+        # back to neutral during the recovery instead of cutting off the turn.
+        for name, (_, strike, lead, follow) in SWEEPS.items():
+            before, after = key(strike) - lead, key(strike) + follow
+            camera_part(name + '_head', name + ' start', name + ' stop', SWEEP_ENTRY + lead + follow + SWEEP_RETURN,
+                        lambda e: sweep_clock(e, before, after))
+
+        leave = key('slash hit2') + SWING_LEAVE
+
+        def charged_clock(elapsed):
+            time = first + elapsed
+            if time < leave:
+                return time, ease(elapsed / .12)
+            recovery = time - leave
+            return leave + recovery_clock(recovery, LEAVE), 1. - ease(recovery / LEAVE)
+
+        camera_part('spear_slash_head', 'slash min hit', 'slash large follow stop', leave + LEAVE - first, charged_clock)
     sets['brutal_fp_spear'] = {**staff, 'weapononehand': spear_parts}
 
     def lua(value, indent=''):

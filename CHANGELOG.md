@@ -1,6 +1,7 @@
 Brutal Morrowind (unreleased)
 ----------------------------
 
+    Polearm side attacks use both front sweeps from the Dark Messiah staff. The hands and camera ease into each sweep and follow it into recovery. These animations use import recipe 18.
     Spears and halberds use Dark Messiah staff sweeps while stepping sideways. A charged thrust visibly draws the haft back while standing or stepping forward or backward. Raising, lowering and cancelling guard use a continuous path.
     NPCs wait for four seconds of continuous player guard at close range before choosing a charged response. A held shield or weapon guard absorbs a charge at a cost of two ninths of base stamina. Holding guard restores stamina at one third of the normal rate.
     Weapon blood spreads across model seams with soft edges. Dry floor and wall splatters keep their shape and colour without a visible decal rectangle.

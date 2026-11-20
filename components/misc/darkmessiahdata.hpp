@@ -16,7 +16,7 @@
 namespace Misc::DarkMessiahData
 {
     // Raise together with RECIPE_VERSION in tools/dm-import/dm_import.py.
-    inline constexpr int sRecipe = 17;
+    inline constexpr int sRecipe = 18;
 
     inline constexpr std::string_view sMarker = "dm-import-ready.json";
 

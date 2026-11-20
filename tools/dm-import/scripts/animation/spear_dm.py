@@ -20,10 +20,11 @@ from pathlib import Path
 import numpy as np
 
 from import_two_hand_viewmodel import (
-    Grasp, ITEM, Pose, Rig, inverse, keys, lerp, load, matrix, matrix_quat, native_starts, nif, quat_matrix,
-    sample, slerp, tracks, turn_about,
+    Grasp, ITEM, Pose, Rig, basis, inverse, keys, lerp, load, matrix, matrix_quat, native_starts, nif, quat_matrix,
+    sample, slerp, tracks, turn_about, unit,
 )
 from arm_steering import LocalPose, blend, ease, steer_arm
+from import_staff_native_grasp import swing as rotate_between
 
 # The straight jab inside DM's charged staff attack, relative to its hit2 key.
 JAB_CHAMBER, JAB_END = -.19, .18   # deepest draw (both hands on the haft), end of the steady hold
@@ -33,16 +34,23 @@ RATE = 60.
 CHARGE_DRAW = np.array((8., -15., -7.))
 CHARGE_SLIDE = 19.      # the front palm lets the shaft slide as the rear palm pulls
 CHARGE_RELEASE = .16   # time to regain the donor's drive after the extra draw
-SWEEPS = {'fasta': ('faststrafeleft', 'slashright'), 'fastc': ('faststraferight', 'slash')}
-SWEEP_ENTRY, SWEEP_RETURN = .18, .32
+SWEEPS = {
+    # Use the two passes across the front in the staff's charged slash. The
+    # quick staff combo twirls the haft behind the player between attacks.
+    'faststrafeleft': ('slashright', 'slash hit2', .136, .060),
+    'faststraferight': ('slash', 'slash hit', .106, .070),
+}
+SWEEP_ENTRY, SWEEP_RETURN = .35, .46
+SWEEP_LEAD, SWEEP_TAIL = .065, .112
+SWEEP_DIP = (0., 1., -5.)            # clear the view without folding the rear arm against its shoulder
 # The staff's own sections (side swing, draw, sheathe) start and end in the
 # staff guard, haft across the view with the point up and left. Blending from
 # the spear guard straight into it swings the haft through the camera in a
 # few frames. DM's side swing passes through a point-forward pose twice: the
 # early wind-up (SWING_JOIN) and the recovery after the second impact
 # (SWING_LEAVE). The spear joins and leaves the swing there.
-SWING_JOIN, SWING_LEAVE = .5, .46     # after 'slash start' / after 'slash hit2'
-JOIN, LEAVE = .4, .4                  # blend lengths into and out of the swing
+SWING_JOIN, SWING_LEAVE = .5, .24     # after 'slash start' / after 'slash hit2'
+JOIN, LEAVE = .53, .54                # blend lengths into and out of the swing
 DIP = (0., 6., -16.)                  # the hands' detour under the eye during those blends
 DRAW_EARLY = .1                       # leave DM's draw this long before the attach key
 # A person never strikes the same spot twice. Each quick stroke turns both
@@ -53,6 +61,23 @@ DRAW_EARLY = .1                       # leave DM's draw this long before the att
 AIM = {'fasta': (5.5, -2.2, -8.), 'fastb': (-6., 1.8, 9.), 'fastc': (1.6, -5.2, 4.),
        'fastd': (-3.6, -3., -10.), 'fastloopa': (6.4, 1., 6.), 'thrust': (0., -.8, 0.),
        'neutral': (-1.5, -1.5, -3.)}
+
+
+def recovery_clock(elapsed, duration):
+    u = min(1., max(0., elapsed / duration))
+    return SWEEP_TAIL * (1. - (1. - u)**(duration / SWEEP_TAIL))
+
+
+def sweep_clock(elapsed, start, stop):
+    """Donor time and weight, with a matching clock speed on both joins."""
+    if elapsed < SWEEP_ENTRY:
+        u = max(0., elapsed / SWEEP_ENTRY)
+        return start - SWEEP_LEAD * (1. - u**(SWEEP_ENTRY / SWEEP_LEAD)), ease(u)
+    elapsed -= SWEEP_ENTRY
+    if elapsed <= stop - start:
+        return start + elapsed, 1.
+    recovery = elapsed - (stop - start)
+    return stop + recovery_clock(recovery, SWEEP_RETURN), 1. - ease(recovery / SWEEP_RETURN)
 
 
 def sampled_poses(segments):
@@ -312,10 +337,12 @@ def build(arms, body=None):
         pose and the guard can be near 180 degrees, so the shortest way round
         changes side from one sample to the next. Each channel keeps the side
         it starts on for the whole transition."""
-        def __init__(self, held=True, dip=DIP):
+        def __init__(self, held=True, dip=DIP, follow_elbows=False):
             self.signs = {}
             self.held = held
             self.dip = np.array(dip)
+            self.follow_elbows = follow_elbows
+            self.elbow_turns = {}
 
         def turn(self, key, a, b, w):
             qa, qb = matrix_quat(a[:3, :3]), matrix_quat(b[:3, :3])
@@ -333,8 +360,56 @@ def build(arms, body=None):
                 q = (np.sin((1 - w) * angle) * qa + np.sin(w * angle) * qb) / np.sin(angle)
             return matrix(quat_matrix(q[[1, 2, 3, 0]]), a[:3, 3] + w * (b[:3, 3] - a[:3, 3]))
 
+        def arm(self, side, start, end, base, grasp, hand, weight, parent):
+            clavicle, upper, fore, wrist = grasp.names
+            clavicle_world = base.world(clavicle).copy()
+            shoulder = base.world(upper)[:3, 3].copy()
+            delta = hand[:3, 3] - shoulder
+            distance = np.linalg.norm(delta)
+            axis = delta / distance
+            upper_length, fore_length = grasp.segments
+            reach = np.clip(distance, abs(upper_length - fore_length) + .35, upper_length + fore_length - .35)
+            excess = distance - reach
+            shoulder += axis * excess
+            clavicle_world[:3, 3] += axis * excess
+
+            def arm_frame(pose):
+                u, f, h = (pose.world(n) for n in (upper, fore, wrist))
+                first, second = f[:3, 3] - u[:3, 3], h[:3, 3] - f[:3, 3]
+                line = unit(first + second)
+                pole = unit(first - line * (line @ first))
+                normal = np.cross(first, second)
+                first_offset = basis(first, normal).T @ u[:3, :3]
+                second_offset = basis(second, normal).T @ f[:3, :3]
+                return rotate_between(line, axis) @ pole, first_offset, second_offset
+
+            from_pole, from_upper, from_fore = arm_frame(start)
+            to_pole, to_upper, to_fore = arm_frame(end)
+            # Blend around the arm's bend circle. Interpolating two elbow
+            # positions can pass through the wrist axis and flip the upper arm.
+            turn = np.degrees(np.arctan2(axis @ np.cross(from_pole, to_pole), from_pole @ to_pole))
+            if side in self.elbow_turns:
+                turn += 360. * round((self.elbow_turns[side] - turn) / 360.)
+            self.elbow_turns[side] = turn
+            pole = turn_about(axis, weight * turn) @ from_pole
+            along = (upper_length**2 - fore_length**2 + reach**2) / (2. * reach)
+            elbow = shoulder + axis * along + pole * np.sqrt(max(0., upper_length**2 - along**2))
+            first, second = elbow - shoulder, hand[:3, 3] - elbow
+            normal = np.cross(first, second)
+
+            def joint(name, direction, origin, frame_a, frame_b):
+                offset = self.turn(name, matrix(frame_a, (0., 0., 0.)), matrix(frame_b, (0., 0., 0.)), weight)
+                return matrix(basis(direction, normal) @ offset[:3, :3], origin)
+
+            upper_world = joint(upper + ' bend', first, shoulder, from_upper, to_upper)
+            fore_world = joint(fore + ' bend', second, elbow, from_fore, to_fore)
+            return {clavicle: inverse(parent) @ clavicle_world, upper: inverse(clavicle_world) @ upper_world,
+                    fore: inverse(upper_world) @ fore_world, wrist: inverse(fore_world) @ hand}
+
         def __call__(self, a, b, w):
             w = min(1., max(0., w))
+            if self.follow_elbows and w in (0., 1.):
+                return a if w == 0. else b
             out = {n: self.turn(n, a[n], b[n], w) for n in animated}
             if not self.held:
                 return out
@@ -349,8 +424,10 @@ def build(arms, body=None):
                 grip = self.turn('grip ' + side, inverse(A.world(ITEM)) @ A.world(hand),
                                  inverse(B.world(ITEM)) @ B.world(hand), w)
                 neck = now.world(rig.parents[grasp.names[0]])
-                # The blended bones are both ends: steer_arm only reaches the palm.
-                out.update(steer_arm(now, now, grasp, spear @ grip, 0., parent=neck))
+                if self.follow_elbows:
+                    out.update(self.arm(side, A, B, now, grasp, spear @ grip, w, neck))
+                else:
+                    out.update(steer_arm(now, now, grasp, spear @ grip, 0., parent=neck))
                 now = LocalPose(rig, out)
             out[ITEM] = inverse(now.world(rig.parents[ITEM])) @ spear
             return out
@@ -362,33 +439,35 @@ def build(arms, body=None):
     swing, wound = marks['slash start'], marks['slash max attack']
     joined = swing + SWING_JOIN
     section(swing, wound - swing,
-            lambda e, mix=Mix(): mix(guard_local, at(joined + e / (wound - swing) * (wound - joined)), ease(min(1., e / JOIN))),
+            lambda e, mix=Mix(follow_elbows=True):
+                mix(guard_local, at(joined + e / (wound - swing) * (wound - joined)), ease(e / JOIN)),
             'slash', [(0., 'start'), (marks['slash min attack'] - swing, 'min attack'),
                       (wound - swing, 'max attack')])
     leave = marks['slash hit2'] + SWING_LEAVE
-    section(leave, LEAVE, lambda e, mix=Mix(): mix(at(leave + e), guard_local, ease(e / LEAVE)),
+    section(leave, LEAVE, lambda e, mix=Mix(dip=SWEEP_DIP, follow_elbows=True):
+                mix(at(leave + recovery_clock(e, LEAVE)), guard_local, ease(e / LEAVE)),
             'slash', [(LEAVE, size + ' follow stop') for size in ('small', 'medium', 'large')])
 
-    # Staff A and C swing in opposite directions. Cut away the combo-specific
-    # windup, join their striking frames from the spear guard, and recover to
-    # the same guard so taps can chain into either sweep or thrust.
-    for donor, (name, kind) in SWEEPS.items():
-        strike, contact, stop, recovery = (marks[key] for key in
-            (f'{donor} swing', f'{donor} {kind} hit', f'{donor} stop', f'fastend{donor[-1]} start'))
-        finish = marks[f'fastend{donor[-1]} stop']
-        strike_start = cursor + SWEEP_ENTRY
-        strike_end = strike_start + (stop - strike)
-        entrance = at(strike)
-        section(cursor, SWEEP_ENTRY,
-                lambda e, mix=Mix(), entry=entrance: mix(guard_local, entry, ease(e / SWEEP_ENTRY)),
-                name, [(0., 'start')])
-        section(strike_start, stop - strike, lambda e, start=strike: at(start + e), name,
-                [(0., 'swing'), (contact - strike, kind + ' hit')])
-        section(strike_end, SWEEP_RETURN,
-                lambda e, mix=Mix(), a=recovery, b=finish:
-                    mix(at(lerp(a, b, e / SWEEP_RETURN)), guard_local, ease(e / SWEEP_RETURN)),
-                name, [(0., 'recovery'), (SWEEP_RETURN, 'stop')])
-        cursor = strike_end + SWEEP_RETURN + .2
+    for name, (kind, marker, lead, follow) in SWEEPS.items():
+        contact = marks[marker]
+        start, stop = contact - lead, contact + follow
+        recovery = SWEEP_ENTRY + stop - start
+        duration = recovery + SWEEP_RETURN
+
+        def sweep(e, a=start, b=stop, mix_in=Mix(dip=SWEEP_DIP, follow_elbows=True),
+                  mix_out=Mix(dip=SWEEP_DIP, follow_elbows=True)):
+            time, weight = sweep_clock(e, a, b)
+            if weight == 0.:
+                return guard_local
+            authored = at(time)
+            if weight == 1.:
+                return authored
+            return (mix_in if e < SWEEP_ENTRY else mix_out)(guard_local, authored, weight)
+
+        section(cursor, duration, sweep, name,
+                [(0., 'start'), (SWEEP_ENTRY, 'swing'), (SWEEP_ENTRY + lead, kind + ' hit'),
+                 (recovery, 'recovery'), (duration, 'stop')])
+        cursor += duration + .2
 
     # Draw and sheathe: DM's draw brings the haft over the shoulder into the
     # staff guard; the spear leaves that path for its own guard while it is
@@ -426,7 +505,7 @@ def build(arms, body=None):
     rules = source.with_suffix('.yaml').read_text()
     rules = re.sub(r"(to: 'weapononehand:fast(?:end)?[abcd] start'\s+easing: linear\s+duration: )0\.2[0-9]*",
                    r"\g<1>0.045", rules)
-    for name in ('fastloopa', *(name for name, _ in SWEEPS.values())):
+    for name in ('fastloopa', *SWEEPS):
         rules += f"  - from: '*'\n    to: 'weapononehand:{name} start'\n    easing: linear\n    duration: 0.045\n"
     (target / 'weapononehand.yaml').write_text(rules)
 
