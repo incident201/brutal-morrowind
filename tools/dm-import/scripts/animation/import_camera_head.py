@@ -198,6 +198,11 @@ def main():
         camera_part('spear_slash_head', 'slash min hit', 'slash large follow stop', leave + LEAVE - first, charged_clock)
     sets['brutal_fp_spear'] = {**staff, 'weapononehand': spear_parts}
 
+    sword = sets['brutal_fp']
+    for folder, attack in (('brutal_fp_paired', 'weapontwohand'), ('brutal_fp_paired_blunt', 'blunttwohand')):
+        sets[folder] = {name: parts for name, parts in sword.items() if name != 'weapononehand'}
+        sets[folder][attack] = sword['weapononehand']
+
     def lua(value, indent=''):
         if isinstance(value, dict):
             inner = indent+'  '

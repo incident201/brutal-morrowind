@@ -98,6 +98,7 @@ class Grasp:
         self.grip = inverse(native.world(ITEM)) @ hand
         self.segments = (norm(self.elbow - self.shoulder), norm(self.wrist - self.elbow))
         axis = unit(self.wrist - self.shoulder)
+        self.wrist_axis = axis
         self.pole = unit(self.elbow - self.shoulder - axis * (axis @ (self.elbow - self.shoulder)))
         normal = cross(self.elbow - self.shoulder, self.wrist - self.elbow)
         self.upper_frame = basis(self.elbow - self.shoulder, normal).T @ upper[:3, :3]
@@ -113,7 +114,7 @@ class Grasp:
             # Keep the same closed fingers and radial contact on the shaft.
             self.grip[1, 3] -= 7.
 
-    def fit(self, item, elbow_hint=None, swivels=SWIVELS):
+    def fit(self, item, elbow_hint=None, swivels=SWIVELS, smooth_bend=False):
         hand = item @ self.grip
         wrist = hand[:3, 3]
         delta = wrist - self.shoulder
@@ -124,6 +125,12 @@ class Grasp:
         height = np.sqrt(max(0., upper_length ** 2 - projection ** 2))
         base = self.shoulder + axis * projection
         guide = self.pole if elbow_hint is None else elbow_hint - self.shoulder
+        if smooth_bend:
+            # Carry the bind elbow plane with the wrist axis. Projecting a
+            # fixed pole can flip the elbow when a wide swing aligns with it.
+            alignment = 1. + self.wrist_axis @ axis
+            if alignment > 1e-6:
+                guide = self.pole - (self.pole @ axis) / alignment * (self.wrist_axis + axis)
         pole = unit(guide - axis * (axis @ guide))
         tangent = cross(axis, pole)
         desired_fore = hand[:3, :3] @ self.wrist_frame.T
@@ -139,18 +146,28 @@ class Grasp:
             normal = cross(elbow - self.shoulder, wrist - elbow)
             upper_rotation = basis(elbow - self.shoulder, normal) @ self.upper_frame
             fore_rotation = basis(wrist - elbow, normal) @ self.fore_frame
-            twist = np.arctan2(-(fore_rotation[:, 1] @ desired_fore[:, 2])
-                              + fore_rotation[:, 2] @ desired_fore[:, 1],
-                              fore_rotation[:, 1] @ desired_fore[:, 1]
-                              + fore_rotation[:, 2] @ desired_fore[:, 2])
+            twist_sine = fore_rotation[:, 2] @ desired_fore[:, 1] - fore_rotation[:, 1] @ desired_fore[:, 2]
+            if smooth_bend:
+                # Let the twist recede as the forearm and wrist axes oppose
+                # each other, where the angle of the projected wrist is unstable.
+                twist = .525 * twist_sine
+            else:
+                twist = np.arctan2(twist_sine, fore_rotation[:, 1] @ desired_fore[:, 1]
+                                   + fore_rotation[:, 2] @ desired_fore[:, 2])
             return flex, twist, palm_flex, upper_rotation, fore_rotation, elbow
 
-        # A smooth preference through competing elbow solutions avoids a
-        # discontinuous change of pole on successive frames of the swing.
-        flex, twist, palm_flex = np.array([frames(angle)[:3] for angle in swivels]).T
-        costs = flex ** 2 + .23 * twist ** 2 + .38 * swivels ** 2 + self.wrist_bias * palm_flex ** 2
-        weights = np.exp(-12 * (costs - costs.min()))
-        flex, twist, palm_flex, upper_rotation, fore_rotation, elbow = frames(weights @ swivels / weights.sum())
+        if smooth_bend:
+            # Nudge the elbow away from the desired forearm direction so the
+            # wrist can follow the grip. Keep enough of the transported pole
+            # to guide the bend through a reversal of the wrist.
+            fore_hint = (desired_fore[:, 0] + self.wrist_bias * palm_along) / (1. + self.wrist_bias)
+            angle = np.arctan2(-.55 * (tangent @ fore_hint), 1. - .55 * (pole @ fore_hint))
+        else:
+            flex, twist, palm_flex = np.array([frames(angle)[:3] for angle in swivels]).T
+            costs = flex ** 2 + .23 * twist ** 2 + .38 * swivels ** 2 + self.wrist_bias * palm_flex ** 2
+            weights = np.exp(-12 * (costs - costs.min()))
+            angle = weights @ swivels / weights.sum()
+        flex, twist, palm_flex, upper_rotation, fore_rotation, elbow = frames(angle)
         twist = np.clip(twist, -1.05, 1.05)
         c, s = np.cos(twist), np.sin(twist)
         fore_rotation = fore_rotation @ np.array(((1., 0., 0.), (0., c, -s), (0., s, c)))
@@ -179,6 +196,7 @@ class Retarget:
         self.idle = native.world(ITEM).copy()
         self.idle[:3, 3] += (-4., 9., 4.)
         self.idle[:3, :3] = turn_about((1, 0, 0), -18) @ self.idle[:3, :3]
+        self.stance_offset = matrix_quat(self.source_idle[:3, :3].T @ self.idle[:3, :3])
         self.grasps = [Grasp(native, side, blunt) for side in SIDES]
         self.item_mount = inverse(self.grasps[0].grip)
 
@@ -193,28 +211,47 @@ class Retarget:
             turn = turn_about((0, 1, 0), -34 * contest) @ turn_about((1, 0, 0), 9 * contest)
             item[:3, :3] = turn @ item[:3, :3]
             item[:3, 3] += np.array((-3., -2., -4.)) * contest
+        return self.fit_item(item)
+
+    def fit_item(self, item, swing=False):
         for _ in range(4):
             for grasp in self.grasps:
                 wrist = (item @ grasp.grip)[:3, 3]
                 delta = wrist - grasp.shoulder
                 length = norm(delta)
-                reachable = np.clip(length, 8., sum(grasp.segments) - 1.3)
+                reachable = np.clip(length, 11. if swing else 8., sum(grasp.segments) - 1.3)
                 item[:3, 3] += delta * (reachable / length - 1.)
-        arms = [grasp.fit(item) for grasp in self.grasps]
+        arms = [grasp.fit(item, smooth_bend=swing) for grasp in self.grasps]
         return item, arms
 
-    def adapt(self, pose, turn, attacking, contest):
+    def swing_item(self, source, delta, turn):
+        # The paired guard is higher than the sword's. As the hands leave it,
+        # remove most of that offset so the authored swing crosses the view.
+        angle = 2. * np.arccos(np.clip(abs(turn[0]), 0., 1.))
+        motion = min(1., np.hypot(norm(delta) / 34., angle / 1.1))
+        weight = motion * motion * (3. - 2. * motion)
+        offset = slerp(self.stance_offset, np.array((1., 0., 0., 0.)), .72 * weight)
+        rotation = source[:3, :3] @ quat_matrix(offset[[1, 2, 3, 0]])
+        position = self.idle[:3, 3] + delta * (1., .88, .95) + weight * np.array((0., 0., -22.))
+        position[1] = max(13., position[1])
+        return matrix(rotation, position)
+
+    def adapt(self, pose, turn, attacking, contest, swing):
+        source = pose.world(ITEM)
+        delta = source[:3, 3] - self.source_idle[:3, 3]
         # Transfer the sword's world-space swing about our different idle
         # orientation. Translation is measured from the same sword idle.
-        delta = pose.world(ITEM)[:3, 3] - self.source_idle[:3, 3]
-        travel = np.array((.66, .53, .66) if attacking else (.47, .52, .53))
-        position = self.idle[:3, 3] + delta * travel
-        position[1] = max(17., position[1])
-        weight = .78 if attacking else .80
-        _, arms = self.fit(turn, position, weight, contest)
-        excess = max(0., max(flex for _, flex in arms) - .88)
-        if excess:
-            _, arms = self.fit(turn, position, weight / (1. + .75 * excess), contest)
+        if swing:
+            _, arms = self.fit_item(self.swing_item(source, delta, turn), swing=True)
+        else:
+            travel = (.66, .53, .66) if attacking else (.47, .52, .53)
+            position = self.idle[:3, 3] + delta * travel
+            position[1] = max(17., position[1])
+            weight = .78 if attacking else .80
+            _, arms = self.fit(turn, position, weight, contest)
+            excess = max(0., max(flex for _, flex in arms) - .88)
+            if excess:
+                _, arms = self.fit(turn, position, weight / (1. + .75 * excess), contest)
         result = {ITEM: self.item_mount}
         for grasp, (chain, _) in zip(self.grasps, arms):
             parent = pose.world(self.rig.parents[grasp.names[0]])
@@ -236,6 +273,11 @@ def convert(source, target, retarget):
     midpoints = (original_times[:-1] + original_times[1:]) * .5
     times = np.sort(np.r_[original_times, midpoints[np.diff(original_times) > .022]])
     attacking = group in ('weapononehand', 'brutal_ground_finisher')
+    swing_start = np.inf
+    if group == 'brutal_fallattack':
+        swing_start = 0.
+    elif group == 'weapononehand':
+        swing_start = next(float(t) for t, text in marks.keys if 'weapononehand: chop start' in text.splitlines())
     poses = []
     previous = None
     for time in times:
@@ -249,7 +291,7 @@ def convert(source, target, retarget):
             if group != 'brutal_clinch':
                 t = max(0., 1. - time / .45)
                 contest = t * t * (3. - 2. * t)
-        poses.append(retarget.adapt(pose, turn, attacking, contest))
+        poses.append(retarget.adapt(pose, turn, attacking, contest, time >= swing_start))
         previous = turn
     names = [extra.string_data for extra in stream.root.extra_datas if isinstance(extra, nif.NiStringExtraData)]
     for name, controller in zip(names, stream.root.controllers):
@@ -266,7 +308,7 @@ def convert(source, target, retarget):
     if not set(poses[0]).issubset(names):
         raise ValueError(f'Missing arm channels in {source.name}')
     source_keys = list(marks.keys)
-    if group == 'weapononehand':
+    if group in ('weapononehand', 'brutal_fallattack'):
         source_keys.append((0., group + ': brutal paired grip'))
         source_keys.sort(key=lambda key: key[0])
     yaml = source.with_suffix('.yaml')
@@ -297,7 +339,7 @@ def build(arms, clinch, native_skeleton, native_animation):
         convert(folder / 'weapononehand.kf', output / (weapon_group + '.kf'), retarget)
         for path in sources:
             convert(path, output / (path.stem[:-2] + family + '.kf'), retarget)
-        for group in (*guards, *kicks, 'brutal_ground_finisher'):
+        for group in (*guards, *kicks, 'brutal_ground_finisher', 'brutal_fallattack'):
             path = folder / (group + '.kf')
             convert(path, output / path.name, retarget)
         for group in contest:

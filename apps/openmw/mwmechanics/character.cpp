@@ -3932,7 +3932,9 @@ namespace MWMechanics
             mBrutalComboRelease = false;
         const bool onGround = world->isOnGround(mPtr);
         const bool swimming = world->isSwimming(mPtr);
-        const bool armed = stats.getDrawState() == DrawState::Weapon && isBrutalOneHanded(mWeaponType)
+        const bool oneHanded = isBrutalOneHanded(mWeaponType);
+        const bool paired = usesBrutalPairedWeapon();
+        const bool armed = stats.getDrawState() == DrawState::Weapon && (oneHanded || paired)
             && !stats.isDead() && !swimming && !world->isFlying(mPtr)
             && (mHitState == CharState_None || mHitState == CharState_Block);
         if (mBrutalCombo != BrutalCombo::None && !armed)
@@ -3950,7 +3952,7 @@ namespace MWMechanics
                     || mUpperBodyState != UpperBodyState::WeaponEquipped || isBrutalShieldBlocking()
                     || mAnimation->isPlaying("brutal_kick1h") || mAnimation->isPlaying("brutal_kick1h_low"))
                     return false;
-                if (mBrutalSprinting && mAnimation->hasAnimation(rush))
+                if (oneHanded && mBrutalSprinting && mAnimation->hasAnimation(rush))
                 {
                     // Rush_Attack_Sword: attacking during the megasprint.
                     playBlendedAnimation(rush, Priority_Knockdown, MWRender::BlendMask_All, true, 1.f, "start",
@@ -3960,7 +3962,10 @@ namespace MWMechanics
                 }
                 else if (!onGround && mAnimation->hasAnimation(fall))
                 {
-                    // Falling_Attack_In_Sword: attacking in the air raises the sword over the head.
+                    if (paired && !mAnimation->activeSourceHasTextKey(
+                                      "brutal_fallattack: start", "brutal_fallattack: brutal paired grip"))
+                        return false;
+                    // Falling_Attack_In_Sword: attacking in the air raises the weapon over the head.
                     playBlendedAnimation(fall, Priority_Knockdown, MWRender::BlendMask_All, false, 1.f, "start",
                         "loop start", 0.f, 0);
                     mBrutalCombo = BrutalCombo::FallRaise;

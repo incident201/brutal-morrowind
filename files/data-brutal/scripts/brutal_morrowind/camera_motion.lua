@@ -191,10 +191,11 @@ local function folder(ground)
     local W=types.Weapon.TYPE
     local staff=kind==W.SpearTwoWide or kind==W.BluntTwoWide
     if kind==W.SpearTwoWide then return 'brutal_fp_spear' end
+    if kind==W.LongBladeTwoHand then return 'brutal_fp_paired' end
+    if kind==W.AxeTwoHand or kind==W.BluntTwoClose then return 'brutal_fp_paired_blunt' end
     if ground then
         -- A hidden, equipped shield does not select the sword-and-shield rig.
         if staff then return 'brutal_fp_staff' end
-        if kind==W.LongBladeTwoHand or kind==W.AxeTwoHand or kind==W.BluntTwoClose then return 'brutal_fp' end
     end
     if left and types.Armor.objectIsInstance(left) and types.Armor.record(left).type==types.Armor.TYPE.Shield then
         return 'brutal_fp_shield'
