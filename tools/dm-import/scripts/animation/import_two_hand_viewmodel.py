@@ -224,7 +224,7 @@ class Retarget:
         arms = [grasp.fit(item, smooth_bend=swing) for grasp in self.grasps]
         return item, arms
 
-    def swing_item(self, source, delta, turn):
+    def swing_item(self, source, delta, turn, falling):
         # The paired guard is higher than the sword's. As the hands leave it,
         # remove most of that offset so the authored swing crosses the view.
         angle = 2. * np.arccos(np.clip(abs(turn[0]), 0., 1.))
@@ -234,15 +234,25 @@ class Retarget:
         rotation = source[:3, :3] @ quat_matrix(offset[[1, 2, 3, 0]])
         position = self.idle[:3, 3] + delta * (1., .88, .95) + weight * np.array((0., 0., -22.))
         position[1] = max(13., position[1])
+        if falling and rotation[1, 1] < 0.:
+            # Compress the part of the arc behind the eye towards overhead.
+            # The rate matches the unaltered forward arc at the vertical pose.
+            down_from_vertical = np.pi / 2. - np.arctan2(rotation[2, 1], -rotation[1, 1])
+            shortened = .20 * down_from_vertical - .256 * np.expm1(-down_from_vertical / .32)
+            loft = np.degrees(down_from_vertical - shortened)
+            raised = min(1., -rotation[1, 1] / .58)
+            rotation = turn_about((1., 0., 0.), -loft) @ rotation
+            # Leave room for the near plane and a broad axe head in the windup.
+            position += raised * raised * (3. - 2. * raised) * np.array((16., 6., -3.))
         return matrix(rotation, position)
 
-    def adapt(self, pose, turn, attacking, contest, swing):
+    def adapt(self, pose, turn, attacking, contest, swing, falling):
         source = pose.world(ITEM)
         delta = source[:3, 3] - self.source_idle[:3, 3]
         # Transfer the sword's world-space swing about our different idle
         # orientation. Translation is measured from the same sword idle.
         if swing:
-            _, arms = self.fit_item(self.swing_item(source, delta, turn), swing=True)
+            _, arms = self.fit_item(self.swing_item(source, delta, turn, falling), swing=True)
         else:
             travel = (.66, .53, .66) if attacking else (.47, .52, .53)
             position = self.idle[:3, 3] + delta * travel
@@ -273,8 +283,9 @@ def convert(source, target, retarget):
     midpoints = (original_times[:-1] + original_times[1:]) * .5
     times = np.sort(np.r_[original_times, midpoints[np.diff(original_times) > .022]])
     attacking = group in ('weapononehand', 'brutal_ground_finisher')
+    falling = group == 'brutal_fallattack'
     swing_start = np.inf
-    if group == 'brutal_fallattack':
+    if falling:
         swing_start = 0.
     elif group == 'weapononehand':
         swing_start = next(float(t) for t, text in marks.keys if 'weapononehand: chop start' in text.splitlines())
@@ -291,7 +302,7 @@ def convert(source, target, retarget):
             if group != 'brutal_clinch':
                 t = max(0., 1. - time / .45)
                 contest = t * t * (3. - 2. * t)
-        poses.append(retarget.adapt(pose, turn, attacking, contest, time >= swing_start))
+        poses.append(retarget.adapt(pose, turn, attacking, contest, time >= swing_start, falling))
         previous = turn
     names = [extra.string_data for extra in stream.root.extra_datas if isinstance(extra, nif.NiStringExtraData)]
     for name, controller in zip(names, stream.root.controllers):
