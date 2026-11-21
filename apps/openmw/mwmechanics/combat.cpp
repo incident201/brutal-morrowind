@@ -641,6 +641,103 @@ namespace MWMechanics
         }
     }
 
+    namespace
+    {
+        // A held Dark Messiah guard (the player's, or an adaptive NPC's raised guard)
+        // also meets projectiles from its frontal arc. A shield stops arrows, bolts and
+        // thrown weapons. A weapon guard turns thrown weapons, and arrows or bolts only
+        // when it was raised within the parry window. Missiles cost the blocker half a light
+        // guard impact and the shooter nothing.
+        // Half the cost of an ordinary blocked blow: a guard can hold out under a volley.
+        constexpr float projectileBlockStaminaFraction = 1.f / 18.f;
+
+        bool blockProjectile(const MWWorld::Ptr& attacker, const MWWorld::Ptr& blocker, const MWWorld::Ptr& weapon,
+            const MWWorld::Ptr& projectile, float damage)
+        {
+            if (attacker.isEmpty() || !blocker.getClass().isActor() || !blocker.getClass().hasInventoryStore(blocker))
+                return false;
+            auto& stats = blocker.getClass().getCreatureStats(blocker);
+            const bool player = blocker == getPlayer();
+            const bool npcGuard = !player && blocker.getClass().isNpc() && Settings::game().mDarkMessiahNpcCombat
+                && stats.mBrutalNpcGuardRequested;
+            if (!stats.mBrutalBlockRaised || (!player && !npcGuard))
+                return false;
+            if (stats.isDead() || stats.getKnockedDown() || stats.getHitRecovery() || stats.isParalyzed())
+                return false;
+            const double now = MWBase::Environment::get().getWorld()->getTimeManager()->getSimulationTime();
+            if (now < stats.mBrutalGuardBrokenUntil || !isInFrontalGuard(attacker, blocker))
+                return false;
+
+            auto& inventory = blocker.getClass().getInventoryStore(blocker);
+            const bool thrown = weapon == projectile;
+            auto sounds = MWBase::Environment::get().getSoundManager();
+            if (stats.mBrutalParry)
+            {
+                const bool timed = now - stats.mBrutalBlockRaisedAt <= Settings::game().mDarkMessiahParryWindow.get();
+                if (!thrown && !timed)
+                    return false;
+                const auto right = inventory.getSlot(MWWorld::InventoryStore::Slot_CarriedRight);
+                if (right == inventory.end() || right->getType() != ESM::Weapon::sRecordId)
+                    return false;
+                MWWorld::Ptr parrying = *right;
+                reduceWeaponCondition(damage, true, parrying, blocker);
+                if (Settings::game().mBrutalCombatSounds)
+                    sounds->playSound3D(blocker, ESM::RefId::stringRefId("Brutal Sword Contact"), 1.f, 1.f);
+                if (player)
+                    stats.mBrutalParryResult = timed ? BrutalParry_Timed : BrutalParry_Parried;
+            }
+            else
+            {
+                const auto shield = inventory.getSlot(MWWorld::InventoryStore::Slot_CarriedLeft);
+                if (shield == inventory.end() || shield->getType() != ESM::Armor::sRecordId)
+                    return false;
+                const auto* armor = shield->get<ESM::Armor>()->mBase;
+                if (Settings::game().mBrutalCombatSounds)
+                {
+                    const std::string name
+                        = Misc::StringUtils::lowerCase(armor->mId.getRefIdString() + " " + armor->mModel);
+                    bool metal = false;
+                    for (std::string_view family : { "iron", "steel", "silver", "ebony", "dwemer", "dwarven",
+                             "daedric", "adamantium", "orcish" })
+                        metal = metal || name.find(family) != std::string::npos;
+                    sounds->playSound3D(blocker,
+                        ESM::RefId::stringRefId(metal ? "Brutal Shield Metal" : "Brutal Shield Wood"), 1.f, 1.f);
+                }
+                else
+                {
+                    const ESM::RefId skill = shield->getClass().getEquipmentSkill(*shield);
+                    const char* id = skill == ESM::Skill::LightArmor ? "Light Armor Hit"
+                        : skill == ESM::Skill::MediumArmor           ? "Medium Armor Hit"
+                                                                     : "Heavy Armor Hit";
+                    sounds->playSound3D(blocker, ESM::RefId::stringRefId(id), 1.f, 1.f);
+                }
+                int shieldHealth = shield->getClass().getItemHealth(*shield);
+                shieldHealth -= std::min(shieldHealth, int(damage));
+                shield->getCellRef().setCharge(shieldHealth);
+                if (shieldHealth == 0)
+                    inventory.unequipItem(*shield);
+            }
+            ++stats.mBrutalGuardBlocks;
+            if (Settings::game().mBrutalStamina
+                && !(player && MWBase::Environment::get().getWorld()->getGodModeState()))
+            {
+                auto fatigue = stats.getFatigue();
+                fatigue.setCurrent(std::max(
+                    0.f, fatigue.getCurrent() - blockStaminaCost(fatigue, projectileBlockStaminaFraction)));
+                stats.setFatigue(fatigue);
+                if (fatigue.getCurrent() <= 0.f)
+                    openBrutalGuard(blocker);
+            }
+            stats.mBrutalPerfectShieldBlock = false;
+            if (player)
+            {
+                stats.mBrutalBlockImpact = true;
+                blocker.getClass().skillUsageSucceeded(blocker, ESM::Skill::Block, ESM::Skill::Block_Success);
+            }
+            return true;
+        }
+    }
+
     void projectileHit(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, MWWorld::Ptr weapon,
         const MWWorld::Ptr& projectile, const osg::Vec3f& hitPosition, float attackStrength)
     {
@@ -680,6 +777,15 @@ namespace MWMechanics
                 damage += attack[0] + ((attack[1] - attack[0]) * attackStrength);
             }
             adjustWeaponDamage(damage, weapon, attacker);
+
+            if (blockProjectile(attacker, victim, weapon, projectile, damage))
+            {
+                reduceWeaponCondition(damage, true, weapon, attacker);
+                MWBase::Environment::get().getLuaManager()->onHit(attacker, victim, weapon, projectile, 0,
+                    attackStrength, 0.f, true, hitPosition, true, MWMechanics::DamageSourceType::Ranged, 0, false,
+                    true);
+                return;
+            }
         }
 
         reduceWeaponCondition(damage, validVictim, weapon, attacker);

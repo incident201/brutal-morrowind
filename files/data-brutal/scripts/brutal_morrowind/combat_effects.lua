@@ -154,6 +154,14 @@ interface.onHit = function(attack)
         -- rather than sampling death before it runs or attributing a later death.
         pendingDecapitation[attack.brutalAttackId] = {attack = attack, age = 0}
     end
+    if aliveBefore and attack.successful and attack.sourceType == 'ranged' and attack.brutalBlocked then
+        -- An arrow, bolt or thrown weapon met the held guard.
+        local guard = types.Actor.getEquipment(self)[types.Actor.EQUIPMENT_SLOT.CarriedLeft]
+        if not (guard and types.Armor.objectIsInstance(guard)) then
+            guard = types.Actor.getEquipment(self)[types.Actor.EQUIPMENT_SLOT.CarriedRight]
+        end
+        if metal(guard) then burst('sparks', attack.hitPos, attack) end
+    end
     if aliveBefore and attack.successful and attack.sourceType == 'melee' and (attack.weapon or attack.brutalBlocked) then
         if attack.brutalBlocked then
             hitArmor = types.Actor.getEquipment(self)[types.Actor.EQUIPMENT_SLOT.CarriedLeft]
