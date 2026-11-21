@@ -2690,7 +2690,7 @@ namespace MWRender
                 return marker >= 0.f && getCurrentTime(group) >= marker;
             };
             const bool hidden = isPlaying("brutal_backstab_idle")
-                || (isPlaying("brutal_backstab_in") && past("brutal_backstab_in", "brutal_backstab_in: hide offhand"))
+                || past("brutal_backstab_in", "brutal_backstab_in: hide offhand")
                 || (isPlaying("brutal_backstab_out") && !past("brutal_backstab_out", "brutal_backstab_out: show offhand"))
                 || (isPlaying("brutal_backstab_cancel")
                     && !past("brutal_backstab_cancel", "brutal_backstab_cancel: show offhand"));
@@ -2759,6 +2759,8 @@ namespace MWRender
     NpcAnimation::WeaponGripGeometry NpcAnimation::getWeaponGripGeometryForAudit() const
     {
         WeaponGripGeometry result;
+        const auto* leftItem = mObjectParts[ESM::PRT_Shield].get();
+        result.leftItemVisible = leftItem && leftItem->getNode()->getNodeMask() != 0u;
         const std::function<std::optional<osg::Matrixf>(std::string_view)> boneWorld
             = [&](std::string_view name) { return getBoneWorldMatrix(name); };
         for (const auto& [name, part] : { std::pair{ "leftHand", ESM::PRT_LHand },

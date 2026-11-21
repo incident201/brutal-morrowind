@@ -1946,8 +1946,9 @@ namespace MWMechanics
         auto& stats = mPtr.getClass().getCreatureStats(mPtr);
         stats.mBrutalBackstabPhase = static_cast<int>(mBackstab.mPhase);
         stats.mBrutalBackstabTarget = target;
+        // Keep the last pose until the controller can replace it on the next update.
         playBlendedAnimation(sBackstabIn, Priority_Weapon, MWRender::BlendMask_All,
-            true, 1.f, "start", "stop", 0.f, 0);
+            false, 1.f, "start", "stop", 0.f, 0);
     }
 
     bool CharacterController::startBackstabExecution(const MWWorld::Ptr& victim)
@@ -2377,6 +2378,8 @@ namespace MWMechanics
                 if (mBackstab.mAttackQueued)
                     return startBackstabExecution(target);
                 mBackstab.mPhase = BrutalBackstabPhase::Ready;
+                MWRender::Animation::ScopedDeferActiveGroupReset defer(*mAnimation);
+                mAnimation->disable(sBackstabIn);
                 playBlendedAnimation(sBackstabIdle, Priority_Weapon, MWRender::BlendMask_All,
                     false, 1.f, "start", "stop", 0.f, std::numeric_limits<uint32_t>::max(), true);
             }

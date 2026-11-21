@@ -1029,6 +1029,7 @@ namespace MWLua
             result["models"] = std::move(models);
             result["roots"] = std::move(roots);
             result["triangles"] = std::move(triangles);
+            result["leftItemVisible"] = snapshot.leftItemVisible;
             return result;
         };
 

@@ -499,6 +499,7 @@ namespace MWRender
             std::map<std::string, std::string> models;
             std::map<std::string, osg::Matrixf> roots;
             std::map<std::string, std::vector<osg::Vec3f>> triangles;
+            bool leftItemVisible = false;
         };
         WeaponGripGeometry getWeaponGripGeometryForAudit() const;
         std::shared_ptr<const ESM::ReleasedEquipmentState> captureReleasedEquipment(int slot,
