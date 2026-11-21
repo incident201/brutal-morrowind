@@ -2469,16 +2469,22 @@ namespace MWPhysics
 
         const float speed = hit.velocity.length();
         const float kinetic = hit.mass * (speed / 900.f);
-        const float damage = hit.adrenaline
-            ? std::clamp(14.f + kinetic * 9.f, 14.f, 45.f)
-            : std::clamp(4.f + kinetic * 4.5f, 4.f, 22.f);
-        const float fatigueDamage = hit.adrenaline ? 40.f : 22.f;
         const ESM::RefId objId = hit.item.isEmpty() ? ESM::RefId() : hit.item.getCellRef().getRefId();
 
         result.reaction = chooseThrownReaction(hit.victim, hit.attacker, hit.hitPos, horiz, hit.mass);
         result.headHit = result.reaction.find("head_") != std::string::npos;
+        // An ordinary throw hurts in proportion to the object's momentum; the head takes
+        // more. A bottle costs about a tenth of a townsperson's health, a warhammer a third.
+        const float damage = hit.adrenaline
+            ? std::clamp(14.f + kinetic * 9.f, 14.f, 45.f)
+            : std::clamp(6.f + kinetic * 6.f, 6.f, 30.f) * (result.headHit ? 1.75f : 1.f);
+        const float fatigueDamage = hit.adrenaline ? 40.f : (result.headHit ? 35.f : 22.f);
         result.damage = damage;
         result.applied = true;
+        // A head hit usually fells the victim: from 60% for light objects to 90% for heavy ones.
+        const bool headKnockdown = !hit.adrenaline && result.headHit
+            && Misc::Rng::rollProbability(MWBase::Environment::get().getWorld()->getPrng())
+                < std::clamp(.6f + hit.mass * .1f, .6f, .9f);
 
         if (hit.adrenaline)
         {
@@ -2486,6 +2492,14 @@ namespace MWPhysics
             const osg::Vec3f push = horiz * pushSpeed + osg::Vec3f(0, 0, pushSpeed * .24f);
             result.knockedDown = applyNpcKickImpl(
                 hit.victim, push, hit.attacker, false, true, false, false, {}, &hit.hitPos);
+            hit.victim.getClass().onHit(hit.victim, { { "health", damage }, { "fatigue", fatigueDamage } },
+                objId, hit.attacker, true, MWMechanics::DamageSourceType::Ranged);
+        }
+        else if (headKnockdown
+            && (result.knockedDown = applyNpcKickImpl(hit.victim,
+                    horiz * std::clamp(300.f + hit.mass * 10.f, 300.f, 440.f) + osg::Vec3f(0, 0, 70.f), hit.attacker,
+                    false, true, false, false, {}, &hit.hitPos)))
+        {
             hit.victim.getClass().onHit(hit.victim, { { "health", damage }, { "fatigue", fatigueDamage } },
                 objId, hit.attacker, true, MWMechanics::DamageSourceType::Ranged);
         }
