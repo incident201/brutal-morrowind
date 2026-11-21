@@ -1601,7 +1601,9 @@ namespace MWPhysics
                     diedWhileDown = true;
                 }
                 // In water there is nothing to come to rest on: the actor swims again.
-                else if (push.age>=2.f && (push.settled>=.35f || (mWaterEnabled && z<mWaterHeight))) recover.push_back(ptr);
+                // An exhausted (knocked out) actor stays down until its fatigue recovers.
+                else if (push.age>=2.f && (push.settled>=.35f || (mWaterEnabled && z<mWaterHeight))
+                    && stats.getFatigue().getCurrent()>=0.f && stats.getFatigue().getBase()>0.f) recover.push_back(ptr);
             }
             if (position || diedWhileDown)
                 updates.push_back({ptr, position, std::move(poses), diedWhileDown});

@@ -322,6 +322,7 @@ namespace MWMechanics
 
         void refreshCurrentAnims(CharacterState idle, CharacterState movement, JumpingState jump, bool force = false);
         void refreshHitRecoilAnims();
+        bool collapseIntoRagdoll(bool swimming);
         void refreshJumpAnims(JumpingState jump, bool force = false);
         void refreshMovementAnims(CharacterState movement, bool force = false);
         void refreshIdleAnims(CharacterState idle, bool force = false);

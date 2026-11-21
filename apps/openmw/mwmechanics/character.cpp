@@ -552,6 +552,25 @@ namespace MWMechanics
         mDeathState = CharState_None;
     }
 
+    // An exhausted NPC (fatigue below zero) slumps into a living ragdoll instead of
+    // Morrowind's knockout clip, and stays down until its fatigue recovers
+    // (PhysicsSystem holds the recovery). True while the ragdoll owns the body.
+    bool CharacterController::collapseIntoRagdoll(bool swimming)
+    {
+        if (mPtr == getPlayer() || !mPtr.getClass().isNpc() || swimming || !Settings::game().mBrutalEnabled
+            || !Settings::game().mBrutalRagdoll)
+            return false;
+        if (mAnimation->isRagdollPose())
+            return true;
+        auto& stats = mPtr.getClass().getCreatureStats(mPtr);
+        if (stats.isDead() || !stats.mBrutalClinchOpponent.isEmpty())
+            return false;
+        // A slight forward slump: the legs give way under the actor's own weight.
+        const float yaw = mPtr.getRefData().getPosition().rot[2];
+        const osg::Vec3f slump(std::sin(yaw), std::cos(yaw), 0.f);
+        return MWBase::Environment::get().getWorld()->applyNpcKick(mPtr, slump * 60.f, MWWorld::Ptr(), true);
+    }
+
     void CharacterController::refreshHitRecoilAnims()
     {
         auto& charClass = mPtr.getClass();
@@ -598,6 +617,9 @@ namespace MWMechanics
         }
 
         if (!knockout && !knockdown && !recovery && !block)
+            return;
+
+        if (knockout && collapseIntoRagdoll(isSwimming))
             return;
 
         MWRender::Animation::AnimPriority priority(Priority_Knockdown);
