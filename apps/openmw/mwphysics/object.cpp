@@ -116,7 +116,9 @@ namespace MWPhysics
         }
         const btVector3 center = (minimum + maximum) * .5f;
         auto hull = std::make_unique<btConvexHullShape>();
-        hull->setMargin(.05f);
+        // A blade is about two units thick. A wider contact margin keeps its contact normal facing
+        // out of the floor when it lands; it lies half a unit higher.
+        hull->setMargin(.5f);
         for (const auto& vertex : vertices)
             hull->addPoint(Misc::Convert::toBullet(vertex) * mScale.x() - center, false);
         hull->recalcLocalAabb();

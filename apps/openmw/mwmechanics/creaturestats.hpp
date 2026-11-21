@@ -179,6 +179,12 @@ namespace MWMechanics
         double mBrutalGuardBrokenUntil = 0.0;
         bool mBrutalGuardBreakingAttack = false; // Latched when the NPC chooses its next attack.
         int mBrutalGuardBlocks = 0;
+        // ACT_GRAB_WEAPON, transient and observed by the audit: 0 none, 1 going to the item,
+        // 2 crouching for it; the record of the item and the count of items taken.
+        int mBrutalPickupPhase = 0;
+        ESM::RefId mBrutalPickupTarget;
+        int mBrutalPickups = 0;
+        bool mBrutalPickupTable = false; // the last pickup reached to a table rather than the floor
         int mBrutalAttackKind = 1; // Transient observed stroke: 0 chop, 1 slash, 2 thrust.
         // Kinetic player gait chosen by Lua (0 = Morrowind run stance, 1 walk, 2 run, 3 sprint).
         int mBrutalGait = 0;

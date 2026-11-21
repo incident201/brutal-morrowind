@@ -37,6 +37,7 @@ local DEFAULTS={
     npcStagger=true,
     woundedNpcs=true,
     npcFlee=true,
+    npcWeaponPickup=true,
     hitRecovery=true,
     adrenalineEnabled=true,
     finisherEnabled=true,

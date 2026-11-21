@@ -60,7 +60,12 @@ shield bash can knock them down. A hit that leaves them below 10% makes them fle
 for up to 20 seconds. Argonians and Khajiit keep their
 own stance and walk. Both behaviours have switches in the settings.
 
-This branch uses **Dark Messiah import recipe 22**. Its launcher asks to reimport
+An NPC left without a weapon in a fight runs to the weapon nearby that suits it
+best, whoever owns it, crouches with Dark Messiah's weapon pickup animation (or
+leans over a table) and fights on with it in hand. A shield lying right beside it
+is taken too. Weapons knocked from an NPC's hands no longer drop through the floor.
+
+This branch uses **Dark Messiah import recipe 23**. Its launcher asks to reimport
 older data. See `CHANGELOG.md` for the other unreleased changes.
 
 ## Requirements

@@ -105,6 +105,24 @@ class GuardImporter(Importer):
             axis=np.array([R[2,1]-R[1,2],R[0,2]-R[2,0],R[1,0]-R[0,1]])
             self.hinge[side]=axis/norm(axis)
         self.mapping=dict(self.mapping,**{'Weapon Bone':'__native_weapon','Shield Bone':'__source_shield'})
+        # Optional right-hand goal: {'point': handle position over the feet, 'profile': t -> 0..1}.
+        self.reach=None
+
+    def blended(self,clip,toward,weight):
+        """The clip with every bone only `weight` of the way from `toward`'s first frame."""
+        bones,tracks,anim=clip;_,other,_=toward;out={}
+        for b in bones:
+            a=tracks.get(b.name);o=other.get(b.name)
+            if a is None and o is None:continue
+            qo=o['rot'][0] if o is not None else b.quat;po=o['pos'][0] if o is not None else b.position
+            rot=[];pos=[]
+            for f in range(anim.frame_count):
+                qa=a['rot'][min(f,len(a['rot'])-1)] if a is not None else b.quat
+                pa=a['pos'][min(f,len(a['pos'])-1)] if a is not None else b.position
+                rot.append(sample_quaternion(np.array([qo,qa],float),weight))
+                pos.append(np.asarray(po,float)*(1-weight)+np.asarray(pa,float)*weight)
+            out[b.name]={'rot':np.array(rot),'pos':np.array(pos)}
+        return bones,out,anim
 
     def resource(self,name):
         path=self.work/Path(name).name
@@ -174,6 +192,12 @@ class GuardImporter(Importer):
             if side=='R':
                 handle=dm[self.attachments['RightHand'][0]]@self.attachments['RightHand'][1]@self.sword_idle
                 target=shoulder+scale*self.basis@(handle[:3,3]-dm[ds][:3,3])-Rh@self.nodes['Weapon Bone'].translation
+                if self.reach is not None:
+                    # This frame lacks the pelvis drop that segment() adds afterwards.
+                    w=self.reach['profile'](time)
+                    dz=(float(dm['SK_Root'][2,3])-self.reference_height)*self.height_scale
+                    goal=self.reach['point']-np.array([0,0,dz])-Rh@self.nodes['Weapon Bone'].translation
+                    target=target*(1-w)+goal*w
             L1=norm(self.nodes[fore].translation);L2=norm(self.nodes[hand].translation)
             reach=target-shoulder;distance=norm(reach);axis=reach/distance
             d=np.clip(distance,abs(L1-L2)+1e-3,L1+L2-1e-3);target=shoulder+axis*d
@@ -244,7 +268,8 @@ class GuardImporter(Importer):
         self.segment_records.append(dict(clip=base[2].name,duration=float(duration),natural=self.duration(base),loop=loop))
         return times,poses
 
-    def write(self,out,group,segments,textkeys,root_velocity=None):
+    def write(self,out,group,segments,textkeys,root_velocity=None,grip_at=None):
+        """grip_at: the right fingers open until this time, then close on the item."""
         super().write(out,group,segments,textkeys,root_velocity)
         nif=self.nif;path=out/(group+'.kf');stream=nif.NiStream();stream.load(path)
         names=[e.string_data for e in stream.root.extra_datas if isinstance(e,nif.NiStringExtraData)]
@@ -263,7 +288,11 @@ class GuardImporter(Importer):
                 stream.root.extra_datas.append(nif.NiStringExtraData(string_data=name));stream.root.controllers.append(ctrl)
             armed=group.endswith('1h') or group in ('weapononehand','brutal_hit','shield','brutal_weapon_guard') or group.startswith(('hit','brutal_clinch'))
             q=q if armed else matrix_quat(self.nodes[name].rotation)
-            ctrl.data.rotations=nif.NiRotData(keys=np.array([[rows[0][0],*q],[rows[-1][0],*q]],np.float32))
+            keys=[[rows[0][0],*q],[rows[-1][0],*q]]
+            if grip_at is not None and name.startswith('Bip01 R'):
+                relaxed=matrix_quat(self.nodes[name].rotation);held=self.grip[name]
+                keys=[[rows[0][0],*relaxed],[grip_at-.06,*relaxed],[grip_at,*held],[rows[-1][0],*held]]
+            ctrl.data.rotations=nif.NiRotData(keys=np.array(keys,np.float32))
             ctrl.data.translations=nif.NiPosData(keys=np.array([[0,*self.nodes[name].translation]],np.float32))
         stream.save(path)
         yaml="blending_rules:\n  - from: '*'\n    to: '*'\n    easing: linear\n    duration: 0.2\n"
@@ -466,6 +495,23 @@ def main():
                        ('brutal_parrybroken','@Parry_Broken')]:
         t,p=i.segment(i.clip('guard',clip))
         i.write(out,group,[(0,t,p)],[(0,'start'),(float(t[-1]),'stop')])
+    # ACT_GRAB_WEAPON: a disarmed guard crouches and takes a weapon from the ground in its right
+    # hand. The clip's NPC_Grab_Weapon sound marks the hand's lowest point (0.60 of 1.50 s); the
+    # engine moves the world item into the hand at 'pickup contact'.
+    seq=i.sequences['@grab_weapon'][0];t,p=i.segment(i.clip('guard','@grab_weapon'));d=float(t[-1])
+    contact=[float(e.cycle)*d for e in seq.events if str(getattr(e,'options','') or '').strip()=='NPC_Grab_Weapon']
+    if len(contact)!=1:raise ValueError('@grab_weapon: expected one NPC_Grab_Weapon event')
+    i.write(out,'brutal_npc_pickup',[(0,t,p)],[(0,'start'),(contact[0],'pickup contact'),(d,'stop')],grip_at=contact[0])
+    # Dark Messiah has no table pickup. For a table, a crate or a shelf the same clip bends the body
+    # only 40% of the way down, and the right hand follows the source hand's timing to a handle point
+    # 62 units over the feet and 42 ahead (measured: the floor clip's handle lands 43 ahead, 8 up).
+    floor=i.clip('guard','@grab_weapon')
+    hand=[i.source_world(floor,k/floor[2].fps)['SK_R_Hand'][2,3] for k in range(floor[2].frame_count)]
+    top,low=hand[0],min(hand)
+    i.reach={'point':np.array([6.,42.,62.]),
+             'profile':lambda s:float(np.clip((top-np.interp(s*floor[2].fps,np.arange(len(hand)),hand))/(top-low),0,1))}
+    t,p=i.segment(i.blended(floor,i.clip('guard','@combatidle'),.4));i.reach=None
+    i.write(out,'brutal_npc_pickup_table',[(0,t,p)],[(0,'start'),(contact[0],'pickup contact'),(float(t[-1]),'stop')],grip_at=contact[0])
     # Dark Messiah's wounded guard (life_tohurt): the same group names in their own folder. The
     # engine prefers this folder's clips while an NPC is wounded. Hurtwalk is both the armed and
     # the unarmed walk; its stride matches Combatwalk (41.1 against 41.8 units per loop).
@@ -487,7 +533,7 @@ def main():
         'outputs':{path.name:hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(out.iterdir()) if path.suffix in ('.kf','.yaml')},
         'inputs':{str(path):hashlib.sha256(path.read_bytes()).hexdigest() for path in (a.skeleton,a.grip_animation,i.attachment_model,*native_guard_sources)},
         'coverage':{'converted':['idle','one-handed sword','shield block','hanging weapon guard','small upper-body hit reactions','heavy full-body kick reaction','walk/run in four directions',
-                                 'wounded idle, hurt walk and one-handed attacks']
+                                 'wounded idle, hurt walk and one-handed attacks','weapon pickup from the ground and from a table']
                     +(['native paired close/wide weapon guards'] if native_guard_sources else []),
                     'fallback':['two-handed melee attacks and locomotion','hand-to-hand','bow','crossbow','thrown weapons','spell casting','sneak','jump','death/get-up']},
         'groups':i.group_records,'wounded_groups':wounded_records,

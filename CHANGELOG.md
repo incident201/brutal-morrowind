@@ -1,6 +1,8 @@
 Brutal Morrowind (unreleased)
 ----------------------------
 
+    Combat: An NPC left without a weapon in a fight runs to the weapon nearby that its AI rates best, takes it straight into its hand with Dark Messiah's weapon pickup animation or a reach over a table, and fights on. A shield lying beside it is taken afterwards. A setting turns this off. The animations use import recipe 23.
+    Physics: Weapons released by a knocked-down NPC no longer sink through the floor when the NPC gets up.
     First-person two-handed swords, battle axes and warhammers release the left hand during the back-step thrust and return to the paired grip. Quick swings play at 86 percent of the previous rate. These animations use import recipe 22.
     First-person two-handed swords, battle axes and warhammers keep the neutral charge low and prepare the left-step sweep on the right. The forward chop follows the one-handed sword motion and returns to the paired grip.
     First-person two-handed swords, battle axes and warhammers sway less while running and are carried low in the right hand while sprinting.

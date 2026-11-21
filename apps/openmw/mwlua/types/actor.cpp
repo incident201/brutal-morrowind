@@ -490,6 +490,7 @@ namespace MWLua
                 {"swordParry", g.mDarkMessiahSwordParry}, {"comboAttacks", g.mDarkMessiahComboAttacks},
                 {"npcStagger", g.mNpcHurtHealthFraction > 0.f}, {"hitRecovery", !g.mPlayerHitRecovery},
                 {"woundedNpcs", g.mBrutalWoundedNpcs}, {"npcFlee", g.mBrutalNpcFlee},
+                {"npcWeaponPickup", g.mBrutalNpcWeaponPickup},
                 {"stamina", g.mBrutalStamina}, {"wallBounce", g.mBrutalWallBounce},
                 {"controlsEnabled", g.mBrutalControlsEnabled}, {"slide", g.mBrutalSlide}, {"clinch", g.mBrutalClinch}, {"fastAttacks", g.mBrutalFastAttacks},
                 {"combatSounds", g.mBrutalCombatSounds}, {"heroVoice", g.mBrutalHeroVoice}, {"bloodEffects", g.mBrutalBloodEffects},
@@ -576,6 +577,7 @@ namespace MWLua
                 g.mPlayerHitRecovery.set(!on("hitRecovery"));
                 g.mBrutalWoundedNpcs.set(on("woundedNpcs"));
                 g.mBrutalNpcFlee.set(on("npcFlee"));
+                g.mBrutalNpcWeaponPickup.set(on("npcWeaponPickup"));
                 g.mBrutalStamina.set(on("stamina"));
                 g.mPlayerFatigueRegenFraction.set(on("stamina") ? 1.f/18.f : 0.f);
                 g.mBrutalWallBounce.set(on("wallBounce"));
@@ -1226,6 +1228,10 @@ namespace MWLua
             result["guardBrokenUntil"] = stats.mBrutalGuardBrokenUntil;
             result["guardBreakingAttack"] = stats.mBrutalGuardBreakingAttack;
             result["guardBlocks"] = stats.mBrutalGuardBlocks;
+            result["pickupPhase"] = stats.mBrutalPickupPhase;
+            result["pickupTarget"] = stats.mBrutalPickupTarget.serializeText();
+            result["pickups"] = stats.mBrutalPickups;
+            result["pickupTable"] = stats.mBrutalPickupTable;
             result["attackKind"] = stats.mBrutalAttackKind;
             result["wounded"] = MWMechanics::isBrutalWoundedNpc(ptr);
             const MWRender::Animation* animation = MWBase::Environment::get().getWorld()->getAnimation(ptr);

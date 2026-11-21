@@ -1667,6 +1667,23 @@ namespace MWWorld
     std::map<std::string, double> World::getNpcRagdollEnhancementState(const Ptr& ptr) const
     { return mPhysics->getNpcRagdollEnhancementState(ptr); }
 
+    void World::getLooseEquipmentInRange(const osg::Vec3f& center, float radius, std::vector<Ptr>& out)
+    {
+        const float radius2 = radius * radius;
+        const auto visit = [&](const Ptr& item) {
+            if (item.getCellRef().getCount() > 0 && item.getRefData().isEnabled()
+                && item.getRefData().getBaseNode()
+                && (item.getRefData().getPosition().asVec3() - center).length2() <= radius2)
+                out.push_back(item);
+            return true;
+        };
+        for (CellStore* cell : mWorldScene->getActiveCells())
+        {
+            cell->forEachType<ESM::Weapon>(visit);
+            cell->forEachType<ESM::Armor>(visit);
+        }
+    }
+
     void World::releaseNpcRagdollEquipment(const Ptr& ptr, bool afterKnockdown)
     {
         if (!Settings::game().mBrutalEquipmentPhysics) return;

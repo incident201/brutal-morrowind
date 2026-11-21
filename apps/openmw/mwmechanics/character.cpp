@@ -30,6 +30,8 @@
 #include <utility>
 
 #include <components/debug/debuglog.hpp>
+#include <components/esm3/loadarmo.hpp>
+#include <components/esm3/loadweap.hpp>
 #include <components/esm/records.hpp>
 #include <components/misc/mathutil.hpp>
 #include <components/misc/resourcehelpers.hpp>
@@ -2673,6 +2675,7 @@ namespace MWMechanics
             updateBrutalWounded();
             if (mAnimation->isRagdollPose())
                 return;
+            updateBrutalPickup();
         }
 
         bool isPlayer = mPtr == MWMechanics::getPlayer();
@@ -3767,6 +3770,129 @@ namespace MWMechanics
         mCurrentHit = std::move(group);
         playBlendedAnimation(mCurrentHit, Priority_Knockdown, MWRender::BlendMask_All,
             true, 1.f, "start", "stop", 0.f, 0);
+        return true;
+    }
+
+    namespace
+    {
+        constexpr std::string_view BrutalPickupGroup = "brutal_npc_pickup";
+        constexpr std::string_view BrutalPickupTableGroup = "brutal_npc_pickup_table";
+        // Higher than this over the feet, the item lies on a table, a crate or a shelf.
+        constexpr float BrutalPickupTableHeight = 25.f;
+
+        bool hasPickupClip(const MWRender::Animation& animation, std::string_view group)
+        {
+            return animation.hasAnimation(group)
+                && animation.getTextKeyTime(std::string(group) + ": pickup contact") >= 0.f;
+        }
+    }
+
+    bool CharacterController::canBrutalPickup() const
+    {
+        return mAnimation && mPtr.getClass().isNpc() && mPtr != getPlayer()
+            && hasPickupClip(*mAnimation, BrutalPickupGroup);
+    }
+
+    bool CharacterController::isBrutalPickingUp() const
+    {
+        return mHitState != CharState_None && !mBrutalPickupGroup.empty() && mCurrentHit == mBrutalPickupGroup
+            && mAnimation && mAnimation->isPlaying(mBrutalPickupGroup);
+    }
+
+    bool CharacterController::startBrutalPickup(const MWWorld::Ptr& item)
+    {
+        if (item.isEmpty() || !canBrutalPickup())
+            return false;
+        const float height = item.getRefData().getPosition().pos[2] - mPtr.getRefData().getPosition().pos[2];
+        const std::string_view group = height > BrutalPickupTableHeight && hasPickupClip(*mAnimation, BrutalPickupTableGroup)
+            ? BrutalPickupTableGroup
+            : BrutalPickupGroup;
+        if (!stagger(group))
+            return false;
+        mBrutalPickupGroup = group;
+        mBrutalPickupItem = item;
+        mPtr.getClass().getCreatureStats(mPtr).mBrutalPickupTable = group == BrutalPickupTableGroup;
+        Log(Debug::Info) << "Brutal pickup: " << mPtr.getCellRef().getRefId() << " plays " << group << " for "
+                         << item.getCellRef().getRefId() << " " << height << " units over its feet";
+        return true;
+    }
+
+    void CharacterController::updateBrutalPickup()
+    {
+        if (mBrutalPickupItem.isEmpty())
+            return;
+        // Another reaction, a knockdown or death replaced the crouch: the item stays where it lies.
+        if (!isBrutalPickingUp() || mPtr.getClass().getCreatureStats(mPtr).isDead())
+        {
+            mBrutalPickupItem = MWWorld::Ptr();
+            return;
+        }
+        const float contact = mAnimation->getTextKeyTime(mBrutalPickupGroup + ": pickup contact");
+        if (mAnimation->getCurrentTime(mBrutalPickupGroup) < contact)
+            return;
+        const MWWorld::Ptr item = mBrutalPickupItem;
+        mBrutalPickupItem = MWWorld::Ptr();
+        if (!takeBrutalPickup(item))
+            Log(Debug::Verbose) << "Brutal pickup by " << mPtr.getCellRef().getRefId() << " found nothing to take";
+    }
+
+    bool CharacterController::takeBrutalPickup(const MWWorld::Ptr& item)
+    {
+        auto world = MWBase::Environment::get().getWorld();
+        // The player may have taken or grabbed it, or it fell out of reach during the crouch.
+        if (!item.isInCell() || item.getCellRef().getCount() <= 0 || !item.getRefData().isEnabled()
+            || !item.getRefData().getBaseNode() || world->getHeldObject() == item
+            || (item.getRefData().getPosition().asVec3() - mPtr.getRefData().getPosition().asVec3()).length() > 160.f)
+            return false;
+        const bool shield = item.getType() == ESM::Armor::sRecordId;
+        if (!shield && item.getType() != ESM::Weapon::sRecordId)
+            return false;
+        auto& inventory = mPtr.getClass().getInventoryStore(mPtr);
+        const MWWorld::ContainerStoreIterator taken
+            = inventory.add(item, item.getCellRef().getCount(), false);
+        world->deleteObject(item);
+        if (taken == inventory.end())
+            return false;
+        const MWWorld::Ptr held = *taken;
+        auto& stats = mPtr.getClass().getCreatureStats(mPtr);
+        if (shield)
+        {
+            const auto right = inventory.getSlot(MWWorld::InventoryStore::Slot_CarriedRight);
+            const bool twoHanded = right != inventory.end() && right->getType() == ESM::Weapon::sRecordId
+                && getWeaponType(right->get<ESM::Weapon>()->mBase->mData.mType)->mFlags & ESM::WeaponType::TwoHanded;
+            if (!twoHanded)
+                inventory.equip(MWWorld::InventoryStore::Slot_CarriedLeft, taken);
+        }
+        else
+        {
+            if (getWeaponType(held.get<ESM::Weapon>()->mBase->mData.mType)->mFlags & ESM::WeaponType::TwoHanded)
+                inventory.unequipSlot(MWWorld::InventoryStore::Slot_CarriedLeft);
+            inventory.equip(MWWorld::InventoryStore::Slot_CarriedRight, taken);
+            // Straight into the hand: adopt the weapon as drawn, with no unequip/equip clips
+            // after the crouch, as the weapon->weapon path does for a changed type.
+            stats.setDrawState(DrawState::Weapon);
+            int weaptype = ESM::Weapon::None;
+            const auto active = getActiveWeapon(mPtr, &weaptype);
+            if (!mCurrentWeapon.empty())
+                mAnimation->disable(mCurrentWeapon);
+            mWeapon = active != inventory.end() ? *active : MWWorld::Ptr();
+            mWeaponType = weaptype;
+            mCurrentWeapon = getWeaponAnimation(weaptype);
+            mAnimation->setWeaponGroup(
+                mCurrentWeapon, getWeaponType(weaptype)->mWeaponClass == ESM::WeaponType::Ranged);
+            mUpperBodyState = UpperBodyState::WeaponEquipped;
+            mReadyToHit = false;
+            setAttackingOrSpell(false);
+            resetBrutalFastContinuation();
+            mAnimation->showWeapons(true);
+        }
+        mAnimation->showCarriedLeft(updateCarriedLeftVisible(mWeaponType));
+        const ESM::RefId& sound = held.getClass().getUpSoundId(held);
+        if (!sound.empty())
+            MWBase::Environment::get().getSoundManager()->playSound3D(mPtr, sound, 1.f, 1.f);
+        ++stats.mBrutalPickups;
+        Log(Debug::Info) << "Brutal pickup: " << mPtr.getCellRef().getRefId() << " took "
+                         << held.getCellRef().getRefId() << (shield ? " (shield)" : "");
         return true;
     }
 

@@ -158,6 +158,9 @@ namespace MWMechanics
         bool mBrutalSprinting{ false }; // kinetic player sprints forward this frame
         bool mBrutalSprintAnim{ false }; // the current movement clip is the sprint
         bool mBrutalWounded{ false }; // the NPC plays Dark Messiah's wounded clips
+        // ACT_GRAB_WEAPON: the world item this NPC takes into its hand at "pickup contact".
+        MWWorld::Ptr mBrutalPickupItem;
+        std::string mBrutalPickupGroup; // the crouch from the ground or the reach to a table
         float mBrutalStepPhase{ 0.f }; // player footstep clock, a fraction of the leg cycle
         int mBrutalStepGait{ 0 }; // BrutalFootsteps::Gait of the last player step
         bool mMovementAnimationHasMovement{ false };
@@ -400,6 +403,12 @@ namespace MWMechanics
         void forceStateUpdate();
         // Full-body recovery; group is a preferred reaction clip (falls back to brutal_hit).
         bool stagger(std::string_view group = {});
+        // Dark Messiah's ACT_GRAB_WEAPON: the NPC crouches and, at the clip's "pickup contact",
+        // takes this loose weapon or shield straight into its hand without drawing it.
+        bool canBrutalPickup() const;
+        bool startBrutalPickup(const MWWorld::Ptr& item);
+        // The pickup clip is playing, including the rise after the item was taken.
+        bool isBrutalPickingUp() const;
         bool canSwordClinch() const;
         bool hasPhysicalDeath() const;
         void playSwordClinch(std::string_view group, float speed = 1.f);
@@ -408,6 +417,8 @@ namespace MWMechanics
 
         void cancelAttackForKick();
         void updateBrutalWounded();
+        void updateBrutalPickup();
+        bool takeBrutalPickup(const MWWorld::Ptr& item);
         void updateBrutalShieldBlock();
         void updateBrutalNpcGuard();
         void updateBrutalNpcGuardTarget(bool enabled, bool shield);

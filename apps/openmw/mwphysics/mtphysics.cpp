@@ -828,6 +828,49 @@ namespace MWPhysics
         }
     }
 
+    void PhysicsTaskScheduler::keepDynamicObjectsAboveFloorUnsafe(
+        const std::vector<std::pair<btRigidBody*, btVector3>>& before)
+    {
+        // Only fixed world geometry: static meshes and terrain, not movable bodies, actors or doors.
+        struct StaticFloor final : btCollisionWorld::ClosestRayResultCallback
+        {
+            using ClosestRayResultCallback::ClosestRayResultCallback;
+            bool needsCollision(btBroadphaseProxy* proxy) const override
+            {
+                if (!(proxy->m_collisionFilterGroup & (CollisionType_World | CollisionType_HeightMap))
+                    || (proxy->m_collisionFilterGroup & (CollisionType_Dynamic | CollisionType_Actor)))
+                    return false;
+                const auto* object = static_cast<const btCollisionObject*>(proxy->m_clientObject);
+                const auto* body = btRigidBody::upcast(object);
+                return !(body && body->getInvMass() > 0.f);
+            }
+        };
+        for (const auto& [body, from] : before)
+        {
+            btTransform transform = body->getWorldTransform();
+            const btVector3 to = transform.getOrigin();
+            if (to.z() >= from.z())
+                continue;
+            StaticFloor ray(from, to);
+            mCollisionWorld->rayTest(from, to, ray);
+            if (!ray.hasHit() || ray.m_hitNormalWorld.z() < .5f)
+                continue;
+            btVector3 aabbMin, aabbMax;
+            body->getCollisionShape()->getAabb(btTransform::getIdentity(), aabbMin, aabbMax);
+            const btVector3 half = (aabbMax - aabbMin) * .5f;
+            const btScalar clearance = half[half.minAxis()] + body->getCollisionShape()->getMargin();
+            const btVector3 normal = ray.m_hitNormalWorld.normalized();
+            transform.setOrigin(ray.m_hitPointWorld + normal * clearance);
+            body->setWorldTransform(transform);
+            body->setInterpolationWorldTransform(transform);
+            btVector3 velocity = body->getLinearVelocity();
+            velocity -= normal * std::min(btScalar(0), velocity.dot(normal));
+            body->setLinearVelocity(velocity);
+            body->setInterpolationLinearVelocity(velocity);
+            body->activate(true);
+        }
+    }
+
     void PhysicsTaskScheduler::addReleasedObject(
         const std::shared_ptr<Object>& object, const std::vector<osg::Vec3f>& vertices, float mass)
     {
@@ -2528,13 +2571,20 @@ namespace MWPhysics
             // by up to 9 units. Step the dynamics world in quarters while any ragdoll exists.
             const int substeps = mRagdollTransforms.empty() ? 1 : 4;
             const btScalar subDt = mPhysicsDt / substeps;
+            std::vector<std::pair<btRigidBody*, btVector3>> floorGuard;
+            floorGuard.reserve(mDynamicTransforms.size());
             for (int i = 0; i < substeps; ++i)
             {
                 updateReleasedGripPairs();
                 for (btActionInterface* action : mRagdollActions)
                     static_cast<RagdollStepAction*>(action)->beforeStep(subDt);
                 beforeSuperKickStep();
+                floorGuard.clear();
+                for (const auto& [body, history] : mDynamicTransforms)
+                    if (body->isActive())
+                        floorGuard.emplace_back(const_cast<btRigidBody*>(body), body->getWorldTransform().getOrigin());
                 static_cast<btDiscreteDynamicsWorld*>(mCollisionWorld)->stepSimulation(subDt, 0);
+                keepDynamicObjectsAboveFloorUnsafe(floorGuard);
                 afterSuperKickStep(subDt);
                 updateFlyingObjectsUnsafe(subDt);
                 collectDynamicImpactsUnsafe(subDt);

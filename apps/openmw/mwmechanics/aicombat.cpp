@@ -1,7 +1,14 @@
 #include "aicombat.hpp"
 
+#include <algorithm>
+#include <limits>
+#include <map>
+
 #include <components/detournavigator/navigatorutils.hpp>
+#include <components/debug/debuglog.hpp>
 #include <components/esm3/aisequence.hpp>
+#include <components/esm3/loadarmo.hpp>
+#include <components/esm3/loadweap.hpp>
 #include <components/misc/coordinateconverter.hpp>
 #include <components/misc/mathutil.hpp>
 #include <components/misc/pathgridutils.hpp>
@@ -14,6 +21,7 @@
 #include "../mwworld/esmstore.hpp"
 #include "../mwworld/datetimemanager.hpp"
 #include "../mwworld/inventorystore.hpp"
+#include "../mwworld/worldmodel.hpp"
 
 #include "../mwbase/dialoguemanager.hpp"
 #include "../mwbase/environment.hpp"
@@ -27,9 +35,11 @@
 #include "character.hpp"
 #include "combat.hpp"
 #include "creaturestats.hpp"
+#include "npcstats.hpp"
 #include "movement.hpp"
 #include "pathgrid.hpp"
 #include "steering.hpp"
+#include "weaponpriority.hpp"
 #include "weapontype.hpp"
 
 namespace
@@ -66,6 +76,151 @@ namespace MWMechanics
         {
             return !ranged && actor.getClass().isNpc() && actor != getPlayer()
                 && Settings::game().mDarkMessiahNpcCombat;
+        }
+
+        // ACT_GRAB_WEAPON. The NPC crouches at this horizontal distance from the item's origin
+        // (the source hand lands about 22 units in front of the guard's root; a table blocks the
+        // body farther out), gives an item up after these seconds and searches again at this interval.
+        constexpr float BrutalPickupReach = 46.f;
+        constexpr float BrutalPickupTableReach = 62.f;
+        // Above this height over the NPC's feet the item lies on a table, a crate or a shelf, and
+        // the standing reach is played instead of the crouch; higher items are out of reach.
+        constexpr float BrutalPickupTableHeight = 25.f;
+        constexpr float BrutalPickupMaxHeight = 105.f;
+        constexpr float BrutalPickupWeaponGiveUp = 8.f;
+        constexpr float BrutalPickupShieldGiveUp = 4.f;
+        constexpr float BrutalPickupRescan = .75f;
+        constexpr float BrutalPickupSettled = .3f; // seconds the item must lie still before the crouch
+        // The navmesh ends short of an item whose own collision cuts it, or at a table's edge. The NPC
+        // then walks straight at the item; blocked for this long within this much more than its
+        // reach, it crouches or leans from there.
+        constexpr float BrutalPickupStalled = .4f;
+        constexpr float BrutalPickupStretch = 50.f;
+
+        // Two NPCs never run for one item: item -> (claiming actor, claim expiry).
+        std::map<ESM::RefNum, std::pair<ESM::RefNum, double>> sBrutalPickupClaims;
+
+        bool isTwoHanded(const MWWorld::ConstPtr& weapon)
+        {
+            return weapon.getType() == ESM::Weapon::sRecordId
+                && getWeaponType(weapon.get<ESM::Weapon>()->mBase->mData.mType)->mFlags & ESM::WeaponType::TwoHanded;
+        }
+
+        bool isShield(const MWWorld::ConstPtr& item)
+        {
+            return item.getType() == ESM::Armor::sRecordId
+                && item.get<ESM::Armor>()->mBase->mData.mType == ESM::Armor::Shield;
+        }
+
+        bool hasWeapon(const MWWorld::Ptr& actor)
+        {
+            auto& inventory = actor.getClass().getInventoryStore(actor);
+            for (auto it = inventory.begin(MWWorld::ContainerStore::Type_Weapon); it != inventory.end(); ++it)
+                if (getWeaponType(it->get<ESM::Weapon>()->mBase->mData.mType)->mWeaponClass != ESM::WeaponType::Ammo)
+                    return true;
+            return false;
+        }
+
+        bool hasShield(const MWWorld::Ptr& actor)
+        {
+            auto& inventory = actor.getClass().getInventoryStore(actor);
+            for (auto it = inventory.begin(MWWorld::ContainerStore::Type_Armor); it != inventory.end(); ++it)
+                if (isShield(*it))
+                    return true;
+            return false;
+        }
+
+        bool holdsTwoHanded(const MWWorld::Ptr& actor)
+        {
+            auto& inventory = actor.getClass().getInventoryStore(actor);
+            const auto right = inventory.getSlot(MWWorld::InventoryStore::Slot_CarriedRight);
+            return right != inventory.end() && isTwoHanded(*right);
+        }
+
+        // A loose melee or thrown weapon (or a shield) the NPC may take, whoever owns it: one fighting
+        // for its life does not ask. Items with a script a quest may rely on stay; so does what the
+        // player holds and what lies higher than a table.
+        bool isBrutalPickupCandidate(const MWWorld::Ptr& actor, const MWWorld::Ptr& item, bool shield)
+        {
+            if (shield ? !isShield(item) : item.getType() != ESM::Weapon::sRecordId)
+                return false;
+            if (!shield)
+            {
+                const auto weaponClass = getWeaponType(item.get<ESM::Weapon>()->mBase->mData.mType)->mWeaponClass;
+                if (weaponClass != ESM::WeaponType::Melee && weaponClass != ESM::WeaponType::Thrown)
+                    return false;
+            }
+            if (!item.getClass().getScript(item).empty())
+                return false;
+            if (MWBase::Environment::get().getWorld()->getHeldObject() == item)
+                return false;
+            const float height = item.getRefData().getPosition().pos[2] - actor.getRefData().getPosition().pos[2];
+            return height > -80.f && height < BrutalPickupMaxHeight;
+        }
+
+        bool isBrutalPickupPresent(const MWWorld::Ptr& item)
+        {
+            return !item.isEmpty() && item.isInCell() && item.getCellRef().getCount() > 0
+                && item.getRefData().isEnabled() && item.getRefData().getBaseNode()
+                && MWBase::Environment::get().getWorld()->getHeldObject() != item;
+        }
+
+        // Weapons are ranked as the AI ranks its own inventory (damage, condition, enchantment and the
+        // NPC's skill with the type), a little less the farther they lie; shields by distance only.
+        MWWorld::Ptr findBrutalPickup(const MWWorld::Ptr& actor, const MWWorld::Ptr& enemy, bool shield, double now,
+            const std::vector<ESM::RefNum>& rejected)
+        {
+            const float radius = shield ? Settings::game().mBrutalNpcShieldPickupRadius.get()
+                                        : Settings::game().mBrutalNpcWeaponPickupRadius.get();
+            if (radius <= 0.f)
+                return {};
+            const osg::Vec3f origin = actor.getRefData().getPosition().asVec3();
+            std::vector<MWWorld::Ptr> items;
+            MWBase::Environment::get().getWorld()->getLooseEquipmentInRange(origin, radius, items);
+            for (auto it = sBrutalPickupClaims.begin(); it != sBrutalPickupClaims.end();)
+                it = it->second.second < now ? sBrutalPickupClaims.erase(it) : std::next(it);
+            const ESM::RefNum self = actor.getCellRef().getRefNum();
+            auto& inventory = actor.getClass().getInventoryStore(actor);
+            const auto left = inventory.getSlot(MWWorld::InventoryStore::Slot_CarriedLeft);
+            const bool shieldInHand = left != inventory.end() && isShield(*left);
+            MWWorld::Ptr best;
+            float bestScore = -std::numeric_limits<float>::max();
+            for (const MWWorld::Ptr& item : items)
+            {
+                if (!isBrutalPickupPresent(item) || !isBrutalPickupCandidate(actor, item, shield))
+                    continue;
+                const ESM::RefNum number = item.getCellRef().getRefNum();
+                if (number.isSet())
+                {
+                    if (std::find(rejected.begin(), rejected.end(), number) != rejected.end())
+                        continue;
+                    const auto claim = sBrutalPickupClaims.find(number);
+                    if (claim != sBrutalPickupClaims.end() && claim->second.first != self)
+                        continue;
+                }
+                osg::Vec3f offset = item.getRefData().getPosition().asVec3() - origin;
+                offset.z() = 0.f;
+                const float nearness = 1.f - .5f * std::min(offset.length() / radius, 1.f);
+                float score = -offset.length();
+                if (!shield)
+                {
+                    // With a shield still on its arm the NPC prefers a one-handed weapon.
+                    const float rating = std::max(rateWeapon(item, actor, enemy), .01f);
+                    score = rating * nearness * (shieldInHand && isTwoHanded(item) ? .5f : 1.f);
+                }
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    best = item;
+                }
+            }
+            return best;
+        }
+
+        void stopBrutalPickupMovement(const MWWorld::Ptr& actor)
+        {
+            auto& movement = actor.getClass().getMovementSettings(actor);
+            movement.mPosition[0] = movement.mPosition[1] = movement.mPosition[2] = 0.f;
         }
     }
 
@@ -167,6 +322,14 @@ namespace MWMechanics
             return false;
         }
 
+        if (updateBrutalPickup(actor, target, characterController, storage, duration))
+        {
+            clearDefence();
+            storage.mDmTargetGuardTime = 0.f;
+            storage.mActionCooldown -= duration;
+            return false;
+        }
+
         if (!storage.isFleeing())
         {
             if (storage.mCurrentAction.get()) // need to wait to init action with its attack range
@@ -205,6 +368,158 @@ namespace MWMechanics
             return false;
 
         return attack(actor, target, storage, characterController);
+    }
+
+    bool AiCombat::updateBrutalPickup(const MWWorld::Ptr& actor, const MWWorld::Ptr& target,
+        CharacterController& characterController, AiCombatStorage& storage, float duration)
+    {
+        auto& stats = actor.getClass().getCreatureStats(actor);
+        const auto finish = [&](bool reject) {
+            if (storage.mBrutalPickupItem.isSet())
+            {
+                if (reject)
+                    storage.mBrutalPickupRejected.push_back(storage.mBrutalPickupItem);
+                sBrutalPickupClaims.erase(storage.mBrutalPickupItem);
+            }
+            storage.mBrutalPickupItem = ESM::RefNum();
+            storage.mBrutalPickupCrouching = false;
+            stats.mBrutalPickupPhase = 0;
+            stats.mBrutalPickupTarget = ESM::RefId();
+            return false;
+        };
+        if (!Settings::game().mBrutalNpcWeaponPickup || !actor.getClass().isNpc() || actor == getPlayer()
+            || actor.getClass().getNpcStats(actor).isWerewolf() || !characterController.canBrutalPickup())
+            return finish(false);
+
+        // The crouch and the rise with the item in hand, until the clip ends.
+        if (storage.mBrutalPickupCrouching)
+        {
+            if (characterController.isBrutalPickingUp())
+            {
+                stopBrutalPickupMovement(actor);
+                stats.setAttackingOrSpell(false);
+                return true;
+            }
+            finish(false);
+            storage.mActionCooldown = 0.f; // Choose the next action with the new item at once.
+            storage.mBrutalPickupScan = 0.f; // Then look for a shield right beside.
+            return false;
+        }
+
+        // A knockdown, a paired clinch, paralysis, flight or a health low enough to flee end it;
+        // the ordinary combat decision then runs.
+        const float health = stats.getHealth().getCurrent();
+        const bool shouldFlee = Settings::game().mBrutalNpcFlee
+            && health < Settings::game().mBrutalNpcFleeHealthFraction * stats.getHealth().getModified();
+        if (storage.isFleeing() || shouldFlee || stats.getKnockedDown() || stats.isParalyzed()
+            || characterController.isKnockedDown() || characterController.isKnockedOut() || stats.mBrutalClinchActive
+            || !stats.mBrutalClinchOpponent.isEmpty())
+            return finish(false);
+
+        const bool armed = hasWeapon(actor);
+        const bool wantShield = armed && !hasShield(actor) && !holdsTwoHanded(actor);
+        if (armed && !wantShield)
+            return finish(false);
+        MWWorld::WorldModel* model = MWBase::Environment::get().getWorldModel();
+        MWWorld::Ptr item;
+        if (storage.mBrutalPickupItem.isSet())
+        {
+            item = model->getPtr(storage.mBrutalPickupItem);
+            // Taken by someone else, grabbed by the player, or the need changed.
+            if (!isBrutalPickupPresent(item) || storage.mBrutalPickupShield != wantShield)
+            {
+                finish(false);
+                item = MWWorld::Ptr();
+                storage.mBrutalPickupScan = 0.f;
+            }
+        }
+        // A blow's reaction: keep the chosen item and resume once it ends.
+        if (characterController.isRecovery())
+        {
+            if (item.isEmpty())
+                return false;
+            stopBrutalPickupMovement(actor);
+            return true;
+        }
+        const double now = MWBase::Environment::get().getWorld()->getTimeManager()->getSimulationTime();
+        if (item.isEmpty())
+        {
+            storage.mBrutalPickupScan -= duration;
+            if (storage.mBrutalPickupScan > 0.f)
+                return false;
+            storage.mBrutalPickupScan = BrutalPickupRescan;
+            model->registerPtr(actor);
+            item = findBrutalPickup(actor, target, wantShield, now, storage.mBrutalPickupRejected);
+            if (item.isEmpty())
+                return false;
+            model->registerPtr(item);
+            storage.mBrutalPickupItem = item.getCellRef().getRefNum();
+            storage.mBrutalPickupShield = wantShield;
+            storage.mBrutalPickupLastPos = item.getRefData().getPosition().asVec3();
+            storage.mBrutalPickupStill = 0.f;
+            storage.mBrutalPickupTime = 0.f;
+            storage.mBrutalPickupStall = 0.f;
+            storage.mBrutalPickupActorLast = actor.getRefData().getPosition().asVec3();
+            stats.mBrutalPickupTarget = item.getCellRef().getRefId();
+            Log(Debug::Info) << "Brutal pickup: " << actor.getCellRef().getRefId() << " goes for "
+                             << item.getCellRef().getRefId() << " at "
+                             << (storage.mBrutalPickupLastPos - actor.getRefData().getPosition().asVec3()).length();
+        }
+        sBrutalPickupClaims[storage.mBrutalPickupItem] = { actor.getCellRef().getRefNum(), now + 1.0 };
+
+        storage.mBrutalPickupTime += duration;
+        if (storage.mBrutalPickupTime > (wantShield ? BrutalPickupShieldGiveUp : BrutalPickupWeaponGiveUp))
+        {
+            Log(Debug::Info) << "Brutal pickup: " << actor.getCellRef().getRefId() << " gives up "
+                             << item.getCellRef().getRefId();
+            return finish(true);
+        }
+        const osg::Vec3f itemPos = item.getRefData().getPosition().asVec3();
+        storage.mBrutalPickupStill
+            = (itemPos - storage.mBrutalPickupLastPos).length() > 1.5f ? 0.f : storage.mBrutalPickupStill + duration;
+        storage.mBrutalPickupLastPos = itemPos;
+
+        stats.setAttackingOrSpell(false);
+        storage.stopAttack();
+        storage.stopCombatMove();
+        osg::Vec3f toItem = itemPos - actor.getRefData().getPosition().asVec3();
+        const bool table = toItem.z() > BrutalPickupTableHeight;
+        toItem.z() = 0.f;
+        const float reach = table ? BrutalPickupTableReach : BrutalPickupReach;
+        const osg::Vec3f actorPos = actor.getRefData().getPosition().asVec3();
+        bool stalled = false;
+        if (toItem.length() > reach)
+        {
+            stats.mBrutalPickupPhase = 1;
+            stats.setMovementFlag(CreatureStats::Flag_Run, true);
+            if (pathTo(actor, itemPos, duration, characterController.getSupportedMovementDirections(), reach * .75f))
+            {
+                // The path ended short of the item: straight at it.
+                zTurn(actor, std::atan2(toItem.x(), toItem.y()));
+                actor.getClass().getMovementSettings(actor).mPosition[1] = 1.f;
+                const float advanced = (actorPos - storage.mBrutalPickupActorLast).length();
+                storage.mBrutalPickupStall = advanced < 60.f * duration ? storage.mBrutalPickupStall + duration : 0.f;
+            }
+            else
+                storage.mBrutalPickupStall = 0.f;
+            storage.mBrutalPickupActorLast = actorPos;
+            stalled = storage.mBrutalPickupStall >= BrutalPickupStalled
+                && toItem.length() <= reach + BrutalPickupStretch;
+            if (!stalled)
+                return true;
+        }
+        stopBrutalPickupMovement(actor);
+        storage.mBrutalPickupStall = 0.f;
+        stats.mBrutalPickupPhase = 1;
+        const bool facing = zTurn(actor, std::atan2(toItem.x(), toItem.y()), osg::DegreesToRadians(15.f));
+        if (!facing || storage.mBrutalPickupStill < BrutalPickupSettled)
+            return true;
+        // A scripted animation or a reaction may refuse the crouch for now; the time limit applies.
+        if (!characterController.startBrutalPickup(item))
+            return true;
+        storage.mBrutalPickupCrouching = true;
+        stats.mBrutalPickupPhase = 2;
+        return true;
     }
 
     bool AiCombat::attack(const MWWorld::Ptr& actor, const MWWorld::Ptr& target, AiCombatStorage& storage,

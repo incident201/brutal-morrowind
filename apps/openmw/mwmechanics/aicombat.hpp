@@ -2,6 +2,8 @@
 #define GAME_MWMECHANICS_AICOMBAT_H
 
 #include "aitemporarybase.hpp"
+
+#include <vector>
 #include "aitimer.hpp"
 #include "movement.hpp"
 #include "typedaipackage.hpp"
@@ -64,6 +66,20 @@ namespace MWMechanics
         double mBrutalFleeUntil = 0.0;
         bool mBrutalFleeing = false;
 
+        // Dark Messiah's ACT_GRAB_WEAPON (AiCombat::updateBrutalPickup): the loose item this NPC goes
+        // for, whether it is a shield, the crouch, the item's last position and how long it lay
+        // still, the time spent going to it, the next search and the items it gave up.
+        ESM::RefNum mBrutalPickupItem;
+        bool mBrutalPickupShield = false;
+        bool mBrutalPickupCrouching = false;
+        osg::Vec3f mBrutalPickupLastPos;
+        float mBrutalPickupStill = 0.f;
+        float mBrutalPickupTime = 0.f;
+        float mBrutalPickupScan = 0.f;
+        osg::Vec3f mBrutalPickupActorLast; // the NPC's position in the direct approach
+        float mBrutalPickupStall = 0.f; // seconds the direct approach has not advanced
+        std::vector<ESM::RefNum> mBrutalPickupRejected;
+
         // Dark Messiah guard pacing (npc_guard.qct, mm_game_settings.txt).
         bool mDmBerserk = false;
         float mDmRhythmTimer = 0.f;
@@ -125,6 +141,11 @@ namespace MWMechanics
             CharacterController& characterController);
 
         void updateLOS(const MWWorld::Ptr& actor, const MWWorld::Ptr& target, float duration, AiCombatStorage& storage);
+
+        /// An NPC without a weapon goes for one lying nearby, then for a shield right beside it.
+        /// Returns true while this owns the actor's movement and actions.
+        bool updateBrutalPickup(const MWWorld::Ptr& actor, const MWWorld::Ptr& target,
+            CharacterController& characterController, AiCombatStorage& storage, float duration);
 
         void updateFleeing(const MWWorld::Ptr& actor, const MWWorld::Ptr& target, float duration,
             MWWorld::MovementDirectionFlags supportedMovementDirections, AiCombatStorage& storage);

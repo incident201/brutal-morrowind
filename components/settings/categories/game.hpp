@@ -63,6 +63,11 @@ namespace Settings
             makeClampSanitizerFloat(0, 1) };
         SettingValue<float> mBrutalNpcFleeTime{ mIndex, "Game", "brutal npc flee time",
             makeClampSanitizerFloat(0, 600) };
+        SettingValue<bool> mBrutalNpcWeaponPickup{ mIndex, "Game", "brutal npc weapon pickup" };
+        SettingValue<float> mBrutalNpcWeaponPickupRadius{ mIndex, "Game", "brutal npc weapon pickup radius",
+            makeClampSanitizerFloat(0, 4000) };
+        SettingValue<float> mBrutalNpcShieldPickupRadius{ mIndex, "Game", "brutal npc shield pickup radius",
+            makeClampSanitizerFloat(0, 4000) };
         SettingValue<bool> mPlayerHitRecovery{ mIndex, "Game", "player hit recovery" };
         SettingValue<float> mPlayerFatigueRegenFraction{ mIndex, "Game", "player fatigue regen fraction",
             makeClampSanitizerFloat(0, 10) };
