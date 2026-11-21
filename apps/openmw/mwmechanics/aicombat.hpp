@@ -88,6 +88,11 @@ namespace MWMechanics
         float mDmPreventiveTimer = 0.f;
         float mDmTargetGuardTime = 0.f;
         float mDmChargedHold = 0.f;
+        // Spreading around a shared target: the side to drift (-1 left, 1 right, 0 none),
+        // its next re-evaluation, and whether the strafe currently owns mMovement.
+        float mBrutalSpreadSide = 0.f;
+        float mBrutalSpreadTimer = 0.f;
+        bool mBrutalSpreading = false;
         void updateDarkMessiah(float duration, const MWWorld::Ptr& actor, const MWWorld::Ptr& target,
             CharacterController& characterController);
 
@@ -144,6 +149,8 @@ namespace MWMechanics
 
         /// An NPC without a weapon goes for one lying nearby, then for a shield right beside it.
         /// Returns true while this owns the actor's movement and actions.
+        void updateBrutalSpread(const MWWorld::Ptr& actor, const MWWorld::Ptr& target, AiCombatStorage& storage,
+            float duration);
         bool updateBrutalPickup(const MWWorld::Ptr& actor, const MWWorld::Ptr& target,
             CharacterController& characterController, AiCombatStorage& storage, float duration);
 

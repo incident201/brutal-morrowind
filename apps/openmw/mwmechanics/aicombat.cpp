@@ -349,6 +349,7 @@ namespace MWMechanics
 
             storage.updateCombatMove(duration);
             storage.updateDarkMessiah(duration, actor, target, characterController);
+            updateBrutalSpread(actor, target, storage, duration);
             storage.mRotateMove = false;
             if (storage.mReadyToAttack)
                 updateActorsMovement(actor, duration, storage);
@@ -368,6 +369,115 @@ namespace MWMechanics
             return false;
 
         return attack(actor, target, storage, characterController);
+    }
+
+    namespace
+    {
+        constexpr float SpreadRadius = 600.f; // only fighters this close to the target take part
+        constexpr float SpreadStartArc = 0.785398f; // 45 degrees
+        constexpr float SpreadStopArc = 1.047198f; // 60 degrees
+        constexpr float SpreadSpeed = .8f;
+
+        // Which way (-1 left, 1 right, 0 stay) a melee fighter should drift around its target
+        // so that it is not standing in the arc of an ally that holds the front. Allies closer
+        // to the target keep their place; this actor moves away from them along the circle.
+        float chooseBrutalSpreadSide(const MWWorld::Ptr& actor, const MWWorld::Ptr& target, float current)
+        {
+            const osg::Vec3f targetPos = target.getRefData().getPosition().asVec3();
+            const osg::Vec3f actorPos = actor.getRefData().getPosition().asVec3();
+            const osg::Vec2f mine(actorPos.x() - targetPos.x(), actorPos.y() - targetPos.y());
+            const float myDistance = mine.length();
+            if (myDistance > SpreadRadius || myDistance < 1.f)
+                return 0.f;
+            const float myAngle = std::atan2(mine.x(), mine.y());
+            const unsigned myIndex = actor.getCellRef().getRefNum().mIndex;
+            const float arc = current != 0.f ? SpreadStopArc : SpreadStartArc;
+            float push = 0.f;
+            bool crowded = false;
+            for (const MWWorld::Ptr& ally : MWBase::Environment::get().getMechanicsManager()->getActorsFighting(target))
+            {
+                if (ally == actor || ally == target || ally.getClass().getCreatureStats(ally).isDead())
+                    continue;
+                const osg::Vec3f allyPos = ally.getRefData().getPosition().asVec3();
+                const osg::Vec2f theirs(allyPos.x() - targetPos.x(), allyPos.y() - targetPos.y());
+                const float distance = theirs.length();
+                if (distance > SpreadRadius || std::abs(allyPos.z() - targetPos.z()) > 200.f)
+                    continue;
+                const bool holdsFront = distance < myDistance - 15.f
+                    || (std::abs(distance - myDistance) <= 15.f && ally.getCellRef().getRefNum().mIndex < myIndex);
+                if (!holdsFront)
+                    continue;
+                const float delta = static_cast<float>(Misc::normalizeAngle(myAngle - std::atan2(theirs.x(), theirs.y())));
+                if (std::abs(delta) >= arc)
+                    continue;
+                crowded = true;
+                // Directly behind an ally: keep a chosen side, or pick one by identity.
+                const float away = std::abs(delta) < osg::DegreesToRadians(3.f)
+                    ? (current != 0.f ? -current : (myIndex % 2 ? 1.f : -1.f))
+                    : (delta > 0.f ? 1.f : -1.f);
+                push += away * (arc - std::abs(delta)) / arc;
+            }
+            if (!crowded || push == 0.f)
+                return 0.f;
+            // Increasing the angle around the target is a step to the fighter's left.
+            const float side = push > 0.f ? -1.f : 1.f;
+            // Only step where there is room and floor.
+            const int mask = MWPhysics::CollisionType_World | MWPhysics::CollisionType_HeightMap
+                | MWPhysics::CollisionType_Door | MWPhysics::CollisionType_Actor;
+            const osg::Vec3f half = MWBase::Environment::get().getWorld()->getHalfExtents(actor);
+            const osg::Vec2f facing = -mine / myDistance;
+            const osg::Vec3f right(facing.y(), -facing.x(), 0.f);
+            const osg::Vec3f source = actorPos + osg::Vec3f(0, 0, 0.75f * half.z());
+            const osg::Vec3f beside = source + right * (side * (half.x() + 56.f));
+            const auto* rays = MWBase::Environment::get().getWorld()->getRayCasting();
+            if (rays->castRay(source, beside, std::vector<MWWorld::ConstPtr>{ actor }, {}, mask).mHit
+                || !rays->castRay(beside, beside - osg::Vec3f(0, 0, 0.75f * half.z() + 96.f), mask).mHit)
+                return 0.f;
+            return side;
+        }
+    }
+
+    // NPCs attacking one target fan out around it instead of queueing in one arc.
+    void AiCombat::updateBrutalSpread(
+        const MWWorld::Ptr& actor, const MWWorld::Ptr& target, AiCombatStorage& storage, float duration)
+    {
+        bool ranged = false;
+        if (storage.mCurrentAction)
+            storage.mCurrentAction->getCombatRange(ranged);
+        const auto& stats = actor.getClass().getCreatureStats(actor);
+        const bool allowed = Settings::game().mBrutalEnabled && storage.mCurrentAction
+            && darkMessiahMelee(actor, ranged) && !stats.mBrutalNpcGuardRequested && !storage.mCombatMove
+            && !stats.getKnockedDown() && !storage.mUseCustomDestination;
+        if (!allowed)
+        {
+            if (storage.mBrutalSpreading && !storage.mCombatMove)
+                storage.mMovement.mPosition[0] = 0.f;
+            storage.mBrutalSpreading = false;
+            storage.mBrutalSpreadSide = 0.f;
+            return;
+        }
+        storage.mBrutalSpreadTimer -= duration;
+        if (storage.mBrutalSpreadTimer <= 0.f)
+        {
+            auto& prng = MWBase::Environment::get().getWorld()->getPrng();
+            storage.mBrutalSpreadTimer = .25f + .15f * Misc::Rng::rollProbability(prng);
+            storage.mBrutalSpreadSide = chooseBrutalSpreadSide(actor, target, storage.mBrutalSpreadSide);
+        }
+        const float side = storage.mBrutalSpreadSide * SpreadSpeed;
+        if (storage.mReadyToAttack)
+        {
+            storage.mMovement.mPosition[0] = side;
+            storage.mBrutalSpreading = side != 0.f;
+        }
+        else
+        {
+            if (storage.mBrutalSpreading)
+                storage.mMovement.mPosition[0] = 0.f;
+            storage.mBrutalSpreading = false;
+            // Approaching: curve onto a free flank while the path still leads to the target.
+            if (side != 0.f)
+                actor.getClass().getMovementSettings(actor).mPosition[0] = side;
+        }
     }
 
     bool AiCombat::updateBrutalPickup(const MWWorld::Ptr& actor, const MWWorld::Ptr& target,

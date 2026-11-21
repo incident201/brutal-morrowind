@@ -1,6 +1,7 @@
 Brutal Morrowind (unreleased)
 ----------------------------
 
+    AI: NPCs fighting the same target fan out around it. An NPC standing in the arc of an ally closer to the target steps sideways towards a free flank instead of queueing behind it.
     Physics: An NPC that runs out of stamina collapses into a ragdoll instead of playing Morrowind's knockout animation, stays down until its stamina recovers, then stands up.
     Combat: Thrown objects hurt more, in proportion to their momentum, and a hit to the head does more damage. A head hit knocks the victim down 60 to 90 percent of the time, more often with heavier objects.
     Crime: A guard pursuing a player who is fighting with adrenaline joins the fight instead of waiting beside them, and returns to the arrest once the adrenaline fades. A player with adrenaline who is not fighting is arrested as usual.
