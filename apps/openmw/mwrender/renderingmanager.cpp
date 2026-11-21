@@ -114,7 +114,10 @@ namespace MWRender
             // Both participants now have this frame's complete animated transforms.
             // RigGeometry skins during CULL, so this fit affects the same frame.
             if (update)
+            {
                 owner->fitSwordClinchPose(*visitor);
+                owner->fitBackstabPose(*visitor);
+            }
         }
     };
 

@@ -44,6 +44,7 @@
 #include <components/sceneutil/positionattitudetransform.hpp>
 
 #include "../mwrender/animation.hpp"
+#include "../mwrender/camera.hpp"
 #include "../mwrender/npcanimation.hpp"
 
 #include "../mwbase/environment.hpp"
@@ -139,13 +140,21 @@ namespace
         MWPhysics::RayCastingResult hit;
         if (player)
         {
-            if (const auto blade = player->getWeaponBladeForBlood())
+            auto blade = player->getBackstabBlade();
+            if (!blade)
+                blade = player->getWeaponBladeForBlood();
+            if (blade)
             {
                 if (world->castRenderingRay(hit, blade->first, blade->second, true, false, {}, true)
                     && hit.mHitObject == victim)
                 {
+                    MWPhysics::RayCastingResult viewHit;
+                    const bool covered = world->castRenderingRay(viewHit,
+                        osg::Vec3f(world->getCamera()->getPosition()), blade->second, true, false, {}, true)
+                        && viewHit.mHitObject == victim;
                     Log(Debug::Verbose) << "Brutal backstab blade contact " << step << " on "
-                                        << victim.getCellRef().getRefId();
+                        << victim.getCellRef().getRefId() << ", tip covered=" << covered
+                        << ", blade past surface=" << (blade->second - hit.mHitPos).length();
                     outward = hit.mHitNormal;
                     return hit.mHitPos;
                 }
@@ -1929,6 +1938,18 @@ namespace MWMechanics
         return best;
     }
 
+    void CharacterController::enterBackstabStance(const MWWorld::Ptr& target)
+    {
+        mBackstab.mPhase = BrutalBackstabPhase::Entering;
+        mBackstab.mVictim = MWWorld::SafePtr(target);
+        mBackstab.mWeapon = MWWorld::SafePtr(mWeapon);
+        auto& stats = mPtr.getClass().getCreatureStats(mPtr);
+        stats.mBrutalBackstabPhase = static_cast<int>(mBackstab.mPhase);
+        stats.mBrutalBackstabTarget = target;
+        playBlendedAnimation(sBackstabIn, Priority_Weapon, MWRender::BlendMask_All,
+            true, 1.f, "start", "stop", 0.f, 0);
+    }
+
     bool CharacterController::startBackstabExecution(const MWWorld::Ptr& victim)
     {
         if (victim.isEmpty() || !canPlayBackstab(true))
@@ -2065,6 +2086,10 @@ namespace MWMechanics
     {
         if (mBackstab.mPhase == BrutalBackstabPhase::None)
             return;
+        if (playCancelAnim && mAnimation && mBackstab.mPhase == BrutalBackstabPhase::Entering
+            && mAnimation->isPlaying(sBackstabIn)
+            && mAnimation->getCurrentTime(sBackstabIn) < mAnimation->getTextKeyTime(sBackstabIn + ": hide offhand"))
+            playCancelAnim = false;
         const bool wasExecuting = mBackstab.mPhase == BrutalBackstabPhase::Executing;
         if (wasExecuting)
         {
@@ -2341,14 +2366,22 @@ namespace MWMechanics
                 return false;
             }
             mBackstab.mVictim = MWWorld::SafePtr(target);
-            if (getAttackingOrSpell())
-                return startBackstabExecution(target);
-            if (mBackstab.mPhase == BrutalBackstabPhase::Entering && !mAnimation->isPlaying(sBackstabIn))
+            mBackstab.mAttackQueued |= getAttackingOrSpell();
+            if (mBackstab.mPhase == BrutalBackstabPhase::Entering)
             {
+                if (mAnimation->isPlaying(sBackstabIn))
+                {
+                    syncStats();
+                    return mBackstab.mAttackQueued;
+                }
+                if (mBackstab.mAttackQueued)
+                    return startBackstabExecution(target);
                 mBackstab.mPhase = BrutalBackstabPhase::Ready;
                 playBlendedAnimation(sBackstabIdle, Priority_Weapon, MWRender::BlendMask_All,
                     false, 1.f, "start", "stop", 0.f, std::numeric_limits<uint32_t>::max(), true);
             }
+            else if (mBackstab.mAttackQueued)
+                return startBackstabExecution(target);
             syncStats();
             return false;
         }
@@ -2358,14 +2391,7 @@ namespace MWMechanics
         {
             const MWWorld::Ptr target = findBackstabTarget(false);
             if (!target.isEmpty())
-            {
-                mBackstab.mPhase = BrutalBackstabPhase::Entering;
-                mBackstab.mVictim = MWWorld::SafePtr(target);
-                mBackstab.mWeapon = MWWorld::SafePtr(mWeapon);
-                playBlendedAnimation(sBackstabIn, Priority_Weapon, MWRender::BlendMask_All,
-                    true, 1.f, "start", "stop", 0.f, 0);
-                syncStats();
-            }
+                enterBackstabStance(target);
         }
         return false;
     }
@@ -3016,8 +3042,16 @@ namespace MWMechanics
             if (!getAttackingOrSpell() && canPlayBackstab(false))
             {
                 if (const MWWorld::Ptr backstabTarget = findBackstabTarget(false); !backstabTarget.isEmpty())
-                    if (startBackstabExecution(backstabTarget))
-                        return false;
+                {
+                    MWRender::Animation::ScopedDeferActiveGroupReset defer(*mAnimation);
+                    mAnimation->disable(mCurrentWeapon);
+                    mReadyToHit = false;
+                    mBrutalChargedHold = false;
+                    mUpperBodyState = UpperBodyState::WeaponEquipped;
+                    enterBackstabStance(backstabTarget);
+                    mBackstab.mAttackQueued = true;
+                    return false;
+                }
             }
             if (mBrutalChargedHold)
             {

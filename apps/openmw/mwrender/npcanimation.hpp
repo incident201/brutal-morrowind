@@ -258,6 +258,8 @@ namespace MWRender
             const osg::Vec3f& origin, const osg::Vec3f& end, bool combat) const;
 
         std::vector<std::pair<osg::observer_ptr<osg::MatrixTransform>, osg::Matrixf>> mClinchSourcePose;
+        std::vector<std::pair<osg::observer_ptr<osg::MatrixTransform>, osg::Matrixf>> mBackstabSourcePose;
+        std::optional<std::pair<osg::Vec3f, osg::Vec3f>> mBackstabBlade;
         osg::observer_ptr<osg::Node> mClinchBladeNode;
         osg::Vec3f mClinchBladeRange;
         std::uint64_t mClinchPoseId = 0;
@@ -431,6 +433,7 @@ namespace MWRender
         bool addWeaponBlood(const osg::Vec3f& contact, std::string_view kind, bool power, bool left = false);
         // Hilt and tip of a drawn melee weapon in world space.
         std::optional<std::pair<osg::Vec3f, osg::Vec3f>> getWeaponBladeForBlood(bool left = false) const;
+        auto getBackstabBlade() const { return mBackstabBlade; }
         std::map<std::string, double> getWeaponBloodStats() const;
         void startCutBloodFlow();
         void startBisectionBloodFlow();
@@ -450,6 +453,7 @@ namespace MWRender
         SwordClinchGeometry mSwordClinchGeometry;
         void restoreTransientPose() override;
         void fitSwordClinchPose(osg::NodeVisitor& visitor);
+        void fitBackstabPose(osg::NodeVisitor& visitor);
         bool canFitSwordClinchPose(NpcAnimation& opponent);
         const SwordClinchGeometry& getSwordClinchGeometryForAudit() const { return mSwordClinchGeometry; }
         // worldPoint is the threatened body point; incomingDirection points

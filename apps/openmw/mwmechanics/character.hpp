@@ -227,6 +227,7 @@ namespace MWMechanics
             float mEyeLift = 0.f;
             float mTotalDamage = 0.f;
             float mDealtDamage = 0.f;
+            bool mAttackQueued = false;
             bool mLethal = false;
             bool mReleased = false;
         };
@@ -379,6 +380,7 @@ namespace MWMechanics
         bool canPlayBackstab(bool executing = false) const;
         bool isValidBackstabTarget(const MWWorld::Ptr& target, bool maintain) const;
         MWWorld::Ptr findBackstabTarget(bool maintain) const;
+        void enterBackstabStance(const MWWorld::Ptr& target);
         bool startBackstabExecution(const MWWorld::Ptr& victim);
         bool updateBackstab();
         void cancelBackstab(bool playCancelAnim = false);

@@ -1,4 +1,5 @@
 #include "npcanimation.hpp"
+#include "griparms.hpp"
 #include "npcblood.hpp"
 #include "decapitation.hpp"
 #include "bisection.hpp"
@@ -55,6 +56,7 @@
 #include <components/sceneutil/hemcoverage.hpp>
 #include <components/sceneutil/lightcommon.hpp>
 #include <components/sceneutil/positionattitudetransform.hpp>
+#include <components/sceneutil/skeleton.hpp>
 #include <components/sceneutil/visitor.hpp>
 #include <components/settings/values.hpp>
 
@@ -1242,9 +1244,11 @@ namespace MWRender
     class OverrideFieldOfViewCallback : public osg::NodeCallback
     {
     public:
-        OverrideFieldOfViewCallback(float fov, RenderingManager* renderingManager, bool heldObject = false)
+        OverrideFieldOfViewCallback(float fov, RenderingManager* renderingManager, bool heldObject = false,
+            NpcAnimation* actor = nullptr)
             : mFov(fov)
             , mRenderingManager(renderingManager)
+            , mActor(actor)
         {
             if (heldObject)
             {
@@ -1262,11 +1266,23 @@ namespace MWRender
             if (mHeldState)
                 cv->pushStateSet(mHeldState);
             float fov, aspect, zNear, zFar;
-            if (cv->getProjectionMatrix()->getPerspective(fov, aspect, zNear, zFar) && std::abs(fov - mFov) > 0.001)
+            const bool perspective = cv->getProjectionMatrix()->getPerspective(fov, aspect, zNear, zFar);
+            float targetFov = mFov;
+            osg::ref_ptr<NpcAnimation> actor;
+            constexpr std::string_view execution = "brutal_backstab_out";
+            if (perspective && mActor.lock(actor) && actor->isPlaying(execution))
             {
-                fov = mFov;
+                // Match the viewmodel projection to the victim at contact.
+                // Custom viewmodel FOVs ease in and out during reach and recovery.
+                const float time = actor->getCurrentTime(execution);
+                const float end = actor->getTextKeyTime("brutal_backstab_out: stop");
+                const float progress = std::clamp(std::min(time, end - time) / .22f, 0.f, 1.f);
+                targetFov = std::lerp(mFov, fov, progress * progress * (3.f - 2.f * progress));
+            }
+            if (perspective && std::abs(fov - targetFov) > 0.001)
+            {
                 osg::ref_ptr<osg::RefMatrix> newProjectionMatrix = new osg::RefMatrix();
-                newProjectionMatrix->makePerspective(fov, aspect, zNear, zFar);
+                newProjectionMatrix->makePerspective(targetFov, aspect, zNear, zFar);
 
                 osg::Vec2f offset = mRenderingManager->getProjectionOffset();
 
@@ -1295,6 +1311,7 @@ namespace MWRender
         float mFov;
         RenderingManager* mRenderingManager;
         osg::ref_ptr<osg::StateSet> mHeldState;
+        osg::observer_ptr<NpcAnimation> mActor;
     };
 
     osg::ref_ptr<osg::Callback> NpcAnimation::makeHeldObjectCullCallback() const
@@ -1317,7 +1334,7 @@ namespace MWRender
 
     void NpcAnimation::setRenderBin()
     {
-        if (mViewMode == VM_FirstPerson && !useFullBodyFirstPerson())
+        if (mViewMode == VM_FirstPerson && !useFullBodyFirstPerson() && !isPlaying("brutal_backstab_out"))
         {
             [[maybe_unused]] static const bool prototypeAdded = [&] {
                 osg::ref_ptr<osgUtil::RenderBin> depthClearBin(new osgUtil::RenderBin);
@@ -1476,7 +1493,7 @@ namespace MWRender
         {
             mObjectRoot->setNodeMask(Mask_FirstPerson);
             mObjectRoot->addCullCallback(new OverrideFieldOfViewCallback(
-                mFirstPersonFieldOfView, MWBase::Environment::get().getWorld()->getRenderingManager()));
+                mFirstPersonFieldOfView, MWBase::Environment::get().getWorld()->getRenderingManager(), false, this));
         }
 
         // Separate player and NPC paths keep their last-priority overrides isolated.
@@ -2391,6 +2408,144 @@ namespace MWRender
         return std::make_unique<PartHolder>(std::move(attached));
     }
 
+    void NpcAnimation::fitBackstabPose(osg::NodeVisitor& visitor)
+    {
+        mBackstabBlade.reset();
+        if (mViewMode != VM_FirstPerson || useFullBodyFirstPerson() || mBodyAwareness
+            || mViewmodelSet != BrutalViewmodel_Dagger || !visitor.getFrameStamp())
+            return;
+
+        constexpr std::string_view execution = "brutal_backstab_out";
+        const auto blend = [](float t) {
+            t = std::clamp(t, 0.f, 1.f);
+            return t * t * (3.f - 2.f * t);
+        };
+        const auto setPose = [this](osg::MatrixTransform* bone, const osg::Matrixf& pose) {
+            mBackstabSourcePose.emplace_back(bone, bone->getMatrix());
+            bone->setMatrix(pose);
+        };
+        const auto dipOffhand = [&](std::string_view group, std::string_view event) {
+            if (!isPlaying(group))
+                return;
+            const float marker = getTextKeyTime(event);
+            if (marker < 0.f)
+                return;
+            const float relative = getCurrentTime(group) - marker;
+            const float dip = blend((relative + .16f) / .13f) * (1.f - blend((relative - .025f) / .17f));
+            if (dip <= 0.f)
+                return;
+            const auto found = getNodeMap().find("Bip01 L Clavicle");
+            if (found == getNodeMap().end())
+                return;
+            auto* clavicle = found->second.get();
+            const auto paths = clavicle->getParentalNodePaths();
+            if (paths.empty())
+                return;
+            auto parent = paths.front();
+            parent.pop_back();
+            auto local = osg::Matrixf(clavicle->getMatrix());
+            local.setTrans(local.getTrans() + osg::Matrixf::transform3x3(osg::Vec3f(0, 0, -72.f * dip),
+                osg::Matrixf::inverse(osg::computeLocalToWorld(parent))));
+            setPose(clavicle, local);
+        };
+        dipOffhand("brutal_backstab_in", "brutal_backstab_in: hide offhand");
+        dipOffhand("brutal_backstab_cancel", "brutal_backstab_cancel: show offhand");
+        dipOffhand(execution, "brutal_backstab_out: show offhand");
+
+        const float t = getCurrentTime(execution);
+        if (isPlaying(execution))
+        {
+            const float align = getTextKeyTime("brutal_backstab_out: align");
+            const float first = getTextKeyTime("brutal_backstab_out: stab1");
+            const float second = getTextKeyTime("brutal_backstab_out: stab2");
+            const float rightWeight = blend((t - align) / std::max(first - align - .025f, .05f))
+                * (1.f - blend((t - second - .09f) / .22f));
+            const float leftWeight = blend((t - align + .035f) / .19f) * (1.f - blend((t - 1.30f) / .26f));
+            const auto& stats = mPtr.getClass().getCreatureStats(mPtr);
+            if (leftWeight > 0.f && !stats.mBrutalBackstabTarget.isEmpty())
+            {
+                const auto* victim = MWBase::Environment::get().getWorld()->getAnimation(stats.mBrutalBackstabTarget);
+                const auto neck = victim ? victim->getBoneWorldMatrix("Bip01 Neck") : std::nullopt;
+                const auto leftShoulder = victim ? victim->getBoneWorldMatrix("Bip01 L UpperArm") : std::nullopt;
+                const auto rightShoulder = victim ? victim->getBoneWorldMatrix("Bip01 R UpperArm") : std::nullopt;
+                const auto waist = victim ? victim->getBoneWorldMatrix("Bip01 Spine1") : std::nullopt;
+                const auto palm = getBoneWorldMatrix("Bip01 L Hand");
+                const auto knuckle = getBoneWorldMatrix("Bip01 L Finger2");
+                const auto blade = getWeaponBladeForBlood();
+                if (neck && leftShoulder && rightShoulder && waist && palm && knuckle && blade)
+                {
+                    const osg::Vec3f throat = neck->getTrans();
+                    osg::Vec3f up = throat - waist->getTrans();
+                    osg::Vec3f side = rightShoulder->getTrans() - leftShoulder->getTrans();
+                    up.normalize();
+                    side -= up * (side * up);
+                    const float shoulderWidth = side.normalize();
+                    const osg::Vec3f forward = up ^ side;
+                    const float collar = std::clamp(shoulderWidth * .30f, 5.f, 8.f);
+                    const float wrap = blend((t - align - .10f) / .23f);
+                    const osg::Vec3f knuckles = knuckle->getTrans();
+                    const osg::Vec3f leftGrip = throat - side * (2.f + (collar - 1.f) * wrap)
+                        + forward * (-5.f + 8.f * wrap) + up * (1.f + wrap);
+                    osg::Vec3f fingers = forward * (.15f + .65f * wrap) + side * .7f + up * .16f;
+                    fingers.normalize();
+                    osg::Quat gripTurn, gripAlign;
+                    gripAlign.makeRotate(knuckles - osg::Vec3f(palm->getTrans()), fingers);
+                    gripTurn.slerp(.80f * leftWeight, osg::Quat(), gripAlign);
+
+                    osg::Vec3f bladeAxis = blade->second - blade->first;
+                    const float length = bladeAxis.normalize();
+                    const float cut = blend((t - first - .11f) / std::max(second - first - .15f, .05f));
+                    osg::Vec3f direction = -side * (.72f + .20f * cut)
+                        - up * (.52f - .26f * cut) + forward * (.46f - .28f * cut);
+                    direction.normalize();
+                    osg::Quat alignBlade, turn;
+                    alignBlade.makeRotate(bladeAxis, direction);
+                    turn.slerp(rightWeight, osg::Quat(), alignBlade);
+                    const osg::Vec3f entry = throat + forward * 2.5f - up * 1.5f;
+                    const osg::Vec3f hilt = entry - direction * std::max(3.f, length - 5.f);
+                    const std::array<osg::Matrixf, 2> correction{
+                        osg::Matrixf::translate(-blade->first) * osg::Matrixf::rotate(turn)
+                            * osg::Matrixf::translate(blade->first + (hilt - blade->first) * rightWeight),
+                        osg::Matrixf::translate(-knuckles) * osg::Matrixf::rotate(gripTurn)
+                            * osg::Matrixf::translate(knuckles + (leftGrip - knuckles) * leftWeight),
+                    };
+                    std::array<GripArm, 2> arms;
+                    GripArmLimits limits;
+                    limits.clavicleTurn = .4f;
+                    limits.minElbowBend = .12f;
+                    limits.elbows[1] = { -side - forward * .80f - up * .15f, .90f * leftWeight };
+                    float clamp = 0.f;
+                    if (shoulderWidth > 1.f && length > 3.f
+                        && solveGripArms(getNodeMap(), osg::Matrixf(),
+                            [](osg::MatrixTransform* bone) { return bone->getMatrix(); }, arms, clamp, limits, &correction))
+                    {
+                        for (const auto& arm : arms)
+                        {
+                            if (arm.clavicle)
+                                setPose(arm.clavicle, arm.clavicleResult);
+                            for (unsigned joint = 0; joint < arm.bones.size(); ++joint)
+                                setPose(arm.bones[joint], arm.result[joint]);
+                        }
+                        const auto& right = arms[0];
+                        const osg::Matrixf fit = osg::Matrixf::inverse(right.world[2])
+                            * right.result[2] * right.result[1] * right.result[0] * right.parent;
+                        mBackstabBlade = std::pair{ blade->first * fit, blade->second * fit };
+                    }
+                }
+            }
+        }
+
+        if (mBackstabSourcePose.empty() || !mSkeleton)
+            return;
+        mSkeleton->markDirty();
+        osg::NodeVisitor bounds(osg::NodeVisitor::TRAVERSE_ALL_CHILDREN);
+        bounds.setVisitorType(osg::NodeVisitor::UPDATE_VISITOR);
+        bounds.setTraversalNumber(visitor.getTraversalNumber());
+        bounds.setFrameStamp(new osg::FrameStamp(*visitor.getFrameStamp()));
+        bounds.setNodeMaskOverride(~0u);
+        mObjectRoot->accept(bounds);
+    }
+
     osg::Vec3f NpcAnimation::runAnimation(float timepassed)
     {
         restoreTransientPose();
@@ -2412,6 +2567,13 @@ namespace MWRender
         if(mLimbSevering && (!Settings::game().mBrutalDismemberment || !Settings::game().mBrutalRagdoll || !mPtr.getClass().getNpcStats(mPtr).isDead()))
             setLimbsSevered(0);
         osg::Vec3f ret = Animation::runAnimation(timepassed);
+        if (mViewMode == VM_FirstPerson && !useFullBodyFirstPerson())
+        {
+            const auto* state = mObjectRoot->getStateSet();
+            const bool overlay = state && state->useRenderBinDetails() && state->getBinName() == "DepthClear";
+            if (overlay == isPlaying("brutal_backstab_out"))
+                setRenderBin();
+        }
         updateNpcGuardPose(timepassed);
         updateNpcTwoHandGuardPose(timepassed);
 
