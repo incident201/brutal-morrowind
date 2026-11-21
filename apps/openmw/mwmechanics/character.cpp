@@ -75,6 +75,98 @@
 namespace
 {
     const std::string sGroundFinisher = "brutal_ground_finisher";
+    const std::string sBackstabIn = "brutal_backstab_in";
+    const std::string sBackstabIdle = "brutal_backstab_idle";
+    const std::string sBackstabCancel = "brutal_backstab_cancel";
+    const std::string sBackstabOut = "brutal_backstab_out";
+    const std::string sBackstabVictim = "brutal_backstabbed";
+
+    constexpr int sBackstabGround = MWPhysics::CollisionType_World | MWPhysics::CollisionType_Door
+        | MWPhysics::CollisionType_HeightMap;
+    constexpr int sBackstabObstruction = sBackstabGround | MWPhysics::CollisionType_Dynamic;
+
+    float backstabBlend(float fraction)
+    {
+        const float t = std::clamp(fraction, 0.f, 1.f);
+        return t * t * (3.f - 2.f * t);
+    }
+
+    bool backstabPathClear(const MWBase::World& world, const osg::Vec3f& from, const osg::Vec3f& to,
+        const osg::Vec3f& extent)
+    {
+        if ((from - to).length2() < .01f)
+            return true;
+        const auto* rays = world.getRayCasting();
+        const float radius = std::min(extent.x(), extent.y()) * .85f;
+        for (float height : { extent.z() * .5f, extent.z() * 1.55f })
+        {
+            const osg::Vec3f offset(0.f, 0.f, std::max(radius + 2.f, height));
+            if (rays->castSphere(from + offset, to + offset, radius, sBackstabObstruction).mHit)
+                return false;
+        }
+        return true;
+    }
+
+    std::optional<osg::Vec3f> backstabPlacement(const MWBase::World& world, const MWWorld::Ptr& player,
+        const MWWorld::Ptr& victim, const osg::Vec3f& forward)
+    {
+        const osg::Vec3f from = victim.getRefData().getPosition().asVec3();
+        const osg::Vec3f extent = world.getHalfExtents(victim);
+        // The paired clip brings the bodies inside ordinary movement range.
+        // Those larger collision hulls would leave the wrist beyond the neck.
+        constexpr float separation = 42.f;
+        osg::Vec3f to = player.getRefData().getPosition().asVec3() + forward * separation;
+        to.z() = from.z();
+        const auto* rays = world.getRayCasting();
+        const osg::Vec3f side(forward.y(), -forward.x(), 0.f);
+        for (float lateral : { 0.f, -.6f, .6f })
+        {
+            const osg::Vec3f foot = to + side * (extent.x() * lateral);
+            const auto ground = rays->castRay(foot + osg::Vec3f(0.f, 0.f, 12.f),
+                foot - osg::Vec3f(0.f, 0.f, 14.f), sBackstabGround);
+            if (!ground.mHit || ground.mHitNormal.z() < .7f)
+                return std::nullopt;
+            if (lateral == 0.f)
+                to.z() = ground.mHitPos.z() + 1.f;
+        }
+        return backstabPathClear(world, from, to, extent) ? std::optional(to) : std::nullopt;
+    }
+
+    osg::Vec3f backstabContact(const MWWorld::Ptr& victim, MWRender::NpcAnimation* player, int step,
+        osg::Vec3f& outward)
+    {
+        const auto world = MWBase::Environment::get().getWorld();
+        MWPhysics::RayCastingResult hit;
+        if (player)
+        {
+            if (const auto blade = player->getWeaponBladeForBlood())
+            {
+                if (world->castRenderingRay(hit, blade->first, blade->second, true, false, {}, true)
+                    && hit.mHitObject == victim)
+                {
+                    Log(Debug::Verbose) << "Brutal backstab blade contact " << step << " on "
+                                        << victim.getCellRef().getRefId();
+                    outward = hit.mHitNormal;
+                    return hit.mHitPos;
+                }
+            }
+        }
+        const auto* animation = world->getAnimation(victim);
+        const auto neck = animation ? animation->getBoneWorldMatrix("Bip01 Neck") : std::nullopt;
+        const auto spine = animation ? animation->getBoneWorldMatrix("Bip01 Spine1") : std::nullopt;
+        osg::Vec3f destination = MWMechanics::getMeleeTorsoPosition(victim);
+        if (neck && spine)
+            destination = step == 1 ? (spine->getTrans() + neck->getTrans()) * .5f : neck->getTrans();
+        // The animation key is processed before the scene graph traverses the
+        // new blade pose. Find the live body surface when the last sample misses.
+        if (world->castRenderingRay(hit, destination + outward * 30.f, destination, true, false, {}, true)
+            && hit.mHitObject == victim)
+        {
+            outward = hit.mHitNormal;
+            return hit.mHitPos;
+        }
+        return destination;
+    }
 
     std::string_view getBestAttack(const ESM::Weapon* weapon)
     {
@@ -428,6 +520,7 @@ namespace MWMechanics
     void CharacterController::resetCurrentWeaponState()
     {
         cancelGroundFinisher();
+        cancelBackstab(false);
         clearStateAnimation(mCurrentWeapon);
         mUpperBodyState = UpperBodyState::None;
         mBrutalChargedHold = mBrutalGuardCharge = false;
@@ -1141,6 +1234,7 @@ namespace MWMechanics
 
     void CharacterController::detachAnimation()
     {
+        cancelBackstab(false);
         if (mAnimation)
         {
             persistAnimationState();
@@ -1230,6 +1324,19 @@ namespace MWMechanics
                 playSwishSound();
             else if (action == "hit")
                 hitGroundFinisher();
+            return;
+        }
+        if (groupname == sBackstabOut)
+        {
+            if (mBackstab.mPhase == BrutalBackstabPhase::Executing)
+            {
+                if (action == "stab1")
+                    onBackstabStab(1);
+                else if (action == "stab2")
+                    onBackstabStab(2);
+                else if (action == "release")
+                    onBackstabRelease();
+            }
             return;
         }
         if (mPtr == getPlayer() && (groupname == "brutal_rush" || groupname == "brutal_fallattack"))
@@ -1707,6 +1814,562 @@ namespace MWMechanics
         mPtr.getClass().hit(mPtr, 1.f, attack, victim, *contact, true, -1, true);
     }
 
+    bool CharacterController::canPlayBackstab(bool executing) const
+    {
+        const auto& settings = Settings::game();
+        if (mPtr != getPlayer() || !settings.mBrutalBackstab || !brutalDmFirstPerson() || !mAnimation
+            || mWeapon.isEmpty() || mWeapon.getType() != ESM::Weapon::sRecordId
+            || mWeaponType != ESM::Weapon::ShortBladeOneHand || !hasBrutalOffhandDagger())
+            return false;
+        if (!mAnimation->hasAnimation(sBackstabIn) || !mAnimation->hasAnimation(sBackstabIdle)
+            || !mAnimation->hasAnimation(sBackstabCancel) || !mAnimation->hasAnimation(sBackstabOut))
+            return false;
+        const auto world = MWBase::Environment::get().getWorld();
+        const auto& stats = mPtr.getClass().getCreatureStats(mPtr);
+        if (!world->isFirstPerson() || !world->isOnGround(mPtr) || world->isSwimming(mPtr) || world->isFlying(mPtr)
+            || stats.isDead() || stats.isParalyzed() || stats.getKnockedDown() || stats.getHitRecovery()
+            || stats.mBrutalBlockRequested || stats.mBrutalSlidePhase || stats.mBrutalSlideAttack
+            || stats.mBrutalClinchActive || stats.mBrutalCarryingObject || mGroundFinisher
+            || isScriptedAnimPlaying() || stats.wasTeleported()
+            || stats.getDrawState() != DrawState::Weapon)
+            return false;
+        if (!executing)
+        {
+            if (mAnimation->isPlaying("brutal_kick") || mAnimation->isPlaying("brutal_kick1h")
+                || mAnimation->isPlaying("brutal_kick1h_low") || isBrutalComboActive() || isBrutalShieldBlocking())
+                return false;
+            const bool stealthActive = isSneaking()
+                || stats.getMagicEffects().getOrDefault(ESM::MagicEffect::Invisibility).getMagnitude() > 0.f
+                || stats.getMagicEffects().getOrDefault(ESM::MagicEffect::Chameleon).getMagnitude() >= 50.f;
+            if (!stealthActive)
+                return false;
+        }
+        const auto& inventory = mPtr.getClass().getInventoryStore(mPtr);
+        const auto equipped = inventory.getSlot(MWWorld::InventoryStore::Slot_CarriedRight);
+        return equipped != inventory.end() && *equipped == mWeapon;
+    }
+
+    bool CharacterController::isValidBackstabTarget(const MWWorld::Ptr& target, bool maintain) const
+    {
+        if (target.isEmpty() || !target.isInCell() || !target.getRefData().isEnabled()
+            || !target.getClass().isNpc() || target == mPtr)
+            return false;
+        const auto& stats = target.getClass().getCreatureStats(target);
+        const auto& npcStats = target.getClass().getNpcStats(target);
+        if (stats.isDead() || stats.getHealth().getCurrent() <= 0.f || npcStats.isWerewolf()
+            || stats.getKnockedDown() || stats.mBrutalClinchActive || !stats.mBrutalClinchOpponent.isEmpty()
+            || stats.mBrutalBackstabVictim)
+            return false;
+        const auto& seq = stats.getAiSequence();
+        if (seq.isInCombat() || seq.isInPursuit())
+            return false;
+
+        const auto world = MWBase::Environment::get().getWorld();
+        const auto* animation = world->getAnimation(target);
+        if (!animation || !animation->hasAnimation(sBackstabVictim) || !world->isOnGround(target)
+            || world->isSwimming(target) || world->isFlying(target) || world->isNpcGroundedRagdoll(target))
+            return false;
+
+        const auto& playerPosData = mPtr.getRefData().getPosition();
+        const auto& targetPosData = target.getRefData().getPosition();
+        const osg::Vec3f playerPos = playerPosData.asVec3();
+        const osg::Vec3f targetPos = targetPosData.asVec3();
+        const osg::Vec3f delta = targetPos - playerPos;
+        if (std::abs(delta.z()) > 36.f)
+            return false;
+
+        const float maxDist = maintain ? 155.f : 115.f;
+        osg::Vec2f flat(delta.x(), delta.y());
+        const float dist = flat.length();
+        if (dist < 1e-3f || dist > maxDist)
+            return false;
+        const osg::Vec2f dirToTarget = flat / dist;
+
+        const osg::Vec2f playerFwd(std::sin(playerPosData.rot[2]), std::cos(playerPosData.rot[2]));
+        const osg::Vec2f targetFwd(std::sin(targetPosData.rot[2]), std::cos(targetPosData.rot[2]));
+
+        // The player aims at the target from a cone behind its back.
+        const float aimCos = maintain ? 0.60f : 0.707f;
+        if (targetFwd * dirToTarget < .707f || playerFwd * dirToTarget < aimCos)
+            return false;
+
+        const auto [origin, aim] = getMeleeAim(mPtr);
+        const osg::Vec3f torso = getMeleeTorsoPosition(target);
+        osg::Vec3f towardTorso = torso - origin;
+        if (towardTorso.normalize() > .01f && aim * towardTorso < aimCos)
+            return false;
+        if (world->getRayCasting()->castRay(origin, torso, { mPtr, target }, {},
+                sBackstabObstruction | MWPhysics::CollisionType_Actor).mHit)
+            return false;
+
+        return true;
+    }
+
+    MWWorld::Ptr CharacterController::findBackstabTarget(bool maintain) const
+    {
+        if (!canPlayBackstab(false))
+            return MWWorld::Ptr();
+        const osg::Vec3f origin = mPtr.getRefData().getPosition().asVec3();
+        const float searchRadius = maintain ? 165.f : 125.f;
+        std::vector<MWWorld::Ptr> actors;
+        MWBase::Environment::get().getMechanicsManager()->getActorsInRange(origin, searchRadius, actors);
+        MWWorld::Ptr best;
+        float bestDist2 = std::numeric_limits<float>::max();
+        for (const auto& actor : actors)
+        {
+            if (!isValidBackstabTarget(actor, maintain))
+                continue;
+            const float d2 = (actor.getRefData().getPosition().asVec3() - origin).length2();
+            if (d2 < bestDist2)
+            {
+                bestDist2 = d2;
+                best = actor;
+            }
+        }
+        return best;
+    }
+
+    bool CharacterController::startBackstabExecution(const MWWorld::Ptr& victim)
+    {
+        if (victim.isEmpty() || !canPlayBackstab(true))
+            return false;
+        const auto world = MWBase::Environment::get().getWorld();
+        auto* victimAnim = world->getAnimation(victim);
+        const auto& playerPosition = mPtr.getRefData().getPosition();
+        const auto& victimPosition = victim.getRefData().getPosition();
+        osg::Vec3f forward = victimPosition.asVec3() - playerPosition.asVec3();
+        forward.z() = 0.f;
+        if (forward.normalize() < .01f || !victimAnim)
+            return false;
+        const auto goal = backstabPlacement(*world, mPtr, victim, forward);
+        if (!goal)
+        {
+            cancelBackstab(true);
+            return false;
+        }
+        auto& inv = mPtr.getClass().getInventoryStore(mPtr);
+        const auto rightSlot = inv.getSlot(MWWorld::InventoryStore::Slot_CarriedRight);
+        const auto leftSlot = inv.getSlot(MWWorld::InventoryStore::Slot_CarriedLeft);
+        if (rightSlot == inv.end() || leftSlot == inv.end())
+            return false;
+        MWWorld::Ptr rightWeapon = *rightSlot;
+        MWWorld::Ptr leftWeapon = *leftSlot;
+
+        auto weaponPeak = [&](MWWorld::Ptr& weapon) {
+            const auto& data = weapon.get<ESM::Weapon>()->mBase->mData;
+            float dmg = static_cast<float>(std::max({ data.mChop[1], data.mSlash[1], data.mThrust[1] }));
+            MWMechanics::adjustWeaponDamage(dmg, weapon, mPtr);
+            MWMechanics::resistNormalWeapon(victim, mPtr, weapon, dmg);
+            MWMechanics::applyWerewolfDamageMult(victim, weapon, dmg);
+            return std::max(0.f, dmg);
+        };
+
+        const float base = std::max(14.f, weaponPeak(rightWeapon) + weaponPeak(leftWeapon));
+        const float sneak = static_cast<float>(mPtr.getClass().getSkill(mPtr, ESM::Skill::Sneak));
+        const float shortBlade = static_cast<float>(mPtr.getClass().getSkill(mPtr, ESM::Skill::ShortBlade));
+        const float skillTerm = 0.55f * sneak + 0.45f * shortBlade;
+        const float weaponMult = 4.0f + 0.08f * skillTerm;
+        const float flatSkillDamage = 45.f + 1.5f * skillTerm + 0.045f * skillTerm * skillTerm;
+        const float totalDamage = base * weaponMult + flatSkillDamage;
+
+        auto& playerStats = mPtr.getClass().getCreatureStats(mPtr);
+        auto& victimStats = victim.getClass().getCreatureStats(victim);
+        const float victimHp = victimStats.getHealth().getCurrent();
+
+        mBackstab.mPhase = BrutalBackstabPhase::Executing;
+        mBackstab.mVictim = MWWorld::SafePtr(victim);
+        mBackstab.mWeapon = MWWorld::SafePtr(rightWeapon);
+        mBackstab.mOffhandWeapon = MWWorld::SafePtr(leftWeapon);
+        mBackstab.mPlayerOrigin = playerPosition.asVec3();
+        mBackstab.mVictimOrigin = victimPosition.asVec3();
+        mBackstab.mVictimGoal = *goal;
+        mBackstab.mPlayerYaw = playerPosition.rot[2];
+        mBackstab.mPlayerPitch = playerPosition.rot[0];
+        mBackstab.mVictimYaw = victimPosition.rot[2];
+        mBackstab.mPairYaw = std::atan2(forward.x(), forward.y());
+        if (const auto neck = victimAnim->getBoneWorldMatrix("Bip01 Neck"))
+        {
+            // The reference raises both actors. Keep the victim on the local floor
+            // and preserve the relative height of the eye and blades at the neck.
+            const osg::Vec3f towardNeck = osg::Vec3f(neck->getTrans()) - getMeleeAim(mPtr).first;
+            mBackstab.mNeckPitch = std::clamp(
+                -std::atan2(towardNeck.z(), std::hypot(towardNeck.x(), towardNeck.y())), -.55f, .35f);
+            mBackstab.mEyeLift = std::clamp(towardNeck.z() - 2.f, -8.f, 32.f);
+        }
+        mBackstab.mTotalDamage = totalDamage;
+        mBackstab.mDealtDamage = 0.f;
+        mBackstab.mLethal = totalDamage >= victimHp;
+        mBackstab.mReleased = false;
+
+        playerStats.mBrutalBackstabPhase = static_cast<int>(BrutalBackstabPhase::Executing);
+        playerStats.mBrutalBackstabTarget = victim;
+        playerStats.mBrutalBackstabLastDamage = totalDamage;
+
+        victimStats.mBrutalBackstabVictim = true;
+        victimStats.mBrutalBackstabTarget = mPtr;
+        victimStats.mBrutalSilentBackstab = true;
+        world->queueMovement(victim, {});
+        world->clearActorExternalVelocity(victim);
+
+        mReadyToHit = false;
+        mBrutalChargedHold = false;
+        mBrutalGuardCharge = false;
+        mBrutalFast = BrutalFast::None;
+        resetBrutalFastContinuation();
+        mUpperBodyState = UpperBodyState::WeaponEquipped;
+        setAttackingOrSpell(false);
+        world->breakInvisibility(mPtr);
+        MWBase::Environment::get().getWindowManager()->setEnemy(victim);
+
+        {
+            MWRender::Animation::ScopedDeferActiveGroupReset defer(*mAnimation);
+            mAnimation->disable(mCurrentWeapon);
+            mAnimation->disable(sBackstabIn);
+            mAnimation->disable(sBackstabIdle);
+            mAnimation->disable(sBackstabCancel);
+            playBlendedAnimation(sBackstabOut, Priority_Knockdown, MWRender::BlendMask_All,
+                true, 1.f, "start", "stop", 0.f, 0);
+        }
+        victimAnim->play(sBackstabVictim, Priority_Knockdown, MWRender::BlendMask_All,
+            false, 1.f, "start", "stop", 0.f, 0);
+        victimAnim->enableHeadAnimation(false);
+        Log(Debug::Info) << "Brutal backstab: executing on " << victim.getCellRef().getRefId()
+                         << " (sneak=" << sneak << ", shortBlade=" << shortBlade
+                         << ", dmg=" << totalDamage << ", hp=" << victimHp
+                         << ", lethal=" << (mBackstab.mLethal ? "yes" : "no") << ")";
+        return true;
+    }
+
+    void CharacterController::releaseBackstabVictim(const MWWorld::Ptr& victim)
+    {
+        if (victim.isEmpty() || !victim.getClass().isActor())
+            return;
+        auto& victimStats = victim.getClass().getCreatureStats(victim);
+        victimStats.mBrutalBackstabVictim = false;
+        if (!victimStats.isDead())
+        {
+            victimStats.mBrutalBackstabTarget = MWWorld::Ptr();
+            victimStats.mBrutalSilentBackstab = false;
+        }
+        if (auto* victimAnim = MWBase::Environment::get().getWorld()->getAnimation(victim))
+        {
+            if (!victimStats.isDead())
+            {
+                victimAnim->disable(sBackstabVictim);
+                victimAnim->enableHeadAnimation(true);
+            }
+        }
+    }
+
+    void CharacterController::cancelBackstab(bool playCancelAnim)
+    {
+        if (mBackstab.mPhase == BrutalBackstabPhase::None)
+            return;
+        const bool wasExecuting = mBackstab.mPhase == BrutalBackstabPhase::Executing;
+        if (wasExecuting)
+        {
+            const MWWorld::Ptr victim = mBackstab.mVictim.ptrOrEmpty();
+            if (!victim.isEmpty() && !mBackstab.mReleased)
+                releaseBackstabVictim(victim);
+        }
+        if (mAnimation)
+        {
+            mAnimation->disable(sBackstabIn);
+            mAnimation->disable(sBackstabIdle);
+            mAnimation->disable(sBackstabOut);
+            if (!playCancelAnim)
+                mAnimation->disable(sBackstabCancel);
+        }
+        mBackstab = {};
+        if (playCancelAnim && mAnimation && mAnimation->hasAnimation(sBackstabCancel)
+            && mUpperBodyState == UpperBodyState::WeaponEquipped && canPlayBackstab(true))
+        {
+            mBackstab.mPhase = BrutalBackstabPhase::Canceling;
+            playBlendedAnimation(sBackstabCancel, Priority_Weapon, MWRender::BlendMask_All,
+                true, 1.f, "start", "stop", 0.f, 0);
+        }
+        if (mPtr.getClass().isActor())
+        {
+            auto& stats = mPtr.getClass().getCreatureStats(mPtr);
+            stats.mBrutalBackstabPhase = static_cast<int>(mBackstab.mPhase);
+            stats.mBrutalBackstabTarget = MWWorld::Ptr();
+            stats.mBrutalBackstabEyeLift = 0.f;
+        }
+    }
+
+    void CharacterController::onBackstabStab(int step)
+    {
+        if (mBackstab.mPhase != BrutalBackstabPhase::Executing)
+            return;
+        const MWWorld::Ptr victim = mBackstab.mVictim.ptrOrEmpty();
+        if (victim.isEmpty() || !victim.getClass().isNpc())
+            return;
+        auto& victimStats = victim.getClass().getCreatureStats(victim);
+        if (victimStats.isDead())
+            return;
+
+        const auto world = MWBase::Environment::get().getWorld();
+        const auto sndMgr = MWBase::Environment::get().getSoundManager();
+
+        sndMgr->playSound3D(victim, ESM::RefId::stringRefId("Brutal Backstab Stab"), 1.f, 1.f);
+
+        if (step == 2)
+        {
+            const ESM::NPC* npc = victim.get<ESM::NPC>()->mBase;
+            const std::string race = Misc::StringUtils::lowerCase(npc->mRace.getRefIdString());
+            const char* voiceId = "Brutal Backstab Voice Male";
+            if (race == "orc")
+                voiceId = "Brutal Backstab Voice Orc";
+            else if (!npc->isMale())
+                voiceId = "Brutal Backstab Voice Female";
+            else if ((victim.getCellRef().getRefNum().mIndex & 1u) != 0)
+                voiceId = "Brutal Backstab Voice Male B";
+            sndMgr->playSound3D(victim, ESM::RefId::stringRefId(voiceId), 1.f, 1.f, MWSound::Type::Voice);
+        }
+
+        osg::Vec3f outward = mPtr.getRefData().getPosition().asVec3() - victim.getRefData().getPosition().asVec3();
+        outward.z() = 0.f;
+        if (outward.normalize() < 1e-3f)
+            outward = osg::Vec3f(0.f, 0.f, 1.f);
+        auto* playerNpc = dynamic_cast<MWRender::NpcAnimation*>(mAnimation);
+        const osg::Vec3f contact = backstabContact(victim, playerNpc, step, outward);
+        if (Settings::game().mBrutalBloodEffects)
+        {
+            world->spawnBrutalImpact("blood", contact, outward, 1.8f, true);
+            if (auto* victimNpc = dynamic_cast<MWRender::NpcAnimation*>(world->getAnimation(victim)))
+                victimNpc->addBloodDecal(contact, outward, "stab", true, -1);
+        }
+        if (playerNpc && Settings::game().mBrutalWeaponBlood && victim.get<ESM::NPC>()->mBase->mBloodType == 0)
+            playerNpc->addWeaponBlood(contact, "stab", true);
+
+        const float hp = victimStats.getHealth().getCurrent();
+        float chunk = mBackstab.mTotalDamage * 0.35f;
+        // Keep the victim alive until the release key (0.80, end of @die_backstabbed) so ragdoll handoff is synced.
+        if (hp - chunk <= 1.f)
+            chunk = std::max(0.f, hp - 1.f);
+        if (chunk > 0.f)
+        {
+            const MWWorld::Ptr weapon = mBackstab.mWeapon.ptrOrEmpty();
+            const ESM::RefId weaponId = weapon.isEmpty() ? ESM::RefId() : weapon.getCellRef().getRefId();
+            mBackstab.mDealtDamage += chunk;
+            victim.getClass().onHit(
+                victim, { { "health", chunk } }, weaponId, mPtr, true, MWMechanics::DamageSourceType::Melee);
+        }
+    }
+
+    void CharacterController::onBackstabRelease()
+    {
+        if (mBackstab.mPhase != BrutalBackstabPhase::Executing || mBackstab.mReleased)
+            return;
+        mBackstab.mReleased = true;
+
+        const MWWorld::Ptr victim = mBackstab.mVictim.ptrOrEmpty();
+        if (victim.isEmpty() || !victim.getClass().isNpc())
+            return;
+
+        auto& playerStats = mPtr.getClass().getCreatureStats(mPtr);
+        auto& victimStats = victim.getClass().getCreatureStats(victim);
+        MWWorld::Ptr rightWeapon = mBackstab.mWeapon.ptrOrEmpty();
+
+        mPtr.getClass().skillUsageSucceeded(mPtr, ESM::Skill::Sneak, ESM::Skill::Sneak_AvoidNotice);
+        mPtr.getClass().skillUsageSucceeded(mPtr, ESM::Skill::ShortBlade, ESM::Skill::Weapon_SuccessfulHit);
+
+        const osg::Vec3f neckPos = getMeleeTorsoPosition(victim) + osg::Vec3f(0.f, 0.f, 14.f);
+        if (!rightWeapon.isEmpty())
+        {
+            MWMechanics::reduceWeaponCondition(mBackstab.mTotalDamage * 0.25f, true, rightWeapon, mPtr);
+            MWMechanics::applyOnStrikeEnchantment(mPtr, victim, rightWeapon, neckPos);
+        }
+
+        if (!victimStats.isDead())
+        {
+            float remaining = std::max(0.f, mBackstab.mTotalDamage - mBackstab.mDealtDamage);
+            if (mBackstab.mLethal)
+                remaining = std::max(remaining, victimStats.getHealth().getCurrent() + 1.f);
+            const ESM::RefId weaponId = rightWeapon.isEmpty() ? ESM::RefId() : rightWeapon.getCellRef().getRefId();
+            victim.getClass().onHit(
+                victim, { { "health", remaining } }, weaponId, mPtr, true, MWMechanics::DamageSourceType::Melee);
+        }
+
+        if (victimStats.isDead())
+        {
+            ++playerStats.mBrutalBackstabKills;
+            victimStats.mBrutalBackstabVictim = false;
+            // killDeadActors consumes the flag when it skips the ordinary death cry.
+        }
+        else
+        {
+            // Rare case: massive-HP boss survived a low-skill backstab — exit cleanly into combat.
+            releaseBackstabVictim(victim);
+            victimStats.setHitRecovery(true);
+            MWBase::Environment::get().getMechanicsManager()->actorAttacked(victim, mPtr);
+        }
+    }
+
+    bool CharacterController::updateBackstabVictim(float duration)
+    {
+        if (!mPtr.getClass().isNpc() || mPtr == getPlayer())
+            return false;
+        auto& stats = mPtr.getClass().getCreatureStats(mPtr);
+        if (!stats.mBrutalBackstabVictim)
+            return false;
+        if (stats.isDead())
+        {
+            stats.mBrutalBackstabVictim = false;
+            return false;
+        }
+        const MWWorld::Ptr attacker = stats.mBrutalBackstabTarget;
+        const bool attackerValid = !attacker.isEmpty() && attacker.isInCell() && attacker.getClass().isActor()
+            && !attacker.getClass().getCreatureStats(attacker).isDead()
+            && attacker.getClass().getCreatureStats(attacker).mBrutalBackstabPhase
+                == static_cast<int>(BrutalBackstabPhase::Executing);
+        if (!attackerValid)
+        {
+            releaseBackstabVictim(mPtr);
+            return false;
+        }
+
+        auto& movement = mPtr.getClass().getMovementSettings(mPtr);
+        std::fill(std::begin(movement.mPosition), std::end(movement.mPosition), 0.f);
+        std::fill(std::begin(movement.mRotation), std::end(movement.mRotation), 0.f);
+        movement.mSpeedFactor = 0.f;
+        stats.setAttackingOrSpell(false);
+        stats.mBrutalBlockRaised = stats.mBrutalParry = false;
+        if (mAnimation)
+        {
+            mAnimation->setLegsYawRadians(0.f);
+            mAnimation->setUpperBodyYawRadians(0.f);
+            mAnimation->setBodyPitchRadians(0.f);
+            mAnimation->enableHeadAnimation(false);
+            mAnimation->runAnimation(std::max(duration, 0.f));
+        }
+        return true;
+    }
+
+    bool CharacterController::updateBackstab()
+    {
+        if (mPtr != getPlayer())
+            return false;
+        auto& playerStats = mPtr.getClass().getCreatureStats(mPtr);
+        const auto syncStats = [&] {
+            playerStats.mBrutalBackstabPhase = static_cast<int>(mBackstab.mPhase);
+            playerStats.mBrutalBackstabTarget = mBackstab.mVictim.ptrOrEmpty();
+        };
+
+        if (mBackstab.mPhase == BrutalBackstabPhase::Executing)
+        {
+            const auto& inventory = mPtr.getClass().getInventoryStore(mPtr);
+            const auto left = inventory.getSlot(MWWorld::InventoryStore::Slot_CarriedLeft);
+            if (!canPlayBackstab(true) || mBackstab.mWeapon.ptrOrEmpty() != mWeapon
+                || left == inventory.end() || mBackstab.mOffhandWeapon.ptrOrEmpty() != *left
+                || !mAnimation->isPlaying(sBackstabOut))
+            {
+                cancelBackstab(false);
+                mBrutalComboRelease = true;
+                return false;
+            }
+            const auto world = MWBase::Environment::get().getWorld();
+            const auto& position = mPtr.getRefData().getPosition();
+            const float time = mAnimation->getCurrentTime(sBackstabOut);
+            const float align = mAnimation->getTextKeyTime(sBackstabOut + ": align");
+            const float release = mAnimation->getTextKeyTime(sBackstabOut + ": release");
+            const float placed = backstabBlend((time - align) / .14f);
+            const float raised = backstabBlend((time - .10f) / .27f);
+            const float recovered = backstabBlend((time - release) / .34f);
+            playerStats.mBrutalBackstabEyeLift = mBackstab.mEyeLift * raised * (1.f - recovered);
+            const MWWorld::Ptr victim = mBackstab.mVictim.ptrOrEmpty();
+            if (!mBackstab.mReleased)
+            {
+                if (victim.isEmpty() || !victim.isInCell() || !victim.getRefData().isEnabled()
+                    || victim.getClass().getCreatureStats(victim).isDead()
+                    || (position.asVec3() - mBackstab.mPlayerOrigin).length2() > 14.f * 14.f)
+                {
+                    cancelBackstab(false);
+                    return false;
+                }
+                const auto& victimPosition = victim.getRefData().getPosition();
+                const osg::Vec3f next = mBackstab.mVictimOrigin
+                    + (mBackstab.mVictimGoal - mBackstab.mVictimOrigin) * placed;
+                if (placed > 0.f && (next - victimPosition.asVec3()).length2() > .04f)
+                {
+                    if (!backstabPathClear(*world, victimPosition.asVec3(), next, world->getHalfExtents(victim)))
+                    {
+                        cancelBackstab(false);
+                        return false;
+                    }
+                    world->moveObject(victim, next, true, false);
+                }
+                const float yaw = mBackstab.mVictimYaw
+                    + std::remainder(mBackstab.mPairYaw - mBackstab.mVictimYaw, 2.f * osg::PIf) * placed;
+                if (std::abs(std::remainder(yaw - victimPosition.rot[2], 2.f * osg::PIf)) > .001f)
+                    world->rotateObject(victim, osg::Vec3f(0.f, 0.f, yaw));
+            }
+            const float yaw = mBackstab.mPlayerYaw
+                + std::remainder(mBackstab.mPairYaw - mBackstab.mPlayerYaw, 2.f * osg::PIf) * raised;
+            const float reach = backstabBlend(time / .14f);
+            const float pitch = (mBackstab.mPlayerPitch * (1.f - reach) + mBackstab.mNeckPitch * reach)
+                * (1.f - placed);
+            if (std::abs(position.rot[0] - pitch) > .001f
+                || std::abs(std::remainder(position.rot[2] - yaw, 2.f * osg::PIf)) > .001f)
+                world->rotateObject(mPtr, osg::Vec3f(pitch, 0.f, yaw));
+            syncStats();
+            return true;
+        }
+
+        if (mBackstab.mPhase == BrutalBackstabPhase::Canceling)
+        {
+            if (!canPlayBackstab(true) || getAttackingOrSpell() || !mAnimation->isPlaying(sBackstabCancel))
+            {
+                mAnimation->disable(sBackstabCancel);
+                mBackstab = {};
+                syncStats();
+                return false;
+            }
+            syncStats();
+            return false;
+        }
+
+        if (mBackstab.mPhase == BrutalBackstabPhase::Entering || mBackstab.mPhase == BrutalBackstabPhase::Ready)
+        {
+            const MWWorld::Ptr locked = mBackstab.mVictim.ptrOrEmpty();
+            MWWorld::Ptr target = (!locked.isEmpty() && canPlayBackstab(false) && isValidBackstabTarget(locked, true))
+                ? locked
+                : findBackstabTarget(true);
+            if (target.isEmpty() || mUpperBodyState != UpperBodyState::WeaponEquipped)
+            {
+                cancelBackstab(true);
+                return false;
+            }
+            mBackstab.mVictim = MWWorld::SafePtr(target);
+            if (getAttackingOrSpell())
+                return startBackstabExecution(target);
+            if (mBackstab.mPhase == BrutalBackstabPhase::Entering && !mAnimation->isPlaying(sBackstabIn))
+            {
+                mBackstab.mPhase = BrutalBackstabPhase::Ready;
+                playBlendedAnimation(sBackstabIdle, Priority_Weapon, MWRender::BlendMask_All,
+                    false, 1.f, "start", "stop", 0.f, std::numeric_limits<uint32_t>::max(), true);
+            }
+            syncStats();
+            return false;
+        }
+
+        // Phase::None — auto-enter backstab ready stance when sneaking behind a valid humanoid NPC.
+        if (mUpperBodyState == UpperBodyState::WeaponEquipped && !getAttackingOrSpell() && canPlayBackstab(false))
+        {
+            const MWWorld::Ptr target = findBackstabTarget(false);
+            if (!target.isEmpty())
+            {
+                mBackstab.mPhase = BrutalBackstabPhase::Entering;
+                mBackstab.mVictim = MWWorld::SafePtr(target);
+                mBackstab.mWeapon = MWWorld::SafePtr(mWeapon);
+                playBlendedAnimation(sBackstabIn, Priority_Weapon, MWRender::BlendMask_All,
+                    true, 1.f, "start", "stop", 0.f, 0);
+                syncStats();
+            }
+        }
+        return false;
+    }
+
     bool CharacterController::hasBrutalOffhandDagger() const
     {
         if (!brutalDualWield() || mPtr != getPlayer() || !mAnimation || !brutalDmFirstPerson() || !mPtr.getClass().hasInventoryStore(mPtr))
@@ -1754,6 +2417,8 @@ namespace MWMechanics
             mBrutalGuardCharge = false;
         normalizeBrutalDualDaggers();
         if (updateGroundFinisher())
+            return false;
+        if (updateBackstab())
             return false;
         // Count the continuation allowance in simulation time; pauses cannot
         // consume it. Guard, scripted actions and a changed set discard it.
@@ -2348,6 +3013,12 @@ namespace MWMechanics
             const bool fullyCharged = mBrutalChargedHold || calculateWindUp() >= 1.f;
             if (!getAttackingOrSpell() && fullyCharged && startGroundFinisher())
                 return false;
+            if (!getAttackingOrSpell() && canPlayBackstab(false))
+            {
+                if (const MWWorld::Ptr backstabTarget = findBackstabTarget(false); !backstabTarget.isEmpty())
+                    if (startBackstabExecution(backstabTarget))
+                        return false;
+            }
             if (mBrutalChargedHold)
             {
                 // Return to the release marker without playing the authored
@@ -2660,6 +3331,8 @@ namespace MWMechanics
         }
         if (updateSwordClinch(duration))
             return;
+        if (updateBackstabVictim(duration))
+            return;
         // A living falling ragdoll owns all body motion, without a canned fall
         // or a latent weapon hit. Magic/death updates above remain live.
         if (mAnimation->isRagdollPose() && !cls.getCreatureStats(mPtr).isDead())
@@ -2753,6 +3426,11 @@ namespace MWMechanics
             if (gait != MWPhysics::PlayerKinetics::Gait_Stance)
                 isrunning = gait != MWPhysics::PlayerKinetics::Gait_Walk && !flying;
             Movement& movementSettings = cls.getMovementSettings(mPtr);
+            if (isPlayer && mBackstab.mPhase == BrutalBackstabPhase::Executing)
+            {
+                std::fill(std::begin(movementSettings.mPosition), std::end(movementSettings.mPosition), 0.f);
+                movementSettings.mSpeedFactor = 0.f;
+            }
 
             // Force Jump Logic
 
@@ -3208,6 +3886,8 @@ namespace MWMechanics
 
             if (!mSkipAnim)
             {
+                if (isPlayer && mBackstab.mPhase == BrutalBackstabPhase::Executing)
+                    rot = {};
                 if (!isKnockedDown() && !isKnockedOut())
                 {
                     if (rot != osg::Vec3f())
@@ -3902,10 +4582,11 @@ namespace MWMechanics
         // weapon text keys before clearing its pending hit, as stagger does, so no
         // blow lands beneath the kick. Held attack input waits for the kick to end.
         if (!mAnimation || mPtr != getPlayer()
-            || (!mGroundFinisher && mBrutalCombo == BrutalCombo::None
+            || (!mGroundFinisher && mBrutalCombo == BrutalCombo::None && mBackstab.mPhase == BrutalBackstabPhase::None
                 && (mCurrentWeapon.empty() || !mAnimation->getInfo(mCurrentWeapon))))
             return;
         cancelGroundFinisher();
+        cancelBackstab(false);
         cancelBrutalCombo();
         if (!mCurrentWeapon.empty())
             mAnimation->disable(mCurrentWeapon);

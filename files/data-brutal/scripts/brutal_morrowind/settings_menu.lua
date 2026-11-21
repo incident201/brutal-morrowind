@@ -39,7 +39,7 @@ for _,key in ipairs({
     'ragdollEnabled','ragdollWeaponDrop','dynamicProps','objectGrabEnabled','movementEnabled','staminaEnabled',
     'kickEnabled','kickAlwaysRagdoll','slideEnabled','activeBlockEnabled','shieldBashEnabled','parryEnabled',
     'clinchEnabled','attackCombosEnabled','fastAttacksEnabled','wallBounceEnabled','npcAiTweaks','npcStagger','woundedNpcs','npcFlee','npcWeaponPickup','hitRecovery',
-    'adrenalineEnabled','finisherEnabled','groundFinisherEnabled','groundFinisherHealth',
+    'adrenalineEnabled','finisherEnabled','groundFinisherEnabled','backstabEnabled','groundFinisherHealth',
     'superKickEnabled','slowMotionEnabled','dismemberment','bloodEffects','sparkEffects',
     'bloodDecals','weaponBlood','worldBlood','combatSounds','heroVoice','adrenalineHudEnabled','adrenalineFxEnabled','slideFxEnabled','clinchFxEnabled',
 }) do

@@ -61,6 +61,12 @@ SOUNDS = {
     # combat grunts of its female NPCs: (script, event, chosen rndwave indices).
     'critical_voice_female': ('npc_sounds_leanna', 'Leanna_striking', (0, 3)),
     'object_throw_voice_female': ('npc_sounds_villager_female', 'villager_femaleB_striking', (0,)),
+    # Dual-dagger stealth backstab: blade impacts and muffled victim death gasps.
+    'backstab_stab': ('daggers', 'Daggers_Backstab'),
+    'backstab_voice_male': ('npc_sounds_guard', 'Guard_backstabbed'),
+    'backstab_voice_male_b': ('npc_sounds_villager_male', 'villager_male_backstabbed'),
+    'backstab_voice_female': ('npc_sounds_villager_female', 'villager_female_backstabbed'),
+    'backstab_voice_orc': ('npc_sounds_orc', 'Orc_backstabbed'),
 }
 MATERIALS = {
     'blood': 'effects/blood_part_001',

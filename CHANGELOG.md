@@ -1,6 +1,7 @@
 Brutal Morrowind (unreleased)
 ----------------------------
 
+    Sneak behind an unaware humanoid with two short blades to ready a backstab. Attack or release a charged strike to perform it. Sneak and Short Blade scale the damage. Witnesses can report the attack. Import recipe 24 includes the paired animation, camera motion and victim sounds.
     Combat: An NPC left without a weapon in a fight runs to the weapon nearby that its AI rates best, takes it straight into its hand with Dark Messiah's weapon pickup animation or a reach over a table, and fights on. A shield lying beside it is taken afterwards. A setting turns this off. The animations use import recipe 23.
     Physics: Weapons released by a knocked-down NPC no longer sink through the floor when the NPC gets up, and a weapon knocked from a swinging hand flies a few metres instead of over the walls.
     First-person two-handed swords, battle axes and warhammers release the left hand during the back-step thrust and return to the paired grip. Quick swings play at 86 percent of the previous rate. These animations use import recipe 22.

@@ -29,6 +29,7 @@ namespace Settings
         SettingValue<bool> mBrutalFirstPersonBody{ mIndex, "Game", "brutal first person body" };
         SettingValue<bool> mBrutalRagdoll{ mIndex, "Game", "brutal ragdoll" };
         SettingValue<bool> mBrutalGroundFinisher{ mIndex, "Game", "brutal ground finisher" };
+        SettingValue<bool> mBrutalBackstab{ mIndex, "Game", "brutal backstab" };
         SettingValue<int> mBrutalGroundFinisherHealth{ mIndex, "Game", "brutal ground finisher health",
             makeClampSanitizerInt(0, 100) };
         SettingValue<bool> mBrutalDynamicProps{ mIndex, "Game", "brutal dynamic props" };

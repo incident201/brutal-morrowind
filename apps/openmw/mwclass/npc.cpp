@@ -791,8 +791,10 @@ namespace MWClass
 
         bool setOnPcHitMe = true;
 
+        const bool silentBackstabHit = stats.mBrutalSilentBackstab
+            && !attacker.isEmpty() && attacker == stats.mBrutalBackstabTarget;
         // NOTE: 'object' and/or 'attacker' may be empty.
-        if (!attacker.isEmpty() && attacker.getClass().isActor() && !stats.getAiSequence().isInCombat(attacker))
+        if (!silentBackstabHit && !attacker.isEmpty() && attacker.getClass().isActor() && !stats.getAiSequence().isInCombat(attacker))
         {
             stats.setAttacked(true);
             bool complain = sourceType == MWMechanics::DamageSourceType::Melee;
@@ -882,7 +884,7 @@ namespace MWClass
 
             int chance = store.get<ESM::GameSetting>().find("iVoiceHitOdds")->mValue.getInteger();
             auto& prng = MWBase::Environment::get().getWorld()->getPrng();
-            if (Misc::Rng::roll0to99(prng) < chance)
+            if (!silentBackstabHit && Misc::Rng::roll0to99(prng) < chance)
                 MWBase::Environment::get().getDialogueManager()->say(ptr, ESM::RefId::stringRefId("hit"));
 
             // Check for knockdown
@@ -892,8 +894,8 @@ namespace MWClass
                     * gmst.iKnockDownOddsMult->mValue.getInteger() * 0.01f
                 + gmst.iKnockDownOddsBase->mValue.getInteger();
             const float hurtFraction = Settings::game().mNpcHurtHealthFraction;
-            if (clinchLossDamage)
-                ; // The original paired loss clip already owns this hit's reaction.
+            if (clinchLossDamage || stats.mBrutalBackstabVictim)
+                ; // The original paired loss or backstab clip already owns this hit's reaction.
             else if (ptr == MWMechanics::getPlayer() && !Settings::game().mPlayerHitRecovery)
                 ; // Blows never freeze the player; knockout from exhausted fatigue stays native.
             else if (ptr != MWMechanics::getPlayer() && hurtFraction > 0.f)
@@ -911,7 +913,7 @@ namespace MWClass
             // its next update. A kick or shield bash rolls its fall where its push lands (applyNpcKick).
             const bool charged = stats.mBrutalChargedBlowBy == attacker;
             stats.mBrutalChargedBlowBy = MWWorld::Ptr();
-            if (hasHealthDamage && healthDamage > 0.f && !clinchLossDamage
+            if (hasHealthDamage && healthDamage > 0.f && !clinchLossDamage && !silentBackstabHit
                 && sourceType == MWMechanics::DamageSourceType::Melee && MWMechanics::isBrutalWoundedNpc(ptr)
                 && stats.mBrutalClinchOpponent.isEmpty())
             {
@@ -938,6 +940,8 @@ namespace MWClass
 
         if (!wasDead && getCreatureStats(ptr).isDead())
         {
+            if (!silentBackstabHit)
+                stats.mBrutalSilentBackstab = false;
             // NPC was killed
             if (!attacker.isEmpty() && attacker.getClass().isNpc()
                 && attacker.getClass().getNpcStats(attacker).isWerewolf())

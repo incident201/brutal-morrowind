@@ -490,9 +490,10 @@ def main():
             i.write(out,group,[(0,t,p)],[(0,'start'),(float(t[-1]),'stop')])
     # SCHED_MM_STAND_UP_FRONT/BACK after a living ragdoll fall: front lies face down, back
     # face up; both start with the head behind the actor's final facing. ACT_MELEE_PARRY_BREAK
-    # (@Parry_Broken) is the attacker's recoil after a timed player parry.
+    # (@Parry_Broken) is the attacker's recoil after a timed player parry. ACT_DIE_BACKSTABBED
+    # (@die_backstabbed) is the victim's synchronized dual-dagger stealth backstab reaction.
     for group,clip in [('brutal_standup_front','@StandUp_front'),('brutal_standup_back','@StandUp_back'),
-                       ('brutal_parrybroken','@Parry_Broken')]:
+                       ('brutal_parrybroken','@Parry_Broken'),('brutal_backstabbed','@die_backstabbed')]:
         t,p=i.segment(i.clip('guard',clip))
         i.write(out,group,[(0,t,p)],[(0,'start'),(float(t[-1]),'stop')])
     # ACT_GRAB_WEAPON: a disarmed guard crouches and takes a weapon from the ground in its right

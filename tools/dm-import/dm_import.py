@@ -29,9 +29,9 @@ ANIMATION = ROOT / 'scripts/animation'
 CREATURES = ROOT / 'scripts/creatures'
 EFFECTS = ROOT / 'scripts/effects'
 CALIBRATION = HERE / 'calibration'
-RECIPE_VERSION = 23  # Misc::DarkMessiahData::sRecipe in the engine must match.
+RECIPE_VERSION = 24  # Misc::DarkMessiahData::sRecipe in the engine must match.
 # Conversion steps per import, for progress reporting.
-TOTAL_STEPS = 42
+TOTAL_STEPS = 43
 KEYFRAMES = ('.kf', '.yaml')
 # Steps run side by side, one core each; the matrices involved are 4x4.
 ENVIRONMENT = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1')
@@ -521,6 +521,8 @@ class Importer:
                 arms = self.finish(dagger, staff, sword, chain)
                 frames.result(); effects.result(); creatures.result(); kick.result()
                 self.run('Ground finisher', ANIMATION / 'import_ground_finisher.py', *self.source,
+                         '--camera-contract', self.contract, '--arms', arms, '--calibration', CALIBRATION)
+                self.run('Dual-dagger backstab', ANIMATION / 'import_backstab.py', *self.source,
                          '--camera-contract', self.contract, '--arms', arms, '--calibration', CALIBRATION)
                 self.run('Object grab and throw', ANIMATION / 'import_object_grab.py', *self.source,
                          '--camera-contract', self.contract, '--arms', arms, '--calibration', CALIBRATION)

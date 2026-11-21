@@ -202,6 +202,35 @@ namespace MWMechanics
             MWWorld::SafePtr mWeapon;
         };
         std::optional<GroundFinisher> mGroundFinisher;
+        enum class BrutalBackstabPhase
+        {
+            None,
+            Entering,
+            Ready,
+            Canceling,
+            Executing
+        };
+        struct BrutalBackstab
+        {
+            BrutalBackstabPhase mPhase = BrutalBackstabPhase::None;
+            MWWorld::SafePtr mVictim;
+            MWWorld::SafePtr mWeapon;
+            MWWorld::SafePtr mOffhandWeapon;
+            osg::Vec3f mPlayerOrigin;
+            osg::Vec3f mVictimOrigin;
+            osg::Vec3f mVictimGoal;
+            float mPlayerYaw = 0.f;
+            float mPlayerPitch = 0.f;
+            float mVictimYaw = 0.f;
+            float mPairYaw = 0.f;
+            float mNeckPitch = 0.f;
+            float mEyeLift = 0.f;
+            float mTotalDamage = 0.f;
+            float mDealtDamage = 0.f;
+            bool mLethal = false;
+            bool mReleased = false;
+        };
+        BrutalBackstab mBackstab;
         // Dark Messiah clicks: a release before the windup ends strikes the fixed fast attack chain.
         enum class BrutalFast
         {
@@ -347,6 +376,16 @@ namespace MWMechanics
         bool updateGroundFinisher();
         void cancelGroundFinisher();
         void hitGroundFinisher();
+        bool canPlayBackstab(bool executing = false) const;
+        bool isValidBackstabTarget(const MWWorld::Ptr& target, bool maintain) const;
+        MWWorld::Ptr findBackstabTarget(bool maintain) const;
+        bool startBackstabExecution(const MWWorld::Ptr& victim);
+        bool updateBackstab();
+        void cancelBackstab(bool playCancelAnim = false);
+        void onBackstabStab(int step);
+        void onBackstabRelease();
+        bool updateBackstabVictim(float duration);
+        void releaseBackstabVictim(const MWWorld::Ptr& victim);
 
         void unpersistAnimationState();
 

@@ -65,7 +65,12 @@ best, whoever owns it, crouches with Dark Messiah's weapon pickup animation (or
 leans over a table) and fights on with it in hand. A shield lying right beside it
 is taken too. Weapons knocked from an NPC's hands no longer drop through the floor.
 
-This branch uses **Dark Messiah import recipe 23**. Its launcher asks to reimport
+Equip two short blades and sneak up behind an unaware humanoid to ready a
+backstab. Click attack or release a charged attack to execute it. Sneak, Short
+Blade and both weapons determine its damage. Witnesses who detect the attack
+can report it. The backstab has its own switch in Brutal Morrowind settings.
+
+This branch uses **Dark Messiah import recipe 24**. Its launcher asks to reimport
 older data. See `CHANGELOG.md` for the other unreleased changes.
 
 ## Requirements

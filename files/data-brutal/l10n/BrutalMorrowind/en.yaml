@@ -103,6 +103,8 @@ finisherEnabled: Adrenaline weapon finishers
 finisherEnabledDescription: "Spend a full charge on a lethal charged weapon strike."
 groundFinisherEnabled: Ground finishers
 groundFinisherEnabledDescription: "Release a charged attack while aiming at a fallen enemy below the health threshold."
+backstabEnabled: Dual-dagger backstab
+backstabEnabledDescription: "Sneak behind an unaware humanoid NPC with two short blades to ready and execute a stealth backstab."
 groundFinisherHealth: Ground finisher health threshold, %
 groundFinisherHealthDescription: "The enemy's health must be strictly below this percentage of their maximum health."
 superKickEnabled: Adrenaline super kick

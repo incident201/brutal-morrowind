@@ -185,6 +185,15 @@ namespace MWMechanics
         ESM::RefId mBrutalPickupTarget;
         int mBrutalPickups = 0;
         bool mBrutalPickupTable = false; // the last pickup reached to a table rather than the floor
+        // Dual-dagger stealth backstab, transient runtime state:
+        // phase 0 none, 1 entering, 2 ready, 3 canceling, 4 executing.
+        int mBrutalBackstabPhase = 0;
+        MWWorld::Ptr mBrutalBackstabTarget; // Player's target, or victim's attacker during execution.
+        bool mBrutalBackstabVictim = false; // NPC is locked in synchronized brutal_backstabbed clip.
+        bool mBrutalSilentBackstab = false; // Suppresses vanilla cry & telepathic unseen murder crime.
+        float mBrutalBackstabEyeLift = 0.f; // Shared first-person eye and arm offset during the paired pose.
+        float mBrutalBackstabLastDamage = 0.f;
+        int mBrutalBackstabKills = 0;
         int mBrutalAttackKind = 1; // Transient observed stroke: 0 chop, 1 slash, 2 thrust.
         // Kinetic player gait chosen by Lua (0 = Morrowind run stance, 1 walk, 2 run, 3 sprint).
         int mBrutalGait = 0;

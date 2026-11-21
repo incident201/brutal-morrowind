@@ -479,7 +479,7 @@ namespace MWLua
                 {"classicNpcAnimations", g.mBrutalClassicNpcAnimations}, {"firstPersonBody", g.mBrutalFirstPersonBody},
                 {"dismemberment", g.mBrutalDismemberment}, {"npcCombatTweaks", g.mDarkMessiahNpcCombat},
                 {"guaranteedHits", g.mMeleeContactAlwaysHits}, {"ragdoll", g.mBrutalRagdoll},
-                {"groundFinisher", g.mBrutalGroundFinisher},
+                {"groundFinisher", g.mBrutalGroundFinisher}, {"backstab", g.mBrutalBackstab},
                 {"ragdollEnhancements", g.mRagdollEnhancement}, {"npcStandup", g.mDarkMessiahStandUp},
                 {"ragdollSoftStops", g.mRagdollSoftStops}, {"ragdollNeutralPose", g.mRagdollNeutralPose},
                 {"ragdollLimbResponse", g.mRagdollLimbResponse}, {"ragdollSelfCollision", g.mRagdollSelfCollision}, {"dynamicProps", g.mBrutalDynamicProps},
@@ -552,6 +552,7 @@ namespace MWLua
                 g.mMeleeContactAlwaysHits.set(on("guaranteedHits"));
                 g.mBrutalRagdoll.set(on("ragdoll"));
                 g.mBrutalGroundFinisher.set(on("groundFinisher"));
+                g.mBrutalBackstab.set(on("backstab"));
                 g.mRagdollEnhancement.set(on("ragdoll") && on("ragdollEnhancements"));
                 g.mBrutalKickAlwaysRagdoll.set(on("kickAlwaysRagdoll") && on("ragdoll"));
                 g.mDarkMessiahStandUp.set(on("npcStandup") && on("ragdoll") && !g.mBrutalClassicNpcAnimations);
@@ -1232,6 +1233,11 @@ namespace MWLua
             result["pickupTarget"] = stats.mBrutalPickupTarget.serializeText();
             result["pickups"] = stats.mBrutalPickups;
             result["pickupTable"] = stats.mBrutalPickupTable;
+            result["backstabPhase"] = stats.mBrutalBackstabPhase;
+            result["backstabVictim"] = stats.mBrutalBackstabVictim;
+            result["silentBackstab"] = stats.mBrutalSilentBackstab;
+            result["backstabLastDamage"] = stats.mBrutalBackstabLastDamage;
+            result["backstabKills"] = stats.mBrutalBackstabKills;
             result["attackKind"] = stats.mBrutalAttackKind;
             result["wounded"] = MWMechanics::isBrutalWoundedNpc(ptr);
             const MWRender::Animation* animation = MWBase::Environment::get().getWorld()->getAnimation(ptr);

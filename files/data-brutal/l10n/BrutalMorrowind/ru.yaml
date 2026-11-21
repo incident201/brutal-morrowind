@@ -103,6 +103,8 @@ finisherEnabled: Адреналиновые добивания оружием
 finisherEnabledDescription: "Полный заряд даёт смертельный заряженный удар оружием."
 groundFinisherEnabled: Добивания на земле
 groundFinisherEnabledDescription: "Отпустите заряженную атаку, прицелившись в лежащего врага со здоровьем ниже указанного порога."
+backstabEnabled: Удар в спину двумя кинжалами
+backstabEnabledDescription: "Подкрадитесь со спины к необнаруженному NPC-гуманоиду с двумя короткими клинками для скрытной казни."
 groundFinisherHealth: Порог здоровья для добивания, %
 groundFinisherHealthDescription: "Добивание доступно, когда здоровье врага строго ниже этого процента от максимума."
 superKickEnabled: Адреналиновый сверхпинок

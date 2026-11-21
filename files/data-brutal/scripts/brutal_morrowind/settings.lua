@@ -42,6 +42,7 @@ local DEFAULTS={
     adrenalineEnabled=true,
     finisherEnabled=true,
     groundFinisherEnabled=true,
+    backstabEnabled=true,
     groundFinisherHealth=30,
     superKickEnabled=true,
     slowMotionEnabled=true,
@@ -67,7 +68,7 @@ local DEFAULTS={
 local DARK_MESSIAH_KEYS={'firstPersonBody','cameraMotionMovement','dualWieldEnabled','meleeGeometry','dismemberment',
     'kickEnabled','kickAlwaysRagdoll','superKickEnabled','slideEnabled','slideFxEnabled','activeBlockEnabled',
     'shieldBashEnabled','parryEnabled','clinchEnabled','clinchFxEnabled','attackCombosEnabled',
-    'fastAttacksEnabled','wallBounceEnabled','adrenalineEnabled','finisherEnabled','groundFinisherEnabled','bloodEffects',
+    'fastAttacksEnabled','wallBounceEnabled','adrenalineEnabled','finisherEnabled','groundFinisherEnabled','backstabEnabled','bloodEffects',
     'sparkEffects','bloodDecals','weaponBlood','worldBlood','combatSounds','heroVoice'}
 local darkMessiahData=vfs.fileExists('animations/brutal_npc/brutal_hit.kf')
     and vfs.fileExists('animations/brutal_fp/brutal_blockhit1.kf')

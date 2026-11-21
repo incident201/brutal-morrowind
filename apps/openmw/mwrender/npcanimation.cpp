@@ -2449,7 +2449,24 @@ namespace MWRender
         {
             // The eye and the arms move together with the visible torso.
             // (liveBodyEyeOffset() is added by the controller itself during traversal.)
-            mFirstPersonNeckController->setOffset(useFullBodyFirstPerson() ? osg::Vec3f() : mFirstPersonOffset);
+            auto offset = mFirstPersonOffset;
+            offset.z() += mPtr.getClass().getCreatureStats(mPtr).mBrutalBackstabEyeLift;
+            mFirstPersonNeckController->setOffset(useFullBodyFirstPerson() ? osg::Vec3f() : offset);
+        }
+        if (mViewMode == VM_FirstPerson && !mBodyAwareness && mObjectParts[ESM::PRT_Shield] && carriesLeftWeapon())
+        {
+            // Hide the equipped offhand mesh while the open left hand reaches
+            // for the NPC. The mount and inventory slot stay active.
+            const auto past = [this](std::string_view group, std::string_view key) {
+                const float marker = getTextKeyTime(key);
+                return marker >= 0.f && getCurrentTime(group) >= marker;
+            };
+            const bool hidden = isPlaying("brutal_backstab_idle")
+                || (isPlaying("brutal_backstab_in") && past("brutal_backstab_in", "brutal_backstab_in: hide offhand"))
+                || (isPlaying("brutal_backstab_out") && !past("brutal_backstab_out", "brutal_backstab_out: show offhand"))
+                || (isPlaying("brutal_backstab_cancel")
+                    && !past("brutal_backstab_cancel", "brutal_backstab_cancel: show offhand"));
+            mObjectParts[ESM::PRT_Shield]->getNode()->setNodeMask(hidden ? 0u : ~0u);
         }
 
         updateRagdollGarmentCoverage(timepassed);

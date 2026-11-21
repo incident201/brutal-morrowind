@@ -23,6 +23,7 @@ if not loaded or type(data)~='table' or not data.clips then data=nil end
 local FADE=.2 -- Source sequence transition
 local LAND_AIR=.3 -- Airborne at least this long before a landing plays its clip
 local GROUND_FINISHER='brutal_ground_finisher'
+local BACKSTAB_OUT='brutal_backstab_out'
 local DIRECTIONS={'N','NE','E','SE','S','SW','W','NW'}
 local ZERO={0,0,0,0,0,0}
 
@@ -222,6 +223,12 @@ local function groupSample(group,parts,t)
 end
 local function actionSample()
     local sets=data.sets or {}
+    local backstabTime=animation.getCurrentTime(self,BACKSTAB_OUT)
+    if backstabTime then
+        local daggerSet=sets.brutal_fp_dagger or {}
+        local parts=daggerSet[BACKSTAB_OUT]
+        if parts then return groupSample(BACKSTAB_OUT,parts,backstabTime),true end
+    end
     local groundTime=animation.getCurrentTime(self,GROUND_FINISHER)
     local set,base=sets[folder(groundTime~=nil)] or {},sets.brutal_fp or {}
     if groundTime then
