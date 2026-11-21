@@ -2481,15 +2481,17 @@ namespace MWRender
             if (type->mWeaponClass != ESM::WeaponType::Melee || !(type->mFlags & ESM::WeaponType::TwoHanded))
                 return;
             const auto weapon = victim.getWeaponBladeForBlood();
-            if (!weapon || (weapon->second - weapon->first).length2() < 1.f)
+            const auto hand = victim.getBoneWorldMatrix("Bip01 R Hand");
+            if (!hand || !weapon || (weapon->second - weapon->first).length2() < 1.f)
                 return;
             // Let the victim's weapon arm sag out to their right as they recoil.
             const osg::Vec3f grip = shoulder + side * 9.f + forward * 6.f - up * 13.f;
+            const osg::Vec3f wrist = hand->getTrans();
             osg::Quat lower, turn;
             lower.makeRotate(weapon->second - weapon->first, forward * .8f + side * .45f - up * .65f);
             turn.slerp(weight, osg::Quat(), lower);
-            const osg::Matrixf correction = osg::Matrixf::translate(-weapon->first) * osg::Matrixf::rotate(turn)
-                * osg::Matrixf::translate(weapon->first + (grip - weapon->first) * weight);
+            const osg::Matrixf correction = osg::Matrixf::translate(-wrist) * osg::Matrixf::rotate(turn)
+                * osg::Matrixf::translate(wrist + (grip - wrist) * weight);
             std::array<GripArm, 2> arms;
             float clamp = 0.f;
             if (solveGripArms(victim.getNodeMap(), correction,
