@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <limits>
+#include <ranges>
 #include <vector>
 
 #include <osg/FrameStamp>
@@ -150,7 +151,7 @@ namespace MWRender
         if (mClinchSourcePose.empty() && mSwordWallSourcePose.empty() && mHeldGripSourcePose.empty()
             && mBackstabSourcePose.empty())
             return;
-        for (const auto& [node, source] : mBackstabSourcePose)
+        for (const auto& [node, source] : mBackstabSourcePose | std::views::reverse)
             if (node.valid())
                 node->setMatrix(source);
         mBackstabSourcePose.clear();

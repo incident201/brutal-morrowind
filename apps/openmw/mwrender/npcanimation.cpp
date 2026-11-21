@@ -2424,6 +2424,39 @@ namespace MWRender
             mBackstabSourcePose.emplace_back(bone, bone->getMatrix());
             bone->setMatrix(pose);
         };
+        const auto updateBounds = [&](NpcAnimation& actor) {
+            if (!actor.mSkeleton)
+                return;
+            actor.mSkeleton->markDirty();
+            osg::NodeVisitor bounds(osg::NodeVisitor::TRAVERSE_ALL_CHILDREN);
+            bounds.setVisitorType(osg::NodeVisitor::UPDATE_VISITOR);
+            bounds.setTraversalNumber(visitor.getTraversalNumber());
+            bounds.setFrameStamp(new osg::FrameStamp(*visitor.getFrameStamp()));
+            bounds.setNodeMaskOverride(~0u);
+            actor.mObjectRoot->accept(bounds);
+        };
+        const auto applyArm = [&](const GripArm& arm) {
+            if (arm.clavicle)
+                setPose(arm.clavicle, arm.clavicleResult);
+            for (unsigned joint = 0; joint < arm.bones.size(); ++joint)
+                setPose(arm.bones[joint], arm.result[joint]);
+        };
+        const auto shiftLeftClavicle = [&](const osg::Vec3f& delta) {
+            const auto found = getNodeMap().find("Bip01 L Clavicle");
+            if (found == getNodeMap().end())
+                return false;
+            auto* clavicle = found->second.get();
+            const auto paths = clavicle->getParentalNodePaths();
+            if (paths.empty())
+                return false;
+            auto parent = paths.front();
+            parent.pop_back();
+            auto pose = osg::Matrixf(clavicle->getMatrix());
+            pose.setTrans(pose.getTrans() + osg::Matrixf::transform3x3(delta,
+                osg::Matrixf::inverse(osg::computeLocalToWorld(parent))));
+            setPose(clavicle, pose);
+            return true;
+        };
         const auto dipOffhand = [&](std::string_view group, std::string_view event) {
             if (!isPlaying(group))
                 return;
@@ -2432,21 +2465,39 @@ namespace MWRender
                 return;
             const float relative = getCurrentTime(group) - marker;
             const float dip = blend((relative + .16f) / .13f) * (1.f - blend((relative - .025f) / .17f));
-            if (dip <= 0.f)
+            if (dip > 0.f)
+                shiftLeftClavicle({ 0.f, 0.f, -72.f * dip });
+        };
+        const auto lowerVictimWeapon = [&](NpcAnimation& victim, const osg::Vec3f& shoulder,
+                                           const osg::Vec3f& side, const osg::Vec3f& forward, const osg::Vec3f& up,
+                                           float weight) {
+            if (weight <= 0.f || !victim.mPtr.getClass().getCreatureStats(victim.mPtr).mBrutalBackstabVictim)
                 return;
-            const auto found = getNodeMap().find("Bip01 L Clavicle");
-            if (found == getNodeMap().end())
+            const auto& inventory = victim.mPtr.getClass().getInventoryStore(victim.mPtr);
+            const auto item = inventory.getSlot(MWWorld::InventoryStore::Slot_CarriedRight);
+            if (item == inventory.end() || item->getType() != ESM::Weapon::sRecordId)
                 return;
-            auto* clavicle = found->second.get();
-            const auto paths = clavicle->getParentalNodePaths();
-            if (paths.empty())
+            const auto* type = MWMechanics::getWeaponType(item->get<ESM::Weapon>()->mBase->mData.mType);
+            if (type->mWeaponClass != ESM::WeaponType::Melee || !(type->mFlags & ESM::WeaponType::TwoHanded))
                 return;
-            auto parent = paths.front();
-            parent.pop_back();
-            auto local = osg::Matrixf(clavicle->getMatrix());
-            local.setTrans(local.getTrans() + osg::Matrixf::transform3x3(osg::Vec3f(0, 0, -72.f * dip),
-                osg::Matrixf::inverse(osg::computeLocalToWorld(parent))));
-            setPose(clavicle, local);
+            const auto weapon = victim.getWeaponBladeForBlood();
+            if (!weapon || (weapon->second - weapon->first).length2() < 1.f)
+                return;
+            // Let the victim's weapon arm sag out to their right as they recoil.
+            const osg::Vec3f grip = shoulder + side * 9.f + forward * 6.f - up * 13.f;
+            osg::Quat lower, turn;
+            lower.makeRotate(weapon->second - weapon->first, forward * .8f + side * .45f - up * .65f);
+            turn.slerp(weight, osg::Quat(), lower);
+            const osg::Matrixf correction = osg::Matrixf::translate(-weapon->first) * osg::Matrixf::rotate(turn)
+                * osg::Matrixf::translate(weapon->first + (grip - weapon->first) * weight);
+            std::array<GripArm, 2> arms;
+            float clamp = 0.f;
+            if (solveGripArms(victim.getNodeMap(), correction,
+                    [](osg::MatrixTransform* bone) { return bone->getMatrix(); }, arms, clamp, {}, nullptr, 1))
+            {
+                applyArm(arms[0]);
+                updateBounds(victim);
+            }
         };
         dipOffhand("brutal_backstab_in", "brutal_backstab_in: hide offhand");
         dipOffhand("brutal_backstab_cancel", "brutal_backstab_cancel: show offhand");
@@ -2462,17 +2513,17 @@ namespace MWRender
                 * (1.f - blend((t - second - .09f) / .22f));
             const float leftWeight = blend((t - align + .045f) / .14f) * (1.f - blend((t - 1.30f) / .26f));
             const auto& stats = mPtr.getClass().getCreatureStats(mPtr);
-            if (leftWeight > 0.f && !stats.mBrutalBackstabTarget.isEmpty())
+            if (!stats.mBrutalBackstabTarget.isEmpty())
             {
-                const auto* victim = MWBase::Environment::get().getWorld()->getAnimation(stats.mBrutalBackstabTarget);
+                auto* victim = dynamic_cast<NpcAnimation*>(
+                    MWBase::Environment::get().getWorld()->getAnimation(stats.mBrutalBackstabTarget));
                 const auto neck = victim ? victim->getBoneWorldMatrix("Bip01 Neck") : std::nullopt;
                 const auto leftShoulder = victim ? victim->getBoneWorldMatrix("Bip01 L UpperArm") : std::nullopt;
                 const auto rightShoulder = victim ? victim->getBoneWorldMatrix("Bip01 R UpperArm") : std::nullopt;
                 const auto waist = victim ? victim->getBoneWorldMatrix("Bip01 Spine1") : std::nullopt;
                 const auto palm = getBoneWorldMatrix("Bip01 L Hand");
                 const auto knuckle = getBoneWorldMatrix("Bip01 L Finger2");
-                const auto blade = getWeaponBladeForBlood();
-                if (neck && leftShoulder && rightShoulder && waist && palm && knuckle && blade)
+                if (neck && leftShoulder && rightShoulder && waist)
                 {
                     const osg::Vec3f throat = neck->getTrans();
                     osg::Vec3f up = throat - waist->getTrans();
@@ -2481,73 +2532,82 @@ namespace MWRender
                     side -= up * (side * up);
                     const float shoulderWidth = side.normalize();
                     const osg::Vec3f forward = up ^ side;
-                    const float collar = std::clamp(shoulderWidth * .30f, 5.f, 8.f);
-                    // Set the hand on the outside of the back collar first, then
-                    // take the knuckles around the side as the victim turns.
-                    const float wrap = blend((t - first + .015f) / .25f);
-                    const float back = std::clamp(shoulderWidth * .47f, 9.f, 13.f);
-                    const float around = 3.5f * std::sin(osg::PIf * wrap);
-                    const osg::Vec3f knuckles = knuckle->getTrans();
-                    const osg::Vec3f leftGrip = throat - side * std::lerp(2.f, collar + 1.f, wrap) - side * around
-                        + forward * std::lerp(-back, 3.f, wrap) + up * std::lerp(.5f, 2.f, wrap);
-                    osg::Vec3f fingers = forward * (.15f + .65f * wrap) + side * .7f + up * .16f;
-                    fingers.normalize();
-                    osg::Quat gripTurn, gripAlign;
-                    gripAlign.makeRotate(knuckles - osg::Vec3f(palm->getTrans()), fingers);
-                    gripTurn.slerp(.80f * leftWeight, osg::Quat(), gripAlign);
-
-                    osg::Vec3f bladeAxis = blade->second - blade->first;
-                    const float length = bladeAxis.normalize();
-                    const float cut = blend((t - first - .11f) / std::max(second - first - .15f, .05f));
-                    osg::Vec3f direction = -side * (.72f + .20f * cut)
-                        - up * (.52f - .26f * cut) + forward * (.46f - .28f * cut);
-                    direction.normalize();
-                    osg::Quat alignBlade, turn;
-                    alignBlade.makeRotate(bladeAxis, direction);
-                    turn.slerp(rightWeight, osg::Quat(), alignBlade);
-                    const osg::Vec3f entry = throat + forward * 2.5f - up * 1.5f;
-                    const osg::Vec3f hilt = entry - direction * std::max(3.f, length - 5.f);
-                    const std::array<osg::Matrixf, 2> correction{
-                        osg::Matrixf::translate(-blade->first) * osg::Matrixf::rotate(turn)
-                            * osg::Matrixf::translate(blade->first + (hilt - blade->first) * rightWeight),
-                        osg::Matrixf::translate(-knuckles) * osg::Matrixf::rotate(gripTurn)
-                            * osg::Matrixf::translate(knuckles + (leftGrip - knuckles) * leftWeight),
-                    };
-                    std::array<GripArm, 2> arms;
-                    GripArmLimits limits;
-                    limits.clavicleTurn = .4f;
-                    limits.minElbowBend = .12f;
-                    limits.elbows[1] = { -side - forward * .80f - up * .15f, .90f * leftWeight };
-                    float clamp = 0.f;
-                    if (shoulderWidth > 1.f && length > 3.f
-                        && solveGripArms(getNodeMap(), osg::Matrixf(),
-                            [](osg::MatrixTransform* bone) { return bone->getMatrix(); }, arms, clamp, limits, &correction))
+                    if (shoulderWidth > 1.f)
+                        lowerVictimWeapon(*victim, rightShoulder->getTrans(), side, forward, up,
+                            blend((t - align + .055f) / .16f));
+                    const auto blade = leftWeight > 0.f ? getWeaponBladeForBlood() : std::nullopt;
+                    if (palm && knuckle && blade)
                     {
-                        for (const auto& arm : arms)
+                        const float collar = std::clamp(shoulderWidth * .45f, 9.5f, 14.f);
+                        // Clear the top of the left shoulder before turning the hand in toward the neck.
+                        const float wrap = blend((t - first + .015f) / .25f);
+                        const float back = std::clamp(shoulderWidth * .54f, 11.f, 16.f);
+                        const float around = std::sin(osg::PIf * wrap);
+                        const osg::Vec3f knuckles = knuckle->getTrans();
+                        const osg::Vec3f leftGrip = throat
+                            - side * (std::lerp(.60f, 1.f, wrap) + .50f * around) * collar
+                            + forward * std::lerp(-back, 4.f, wrap) + up * (std::lerp(4.f, 6.f, wrap) + 3.f * around);
+                        osg::Vec3f fingers = forward * (.30f + .38f * wrap) + side * .82f - up * .15f;
+                        fingers.normalize();
+                        osg::Quat gripTurn, gripAlign;
+                        gripAlign.makeRotate(knuckles - osg::Vec3f(palm->getTrans()), fingers);
+                        gripTurn.slerp(.80f * leftWeight, osg::Quat(), gripAlign);
+
+                        osg::Vec3f bladeAxis = blade->second - blade->first;
+                        const float length = bladeAxis.normalize();
+                        const float cut = blend((t - first - .11f) / std::max(second - first - .15f, .05f));
+                        osg::Vec3f direction = -side * (.72f + .20f * cut)
+                            - up * (.52f - .26f * cut) + forward * (.46f - .28f * cut);
+                        direction.normalize();
+                        osg::Quat alignBlade, turn;
+                        alignBlade.makeRotate(bladeAxis, direction);
+                        turn.slerp(rightWeight, osg::Quat(), alignBlade);
+                        const osg::Vec3f entry = throat + forward * 2.5f - up * 1.5f;
+                        const osg::Vec3f hilt = entry - direction * std::max(3.f, length - 5.f);
+                        std::array<osg::Matrixf, 2> correction{
+                            osg::Matrixf::translate(-blade->first) * osg::Matrixf::rotate(turn)
+                                * osg::Matrixf::translate(blade->first + (hilt - blade->first) * rightWeight),
+                            osg::Matrixf::translate(-knuckles) * osg::Matrixf::rotate(gripTurn)
+                                * osg::Matrixf::translate(knuckles + (leftGrip - knuckles) * leftWeight),
+                        };
+                        const auto upperArm = getBoneWorldMatrix("Bip01 L UpperArm");
+                        const auto forearm = getBoneWorldMatrix("Bip01 L Forearm");
+                        if (upperArm && forearm)
                         {
-                            if (arm.clavicle)
-                                setPose(arm.clavicle, arm.clavicleResult);
-                            for (unsigned joint = 0; joint < arm.bones.size(); ++joint)
-                                setPose(arm.bones[joint], arm.result[joint]);
+                            const osg::Vec3f wrist = palm->getTrans();
+                            const float reach = (upperArm->getTrans() - forearm->getTrans()).length()
+                                + (forearm->getTrans() - wrist).length();
+                            osg::Vec3f towardGrip = wrist * correction[1] - upperArm->getTrans();
+                            const float distance = towardGrip.normalize();
+                            // Lean into broad-shouldered targets so the reaching arm retains an elbow bend.
+                            const osg::Vec3f lean = towardGrip * (leftWeight * std::clamp(distance - reach + 3.f, 0.f, 12.f));
+                            if (lean.length2() > .001f && shiftLeftClavicle(lean))
+                                correction[1] = osg::Matrixf::translate(-lean) * correction[1];
                         }
-                        const auto& right = arms[0];
-                        const osg::Matrixf fit = osg::Matrixf::inverse(right.world[2])
-                            * right.result[2] * right.result[1] * right.result[0] * right.parent;
-                        mBackstabBlade = std::pair{ blade->first * fit, blade->second * fit };
+                        std::array<GripArm, 2> arms;
+                        GripArmLimits limits;
+                        limits.clavicleTurn = .4f;
+                        limits.minElbowBend = .12f;
+                        limits.elbows[1] = { -side - forward * .35f + up * .55f, 2.6f * leftWeight };
+                        float clamp = 0.f;
+                        if (shoulderWidth > 1.f && length > 3.f
+                            && solveGripArms(getNodeMap(), osg::Matrixf(),
+                                [](osg::MatrixTransform* bone) { return bone->getMatrix(); }, arms, clamp, limits, &correction))
+                        {
+                            for (const auto& arm : arms)
+                                applyArm(arm);
+                            const auto& right = arms[0];
+                            const osg::Matrixf fit = osg::Matrixf::inverse(right.world[2])
+                                * right.result[2] * right.result[1] * right.result[0] * right.parent;
+                            mBackstabBlade = std::pair{ blade->first * fit, blade->second * fit };
+                        }
                     }
                 }
             }
         }
 
-        if (mBackstabSourcePose.empty() || !mSkeleton)
-            return;
-        mSkeleton->markDirty();
-        osg::NodeVisitor bounds(osg::NodeVisitor::TRAVERSE_ALL_CHILDREN);
-        bounds.setVisitorType(osg::NodeVisitor::UPDATE_VISITOR);
-        bounds.setTraversalNumber(visitor.getTraversalNumber());
-        bounds.setFrameStamp(new osg::FrameStamp(*visitor.getFrameStamp()));
-        bounds.setNodeMaskOverride(~0u);
-        mObjectRoot->accept(bounds);
+        if (!mBackstabSourcePose.empty())
+            updateBounds(*this);
     }
 
     osg::Vec3f NpcAnimation::runAnimation(float timepassed)
