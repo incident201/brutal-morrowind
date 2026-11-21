@@ -2460,7 +2460,7 @@ namespace MWRender
             const float second = getTextKeyTime("brutal_backstab_out: stab2");
             const float rightWeight = blend((t - align) / std::max(first - align - .025f, .05f))
                 * (1.f - blend((t - second - .09f) / .22f));
-            const float leftWeight = blend((t - align + .035f) / .19f) * (1.f - blend((t - 1.30f) / .26f));
+            const float leftWeight = blend((t - align + .045f) / .14f) * (1.f - blend((t - 1.30f) / .26f));
             const auto& stats = mPtr.getClass().getCreatureStats(mPtr);
             if (leftWeight > 0.f && !stats.mBrutalBackstabTarget.isEmpty())
             {
@@ -2482,10 +2482,14 @@ namespace MWRender
                     const float shoulderWidth = side.normalize();
                     const osg::Vec3f forward = up ^ side;
                     const float collar = std::clamp(shoulderWidth * .30f, 5.f, 8.f);
-                    const float wrap = blend((t - align - .10f) / .23f);
+                    // Set the hand on the outside of the back collar first, then
+                    // take the knuckles around the side as the victim turns.
+                    const float wrap = blend((t - first + .015f) / .25f);
+                    const float back = std::clamp(shoulderWidth * .47f, 9.f, 13.f);
+                    const float around = 3.5f * std::sin(osg::PIf * wrap);
                     const osg::Vec3f knuckles = knuckle->getTrans();
-                    const osg::Vec3f leftGrip = throat - side * (2.f + (collar - 1.f) * wrap)
-                        + forward * (-5.f + 8.f * wrap) + up * (1.f + wrap);
+                    const osg::Vec3f leftGrip = throat - side * std::lerp(2.f, collar + 1.f, wrap) - side * around
+                        + forward * std::lerp(-back, 3.f, wrap) + up * std::lerp(.5f, 2.f, wrap);
                     osg::Vec3f fingers = forward * (.15f + .65f * wrap) + side * .7f + up * .16f;
                     fingers.normalize();
                     osg::Quat gripTurn, gripAlign;
