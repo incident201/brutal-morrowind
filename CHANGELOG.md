@@ -1,6 +1,7 @@
 Brutal Morrowind (unreleased)
 ----------------------------
 
+    Crime: A guard pursuing a player who is fighting with adrenaline joins the fight instead of waiting beside them, and returns to the arrest once the adrenaline fades. A player with adrenaline who is not fighting is arrested as usual.
     Combat: A raised shield stops arrows, bolts and thrown weapons from the front. A weapon guard turns thrown weapons, and arrows and bolts only when raised within the parry window. Each blocked missile costs the blocker half a light blow's stamina.
     Sneak behind an unaware humanoid with two short blades to ready a backstab. Attack or release a charged strike to perform it. Sneak and Short Blade scale the damage. Witnesses can report the attack. Import recipe 24 includes the paired animation, camera motion and victim sounds.
     Combat: An NPC left without a weapon in a fight runs to the weapon nearby that its AI rates best, takes it straight into its hand with Dark Messiah's weapon pickup animation or a reach over a table, and fights on. A shield lying beside it is taken afterwards. A setting turns this off. The animations use import recipe 23.

@@ -116,6 +116,9 @@ namespace MWMechanics
         std::string mLastConsumedPowerStrikeToken;
         // Transient Lua presentation state: defer automatic arrest while adrenaline is visible.
         bool mBrutalAdrenalineEffectActive = false;
+        // Transient: this guard left an arrest to fight an adrenaline-charged player who was
+        // already fighting; it returns to the arrest when the player's adrenaline fades.
+        bool mBrutalAdrenalineArrestCombat = false;
         bool mBrutalCarryingObject = false; // Player is gripping/throwing a physics world object.
         bool mBrutalBlockRequested = false; // Player is holding the block control (Lua).
         bool mBrutalBlockRaised = false; // Controller-owned: the shield is up this frame.

@@ -1134,6 +1134,51 @@ namespace MWMechanics
         }
     }
 
+    void Actors::updateBrutalAdrenalineArrest(const MWWorld::Ptr& guard, SidingCache& cachedAllies) const
+    {
+        const MWWorld::Ptr player = getPlayer();
+        auto& stats = guard.getClass().getCreatureStats(guard);
+        auto& sequence = stats.getAiSequence();
+        const auto& playerStats = player.getClass().getNpcStats(player);
+        const bool charged = playerStats.mBrutalAdrenalineEffectActive && !playerStats.isDead();
+        if (stats.mBrutalAdrenalineArrestCombat)
+        {
+            if (!sequence.isInCombat(player))
+            {
+                stats.mBrutalAdrenalineArrestCombat = false;
+                return;
+            }
+            if (charged)
+                return;
+            // The adrenaline has faded: the guard goes back to the arrest, unless the
+            // bounty has meanwhile reached the level guards attack on sight.
+            stats.mBrutalAdrenalineArrestCombat = false;
+            const auto& gmst = MWBase::Environment::get().getESMStore()->get<ESM::GameSetting>();
+            static const int cutoff = gmst.find("iCrimeThreshold")->mValue.getInteger();
+            static const int multiplier = gmst.find("iCrimeThresholdMultiplier")->mValue.getInteger();
+            const int bounty = playerStats.getBounty();
+            if (bounty > 0 && bounty < cutoff * multiplier)
+            {
+                sequence.stopCombat({ player });
+                sequence.stack(AiPursue(player), guard);
+            }
+            return;
+        }
+        if (!charged || playerStats.mBrutalClinchActive || !sequence.isInPursuit() || sequence.isInCombat(player))
+            return;
+        // A player charged with adrenaline who is already fighting someone else is not
+        // stopped for a conversation: the pursuing guard joins the fight.
+        bool fighting = false;
+        for (const MWWorld::Ptr& enemy : getActorsFighting(player))
+            fighting = fighting || enemy != guard;
+        if (!fighting)
+            return;
+        sequence.stopPursuit();
+        MWBase::Environment::get().getMechanicsManager()->startCombat(
+            guard, player, &cachedAllies.getActorsSidingWith(player));
+        stats.mBrutalAdrenalineArrestCombat = sequence.isInCombat(player);
+    }
+
     void Actors::updateCrimePursuit(const MWWorld::Ptr& ptr, float duration, SidingCache& cachedAllies) const
     {
         const MWWorld::Ptr player = getPlayer();
@@ -1155,6 +1200,9 @@ namespace MWMechanics
 
         const auto mechanicsManager = MWBase::Environment::get().getMechanicsManager();
         const auto world = MWBase::Environment::get().getWorld();
+
+        if (Settings::game().mBrutalEnabled && actorClass.isClass(ptr, "Guard"))
+            updateBrutalAdrenalineArrest(ptr, cachedAllies);
 
         if (actorClass.isClass(ptr, "Guard") && !creatureStats.getAiSequence().isInPursuit()
             && !creatureStats.getAiSequence().isInCombat()
