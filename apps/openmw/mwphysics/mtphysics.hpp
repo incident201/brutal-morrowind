@@ -313,10 +313,10 @@ namespace MWPhysics
         std::vector<DynamicObjectImpact> mDynamicImpacts;
         void updateFlyingObjectsUnsafe(btScalar dt);
         void collectDynamicImpactsUnsafe(btScalar dt);
-        // A thin loose item whose centre of mass crossed a static floor within one step is returned
-        // above it: Bullet's contact against a triangle mesh flips once a thin hull sinks deeper
-        // than half its thickness, and the item then falls through the world.
-        void keepDynamicObjectsAboveFloorUnsafe(const std::vector<std::pair<btRigidBody*, btVector3>>& before);
+        // A thin loose item whose centre of mass crossed a static floor within one step is returned to
+        // where it was before the step: Bullet's contact against a triangle mesh flips once a thin hull
+        // sinks deeper than half its thickness, and the item then falls through the world.
+        void keepDynamicObjectsAboveFloorUnsafe(const std::vector<std::pair<btRigidBody*, btTransform>>& before);
         void clearObjectTrackingUnsafe(btCollisionObject* collisionObject);
         struct ReleasedGripPair { btCollisionObject* item; btCollisionObject* grip; };
         std::vector<ReleasedGripPair> mReleasedGripPairs;

@@ -829,7 +829,7 @@ namespace MWPhysics
     }
 
     void PhysicsTaskScheduler::keepDynamicObjectsAboveFloorUnsafe(
-        const std::vector<std::pair<btRigidBody*, btVector3>>& before)
+        const std::vector<std::pair<btRigidBody*, btTransform>>& before)
     {
         // Only fixed world geometry: static meshes and terrain, not movable bodies, actors or doors.
         struct StaticFloor final : btCollisionWorld::ClosestRayResultCallback
@@ -845,29 +845,24 @@ namespace MWPhysics
                 return !(body && body->getInvMass() > 0.f);
             }
         };
-        for (const auto& [body, from] : before)
+        for (const auto& [body, previous] : before)
         {
-            btTransform transform = body->getWorldTransform();
-            const btVector3 to = transform.getOrigin();
+            const btVector3 from = previous.getOrigin();
+            const btVector3 to = body->getWorldTransform().getOrigin();
             if (to.z() >= from.z())
                 continue;
             StaticFloor ray(from, to);
             mCollisionWorld->rayTest(from, to, ray);
             if (!ray.hasHit() || ray.m_hitNormalWorld.z() < .5f)
                 continue;
-            btVector3 aabbMin, aabbMax;
-            body->getCollisionShape()->getAabb(btTransform::getIdentity(), aabbMin, aabbMax);
-            const btVector3 half = (aabbMax - aabbMin) * .5f;
-            const btScalar clearance = half[half.minAxis()] + body->getCollisionShape()->getMargin();
-            const btVector3 normal = ray.m_hitNormalWorld.normalized();
-            transform.setOrigin(ray.m_hitPointWorld + normal * clearance);
-            body->setWorldTransform(transform);
-            body->setInterpolationWorldTransform(transform);
-            btVector3 velocity = body->getLinearVelocity();
-            velocity -= normal * std::min(btScalar(0), velocity.dot(normal));
-            body->setLinearVelocity(velocity);
-            body->setInterpolationLinearVelocity(velocity);
-            body->activate(true);
+            // The pose before this step was above the floor. The item has met the floor, so it keeps
+            // no motion: nothing is added, and a resting item still comes to sleep.
+            body->setWorldTransform(previous);
+            body->setInterpolationWorldTransform(previous);
+            body->setLinearVelocity(btVector3(0, 0, 0));
+            body->setInterpolationLinearVelocity(btVector3(0, 0, 0));
+            body->setAngularVelocity(btVector3(0, 0, 0));
+            body->setInterpolationAngularVelocity(btVector3(0, 0, 0));
         }
     }
 
@@ -912,10 +907,19 @@ namespace MWPhysics
                 throw std::runtime_error("Non-finite released equipment motion");
         if (velocity.length2() > 2000.f * 2000.f || omega.length2() > 200.f * 200.f)
             throw std::runtime_error("Released equipment motion exceeds numeric bound");
-        body->setLinearVelocity(velocity);
-        body->setAngularVelocity(omega);
-        body->setInterpolationLinearVelocity(velocity);
-        body->setInterpolationAngularVelocity(omega);
+        // A hand knocked down mid-swing moves at up to ~1200 units/s and 24 rad/s; at that speed a
+        // dropped sword flew over the arena wall. It keeps its direction at a few metres' flight.
+        constexpr btScalar maxSpin = 12.f, maxSpeed = 400.f;
+        btVector3 spin = omega;
+        if (spin.length() > maxSpin)
+            spin *= maxSpin / spin.length();
+        btVector3 launch = Misc::Convert::toBullet(linear) + spin.cross(offset);
+        if (launch.length() > maxSpeed)
+            launch *= maxSpeed / launch.length();
+        body->setLinearVelocity(launch);
+        body->setAngularVelocity(spin);
+        body->setInterpolationLinearVelocity(launch);
+        body->setInterpolationAngularVelocity(spin);
         body->activate(true);
         mReleasedGripPairs.reserve(mReleasedGripPairs.size() + gripBodies.size());
         for (auto* grip : gripBodies)
@@ -2571,7 +2575,7 @@ namespace MWPhysics
             // by up to 9 units. Step the dynamics world in quarters while any ragdoll exists.
             const int substeps = mRagdollTransforms.empty() ? 1 : 4;
             const btScalar subDt = mPhysicsDt / substeps;
-            std::vector<std::pair<btRigidBody*, btVector3>> floorGuard;
+            std::vector<std::pair<btRigidBody*, btTransform>> floorGuard;
             floorGuard.reserve(mDynamicTransforms.size());
             for (int i = 0; i < substeps; ++i)
             {
@@ -2582,7 +2586,7 @@ namespace MWPhysics
                 floorGuard.clear();
                 for (const auto& [body, history] : mDynamicTransforms)
                     if (body->isActive())
-                        floorGuard.emplace_back(const_cast<btRigidBody*>(body), body->getWorldTransform().getOrigin());
+                        floorGuard.emplace_back(const_cast<btRigidBody*>(body), body->getWorldTransform());
                 static_cast<btDiscreteDynamicsWorld*>(mCollisionWorld)->stepSimulation(subDt, 0);
                 keepDynamicObjectsAboveFloorUnsafe(floorGuard);
                 afterSuperKickStep(subDt);
