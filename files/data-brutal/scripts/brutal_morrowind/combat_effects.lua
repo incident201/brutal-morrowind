@@ -40,6 +40,7 @@ local pendingDecapitation = {}
 -- Dark Messiah life_tohurt: a blow removing this share of maximum health staggers
 -- the whole body. Every smaller damaging hit keeps the native small flinch.
 local HEAVY_HIT_FRACTION = 0.1
+local rangedDamageMultiplier = { head = 2, body = 1, limb = 0.65 }
 local hasStagger, stagger = pcall(function() return types.Actor.stagger end)
 local heavyStaggers = 0
 
@@ -87,6 +88,7 @@ local function burst(kind, position, attack)
     if kind=='blood' and not (settings.get('bloodEffects') or settings.get('bloodDecals'))
         or kind=='sparks' and not settings.get('sparkEffects') then return end
     if not available or not position then return end
+    local projectileNormal = attack and attack.brutalContactNormal
     local outward = direction(attack)
     if kind == 'sparks' then
         -- Reflect metal fragments toward the incoming blade, clear of the shield.
@@ -95,16 +97,16 @@ local function burst(kind, position, attack)
     else
         -- Spray back out of the wound toward the attacker, where the view can see
         -- it; drops thrown away from the camera are hidden behind the body.
-        outward = (-outward + util.vector3(0, 0, 0.6)):normalize()
+        outward = projectileNormal or (-outward + util.vector3(0, 0, 0.6)):normalize()
     end
     core.sendGlobalEvent('BrutalImpact', {
         actor = self, kind = kind, position = position, direction = outward,
-        woundKind = attack and attack.brutalAttackType or '',
+        woundKind = projectileNormal and 'projectile' or (attack and attack.brutalAttackType or ''),
         woundPart = attack and attack.brutalContactPart or nil,
         attachment = kind == 'sparks' and attack and attack.brutalBlocked and 'shield' or nil,
         contactExact = attack and attack.brutalContactExact == true or false,
-        power = attack and attack.brutalPowered or false,
-        intensity = types.Player.objectIsInstance(self) and 0.65 or (kind == 'blood' and 2 or 1),
+        power = not projectileNormal and attack and attack.brutalPowered or false,
+        intensity = (projectileNormal or types.Player.objectIsInstance(self)) and 0.65 or (kind == 'blood' and 2 or 1),
     })
     if kind == 'blood' then bloodRequests = bloodRequests + 1 else sparkRequests = sparkRequests + 1 end
 end
@@ -120,7 +122,9 @@ interface.spawnBloodEffect = function(position)
     if not available or not types.NPC.objectIsInstance(self) then return previous.spawnBloodEffect(position) end
     -- Marks have their own switch. Native placement can record a wound without
     -- emitting our blood particles; keep stock blood in that combination.
-    if not types.Player.objectIsInstance(self) then burst('blood', position, currentAttack) end
+    if not types.Player.objectIsInstance(self) and not (currentAttack and currentAttack.brutalContactNormal) then
+        burst('blood', position, currentAttack)
+    end
     if not settings.get('bloodEffects') then return previous.spawnBloodEffect(position) end
     -- Keep the stock first-person choice: world blood belongs on the opponent,
     -- while the normal damage vignette communicates wounds to the player.
@@ -128,6 +132,10 @@ end
 
 interface.adjustDamageForDifficulty = function(attack)
     previous.adjustDamageForDifficulty(attack)
+    local multiplier = rangedDamageMultiplier[attack.brutalRangedZone]
+    if multiplier and attack.damage and attack.damage.health then
+        attack.damage.health = attack.damage.health * multiplier
+    end
     -- Apply lethal damage after armor and difficulty so the normal hit owns the
     -- kill, including attribution, ragdoll, and the equipment drop.
     local ground = attack.brutalGroundFinisher and settings.get('groundFinisherEnabled')
@@ -144,6 +152,10 @@ end
 
 interface.onHit = function(attack)
     local aliveBefore = not types.Actor.isDead(self)
+    -- Physical contact can leave a mark even if resistance absorbs all damage.
+    if aliveBefore and attack.successful and attack.brutalContactNormal and not attack.brutalBlocked then
+        burst('blood', attack.hitPos, attack)
+    end
     local outerAttack, outerArmor = currentAttack, selectedArmor
     currentAttack, selectedArmor = attack, nil
     previous.onHit(attack)

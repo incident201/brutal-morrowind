@@ -626,17 +626,29 @@ namespace MWWorld
     {
         std::pair<osg::Vec3f, osg::Vec3f> path;
         const std::pair<osg::Vec3f, osg::Vec3f>* flightPath = nullptr;
-        if (MWMechanics::physicalProjectiles() && velocity.length2() > 1e-4f)
+        auto world = MWBase::Environment::get().getWorld();
+        const bool physical = MWMechanics::physicalProjectiles();
+        const bool actorHit = !target.isEmpty() && target.getClass().isActor();
+        osg::Vec3f flight = velocity;
+        MWRender::Animation* animation = nullptr;
+        std::optional<MWRender::ProjectileContact> contact;
+        if (physical && flight.normalize() > 0.01f)
         {
-            osg::Vec3f direction = velocity;
-            direction.normalize();
             // Far enough back to cover a shield held well out in front, on through the body.
-            path = { hitPosition - direction * 140.f, hitPosition + direction * 80.f };
+            path = { hitPosition - flight * 140.f, hitPosition + flight * 80.f };
             flightPath = &path;
+            if (actorHit)
+            {
+                animation = world->getAnimation(target);
+                if (!hitWater && animation != nullptr && target != MWMechanics::getPlayer())
+                    contact = animation->findProjectileContact(hitPosition, flight);
+            }
         }
-        const MWMechanics::ProjectileOutcome outcome = MWMechanics::projectileHit(
-            caster, target, bow, projectile, hitPosition, attackStrength, flightPath, finisherId);
-        if (!MWMechanics::physicalProjectiles())
+        if (finisherId != 0 && target.getClass().isNpc() && (!contact || contact->mPart != ESM::PRT_Head))
+            finisherId = 0;
+        const MWMechanics::ProjectileOutcome outcome = MWMechanics::projectileHit(caster, target, bow, projectile,
+            hitPosition, attackStrength, flightPath, finisherId, contact ? &*contact : nullptr);
+        if (!physical)
             return;
 
         const ESM::RefId& id = projectile.getCellRef().getRefId();
@@ -651,15 +663,12 @@ namespace MWWorld
             return;
         }
 
-        osg::Vec3f flight = velocity;
-        flight.normalize();
         const VFS::Path::Normalized model = projectile.getClass().getCorrectedModel(projectile);
         // An enchanted missile spends its enchantment and itself on whatever it strikes.
         const bool enchanted = !projectile.getClass().getEnchantment(projectile).empty();
         // Thrown weapons (stars, darts, knives) do not snap.
         const auto* type = MWMechanics::getWeaponType(projectile.get<ESM::Weapon>()->mBase->mData.mType);
         const bool breakable = type->mWeaponClass == ESM::WeaponType::Ammo;
-        MWBase::World* world = MWBase::Environment::get().getWorld();
         const auto glance = [&](const osg::Vec3f& where, const osg::Vec3f& normal, float bounce, bool canBreak,
                                 std::string_view sound, std::string_view material) {
             if (enchanted)
@@ -671,9 +680,8 @@ namespace MWWorld
             report(loose.isEmpty() ? "broken" : "glanced", material, loose, where);
         };
 
-        if (!target.isEmpty() && target.getClass().isActor())
+        if (actorHit)
         {
-            MWRender::Animation* animation = world->getAnimation(target);
             switch (outcome)
             {
                 case MWMechanics::ProjectileOutcome::Body:
@@ -688,12 +696,12 @@ namespace MWWorld
                         return;
                     }
                     const ESM::RefId item = enchanted ? ESM::RefId() : id;
-                    if (animation != nullptr && animation->attachStuckProjectile(model, hitPosition, flight, item))
+                    if (contact && animation->attachStuckProjectile(model, *contact, flight, item))
                     {
                         if (!item.empty())
                             target.getClass().getContainerStore(target).add(item, 1);
-                        playMissileSound(hitPosition, "Brutal Arrow Flesh");
-                        report("body", "flesh", {}, hitPosition);
+                        playMissileSound(contact->mPosition, "Brutal Arrow Flesh");
+                        report("body", "flesh", {}, contact->mPosition);
                     }
                     else
                         // Its line passes what is seen of the body: it grazed by and falls.
@@ -1005,7 +1013,7 @@ namespace MWWorld
             {
                 const auto head = finisherHead(target);
                 const float headHeight = std::clamp(mPhysics->getHalfExtents(target).z() * .25f, 8.f, 32.f);
-                if (head && std::abs(hitPosition.z() - head->z()) <= headHeight)
+                if (head && (target.getClass().isNpc() || std::abs(hitPosition.z() - head->z()) <= headHeight))
                     finisherId = projectileState.mFinisher->mAttackId;
             }
             landProjectile(caster, target, bow, projectileRef.getPtr(), hitPosition,

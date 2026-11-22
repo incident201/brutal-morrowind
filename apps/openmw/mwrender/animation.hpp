@@ -51,6 +51,13 @@ namespace SceneUtil
 namespace MWRender
 {
 
+    struct ProjectileContact
+    {
+        osg::Vec3f mPosition;
+        osg::Vec3f mNormal;
+        int mPart = -1;
+    };
+
     class ResetAccumRootCallback;
     class RotateController;
     class TransparencyUpdater;
@@ -217,7 +224,6 @@ namespace MWRender
         /// Remove stuck missiles whose items are no longer carried.
         void syncStuckProjectiles();
         /// Whether a missile flying into the body may stick in what this path leads to (not a held weapon).
-        virtual bool canHoldStuckProjectile(const osg::NodePath& path) const { return true; }
         void addStuckProjectile(VFS::Path::NormalizedView model, const osg::Vec3f& tipPosition,
             const osg::Vec3f& flight, const ESM::RefId& item, osg::Group& parent, const osg::Matrixf& parentToWorld);
 
@@ -522,11 +528,13 @@ namespace MWRender
 
         virtual osg::Vec3f runAnimation(float duration);
 
-        /// Show an arrow, bolt or thrown weapon stuck where its flight meets the visible body, or the given part
-        /// of it (\a within). Its tip goes a little way in, on the bone nearest to it. \a item names the inventory
-        /// item it stands for: the stuck missile disappears once that is taken. It is empty for one that cannot
-        /// be taken. Returns false when the flight misses what is seen.
-        bool attachStuckProjectile(VFS::Path::NormalizedView model, const osg::Vec3f& hitPosition,
+        virtual int getPartForNodePath(const osg::NodePath&) const { return -1; }
+        /// Trace the flight through the visible body, or through the given shield (\a within).
+        std::optional<ProjectileContact> findProjectileContact(
+            const osg::Vec3f& hitPosition, const osg::Vec3f& direction, osg::Node* within = nullptr) const;
+        /// Embed a missile at the visible contact, on the bone nearest the tip.
+        /// The stuck missile disappears when its inventory item is taken.
+        bool attachStuckProjectile(VFS::Path::NormalizedView model, const ProjectileContact& contact,
             const osg::Vec3f& direction, const ESM::RefId& item, osg::Node* within = nullptr);
         void removeStuckProjectiles();
         /// Time on the first (original) source's timeline of \a group for a time of the source now playing it,

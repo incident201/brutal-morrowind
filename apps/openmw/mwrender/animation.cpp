@@ -30,6 +30,7 @@
 #include <components/resource/keyframemanager.hpp>
 #include <components/resource/scenemanager.hpp>
 
+#include <components/esm3/loadarmo.hpp>
 #include <components/esm3/loadcont.hpp>
 #include <components/esm3/loadcrea.hpp>
 #include <components/esm3/loadmgef.hpp>
@@ -2357,14 +2358,14 @@ namespace MWRender
         position += off - osg::componentMultiply(mAccumCtrl->getTranslation(oldtime), mAccumulate);
     }
 
-    bool Animation::attachStuckProjectile(VFS::Path::NormalizedView model, const osg::Vec3f& hitPosition,
-        const osg::Vec3f& direction, const ESM::RefId& item, osg::Node* within)
+    std::optional<ProjectileContact> Animation::findProjectileContact(
+        const osg::Vec3f& hitPosition, const osg::Vec3f& direction, osg::Node* within) const
     {
         // Attachment of missiles to the body follows sunspotdark/morrowind-modern-physics
         // (https://github.com/sunspotdark/morrowind-modern-physics, commit eb50a40), GPLv3.
         osg::Node* searched = within != nullptr ? within : mInsert.get();
         if (searched == nullptr || direction.length2() < 1e-6f)
-            return false;
+            return std::nullopt;
         osg::Vec3f flight = direction;
         flight.normalize();
 
@@ -2378,13 +2379,13 @@ namespace MWRender
         {
             const osg::NodePathList paths = searched->getParentalNodePaths();
             if (paths.empty())
-                return false;
+                return std::nullopt;
             osg::NodePath path = paths.front();
             path.pop_back();
             aboveToWorld = osg::computeLocalToWorld(path);
         }
         const osg::Matrixf worldToAbove = osg::Matrixf::inverse(aboveToWorld);
-        const auto trace = [&](const osg::Vec3f& point) -> std::optional<osg::Vec3f> {
+        const auto trace = [&](const osg::Vec3f& point) -> std::optional<ProjectileContact> {
             osg::ref_ptr<osgUtil::LineSegmentIntersector> intersector
                 = new osgUtil::LineSegmentIntersector(osgUtil::Intersector::MODEL,
                     (point - flight * before) * worldToAbove, (point + flight * searchDepth) * worldToAbove);
@@ -2392,8 +2393,17 @@ namespace MWRender
             visitor.setTraversalMask(~static_cast<unsigned int>(Mask_Effect));
             searched->accept(visitor);
             for (const auto& intersection : intersector->getIntersections())
-                if (within != nullptr || canHoldStuckProjectile(intersection.nodePath))
-                    return intersection.getWorldIntersectPoint() * aboveToWorld;
+            {
+                const int part = within != nullptr ? ESM::PRT_Shield : getPartForNodePath(intersection.nodePath);
+                if (within == nullptr && (part == ESM::PRT_Weapon || part == ESM::PRT_Shield || part == ESM::PRT_Hair))
+                    continue;
+                osg::Vec3f normal = osg::Matrixf::transform3x3(worldToAbove, intersection.getWorldIntersectNormal());
+                if (normal.normalize() < 1e-4f)
+                    normal = -flight;
+                else if (normal * flight > 0.f)
+                    normal = -normal;
+                return ProjectileContact{ intersection.getWorldIntersectPoint() * aboveToWorld, normal, part };
+            }
             return std::nullopt;
         };
         auto surface = trace(hitPosition);
@@ -2417,11 +2427,18 @@ namespace MWRender
                 }
             }
         }
-        if (!surface)
+        return surface;
+    }
+
+    bool Animation::attachStuckProjectile(VFS::Path::NormalizedView model, const ProjectileContact& contact,
+        const osg::Vec3f& direction, const ESM::RefId& item, osg::Node* within)
+    {
+        osg::Vec3f flight = direction;
+        if (flight.normalize() < 1e-4f)
             return false;
         // Deeper in flesh than in a shield board.
         const float embed = within != nullptr ? 3.f : 6.f;
-        const osg::Vec3f tipPosition = *surface + flight * embed;
+        const osg::Vec3f tipPosition = contact.mPosition + flight * embed;
 
         osg::Group* parent = nullptr;
         osg::Matrixf parentToWorld;

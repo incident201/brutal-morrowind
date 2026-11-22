@@ -435,8 +435,7 @@ namespace MWRender
         virtual ~NpcAnimation();
 
         void enableHeadAnimation(bool enable) override;
-        int getPartForNodePath(const osg::NodePath& path) const;
-        bool canHoldStuckProjectile(const osg::NodePath& path) const override;
+        int getPartForNodePath(const osg::NodePath& path) const override;
         /// The scene node of an equipped part (for example ESM::PRT_Shield), if it is shown.
         osg::Node* getPartNode(ESM::PartReferenceType part) const;
         bool attachStuckProjectileToShield(VFS::Path::NormalizedView model, const osg::Vec3f& hitPosition,

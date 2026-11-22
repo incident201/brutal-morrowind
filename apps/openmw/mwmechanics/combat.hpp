@@ -15,6 +15,11 @@ namespace MWWorld
     class Ptr;
 }
 
+namespace MWRender
+{
+    struct ProjectileContact;
+}
+
 namespace MWMechanics
 {
     inline constexpr float sNpcGuardContactMargin = 4.f;
@@ -64,7 +69,8 @@ namespace MWMechanics
     /// when that path actually crosses the shield.
     ProjectileOutcome projectileHit(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, MWWorld::Ptr weapon,
         const MWWorld::Ptr& projectile, const osg::Vec3f& hitPosition, float attackStrength,
-        const std::pair<osg::Vec3f, osg::Vec3f>* flight = nullptr, std::uint64_t finisherId = 0);
+        const std::pair<osg::Vec3f, osg::Vec3f>* flight = nullptr, std::uint64_t finisherId = 0,
+        const MWRender::ProjectileContact* contact = nullptr);
 
     /// Brutal physical missiles: falling arcs, contact hits, sticking and glancing.
     bool physicalProjectiles();

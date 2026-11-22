@@ -833,7 +833,8 @@ namespace MWMechanics
 
     ProjectileOutcome projectileHit(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, MWWorld::Ptr weapon,
         const MWWorld::Ptr& projectile, const osg::Vec3f& hitPosition, float attackStrength,
-        const std::pair<osg::Vec3f, osg::Vec3f>* flight, std::uint64_t finisherId)
+        const std::pair<osg::Vec3f, osg::Vec3f>* flight, std::uint64_t finisherId,
+        const MWRender::ProjectileContact* contact)
     {
         MWBase::World* world = MWBase::Environment::get().getWorld();
         const MWWorld::Store<ESM::GameSetting>& gmst = world->getStore().get<ESM::GameSetting>();
@@ -910,7 +911,8 @@ namespace MWMechanics
         }
 
         // Apply "On hit" effect of the projectile
-        bool appliedEnchantment = applyOnStrikeEnchantment(attacker, victim, projectile, hitPosition, true);
+        const osg::Vec3f& impactPosition = contact ? contact->mPosition : hitPosition;
+        bool appliedEnchantment = applyOnStrikeEnchantment(attacker, victim, projectile, impactPosition, true);
 
         if (validVictim)
         {
@@ -924,9 +926,10 @@ namespace MWMechanics
                     victim.getClass().getContainerStore(victim).add(projectile, 1);
             }
 
+            const int part = contact && contact->mPart >= 0 ? contact->mPart : finisherId != 0 ? ESM::PRT_Head : -1;
             MWBase::Environment::get().getLuaManager()->onHit(attacker, victim, weapon, projectile, 0, attackStrength,
-                damage, true, hitPosition, true, MWMechanics::DamageSourceType::Ranged, finisherId, finisherId != 0,
-                false, finisherId != 0 ? ESM::PRT_Head : -1);
+                damage, true, impactPosition, true, MWMechanics::DamageSourceType::Ranged, finisherId, finisherId != 0,
+                false, part, false, contact ? &contact->mNormal : nullptr);
             return ProjectileOutcome::Body;
         }
         return ProjectileOutcome::NoActor;

@@ -204,7 +204,8 @@ namespace MWRender
                 return true;
             }
         }
-        return attachStuckProjectile(model, hitPosition, flight, ESM::RefId(), shield);
+        const auto contact = findProjectileContact(hitPosition, flight, shield);
+        return contact && attachStuckProjectile(model, *contact, flight, ESM::RefId(), shield);
     }
 
     void NpcAnimation::setNpcGuardTarget(bool enabled, bool shield, const osg::Vec3f& worldPoint,

@@ -2724,13 +2724,6 @@ namespace MWRender
         return -1;
     }
 
-    bool NpcAnimation::canHoldStuckProjectile(const osg::NodePath& path) const
-    {
-        // Shield impacts are handled separately. Search for the body under carried equipment.
-        const int part = getPartForNodePath(path);
-        return part != ESM::PRT_Weapon && part != ESM::PRT_Shield;
-    }
-
     osg::Node* NpcAnimation::getPartNode(ESM::PartReferenceType part) const
     {
         if (part < 0 || part >= ESM::PRT_Count || !mObjectParts[part])

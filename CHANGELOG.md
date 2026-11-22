@@ -2,6 +2,7 @@ Brutal Morrowind (unreleased)
 ----------------------------
 
     Full adrenaline guides a bow shot or a thrown weapon to the visible head nearest the crosshair within a small radius. The world slows during the last part of the flight, and the head hit is lethal.
+    Arrows and thrown weapons leave a small blood mark at the visible NPC contact. Regular hits do 200% damage to the head, 100% to the torso and 65% to the limbs.
     Darts, throwing stars and other thrown weapons use Dark Messiah's right-hand dagger-throw animation. Import recipe 26 adds the preparation, held pose, release and recovery.
     First person: Bows use Dark Messiah's animations: the bow is drawn and lowered, an arrow is taken from the quiver over the shoulder, nocked and pulled to full draw, and moving keeps the bow ready. The arrow stays between the fingers and the bow's rest, the bow bends with the draw, and the draw, take, release and impact sounds come from Dark Messiah. Import recipe 25 adds these animations and sounds.
     Combat: Arrows, bolts and thrown weapons fly faster on a falling arc. One that touches a body hits it, without a skill roll, and stays in it; looting the body takes it out. Missiles stick in wood, earth and cloth, glance off or snap on stone and metal, and knock loose items aside. A raised shield stops a missile only when the missile actually strikes it; arrows stick in wooden shields and glance off metal ones. NPCs with a shield raise it against a player drawing a bow, and archers aim above distant targets.

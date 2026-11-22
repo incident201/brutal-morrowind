@@ -84,6 +84,10 @@ nearest the crosshair within a radius of 7% of the screen height. A lock spends
 the charge. Time slows just before contact, and a head hit kills with one shot.
 Shields and cover can intercept the shot.
 
+Arrows and thrown weapons leave a small blood mark on the NPC surface they hit.
+Regular hits deal double damage to the head, normal damage to the torso, and
+65% damage to the limbs.
+
 This branch uses **Dark Messiah import recipe 26**. Its launcher asks to reimport
 older data. See `CHANGELOG.md` for the other unreleased changes.
 

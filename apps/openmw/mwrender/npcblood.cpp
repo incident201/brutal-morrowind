@@ -594,7 +594,7 @@ namespace MWRender
             if (kind == "chop")
                 tangent = osg::Vec3d(0, 0, 1);
             // Native units: the DM slash is 64 px at .1 Source inches/px.
-            const double size = (style == 0 ? 15. : 24.) * (power ? 1.35 : 1.);
+            const double size = kind == "projectile" ? 12. : (style == 0 ? 15. : 24.) * (power ? 1.35 : 1.);
             for (auto& s : surfaces)
                 if (auto geometry = posed(s, bones))
                 {

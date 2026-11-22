@@ -58,6 +58,39 @@ namespace MWLua
 {
     namespace
     {
+        std::string_view rangedHitZone(int part)
+        {
+            switch (part)
+            {
+                case ESM::PRT_Head:
+                case ESM::PRT_Neck:
+                    return "head";
+                case ESM::PRT_Skirt:
+                case ESM::PRT_RHand:
+                case ESM::PRT_LHand:
+                case ESM::PRT_RWrist:
+                case ESM::PRT_LWrist:
+                case ESM::PRT_RForearm:
+                case ESM::PRT_LForearm:
+                case ESM::PRT_RUpperarm:
+                case ESM::PRT_LUpperarm:
+                case ESM::PRT_RFoot:
+                case ESM::PRT_LFoot:
+                case ESM::PRT_RAnkle:
+                case ESM::PRT_LAnkle:
+                case ESM::PRT_RKnee:
+                case ESM::PRT_LKnee:
+                case ESM::PRT_RLeg:
+                case ESM::PRT_LLeg:
+                case ESM::PRT_RPauldron:
+                case ESM::PRT_LPauldron:
+                case ESM::PRT_Tail:
+                    return "limb";
+                default:
+                    return "body";
+            }
+        }
+
         struct BoolScopeGuard
         {
             bool& mValue;
@@ -725,8 +758,9 @@ namespace MWLua
 
     void LuaManager::onHit(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, const MWWorld::Ptr& weapon,
         const MWWorld::Ptr& ammo, int attackType, float attackStrength, float damage, bool isHealth,
-        const osg::Vec3f& hitPos, bool successful, MWMechanics::DamageSourceType sourceType,
-        uint64_t brutalAttackId, bool brutalPowered, bool brutalBlocked, int contactPart, bool brutalGroundFinisher)
+        const osg::Vec3f& hitPos, bool successful, MWMechanics::DamageSourceType sourceType, uint64_t brutalAttackId,
+        bool brutalPowered, bool brutalBlocked, int contactPart, bool brutalGroundFinisher,
+        const osg::Vec3f* contactNormal)
     {
         mLua.protectedCall([&](LuaUtil::LuaView& view) {
             sol::table damageTable = view.newTable();
@@ -776,10 +810,18 @@ namespace MWLua
             if (classifyAnatomy)
                 headContact = classifyMeleeHeadContact(attacker, victim, hitPos, contactPart);
             data["brutalContactPart"] = contactPart;
+            const bool rangedContact
+                = sourceType == MWMechanics::DamageSourceType::Ranged && contactNormal && victim.getClass().isNpc();
+            if (rangedContact)
+            {
+                data["brutalContactNormal"] = *contactNormal;
+                data["brutalRangedZone"] = rangedHitZone(contactPart);
+            }
             // Attack receipts also exist for original bounds-based targeting;
             // those random blood points are not rendered surface contacts.
-            data["brutalContactExact"] = sourceType == MWMechanics::DamageSourceType::Melee
-                && brutalAttackId != 0 && Settings::game().mBrutalMeleeGeometry;
+            data["brutalContactExact"] = rangedContact
+                || (sourceType == MWMechanics::DamageSourceType::Melee && brutalAttackId != 0
+                    && Settings::game().mBrutalMeleeGeometry);
             MeleeWaistContact waistContact;
             if (classifyAnatomy)
                 waistContact = classifyMeleeWaistContact(attacker, victim, hitPos, contactPart);
