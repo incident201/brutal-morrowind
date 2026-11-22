@@ -2384,25 +2384,44 @@ namespace MWRender
             aboveToWorld = osg::computeLocalToWorld(path);
         }
         const osg::Matrixf worldToAbove = osg::Matrixf::inverse(aboveToWorld);
-        osg::ref_ptr<osgUtil::LineSegmentIntersector> intersector
-            = new osgUtil::LineSegmentIntersector(osgUtil::Intersector::MODEL,
-                (hitPosition - flight * before) * worldToAbove, (hitPosition + flight * searchDepth) * worldToAbove);
-        osgUtil::IntersectionVisitor visitor(intersector);
-        visitor.setTraversalMask(~static_cast<unsigned int>(Mask_Effect));
-        searched->accept(visitor);
-        const osgUtil::LineSegmentIntersector::Intersection* hit = nullptr;
-        for (const auto& intersection : intersector->getIntersections())
-            if (within != nullptr || canHoldStuckProjectile(intersection.nodePath))
+        const auto trace = [&](const osg::Vec3f& point) -> std::optional<osg::Vec3f> {
+            osg::ref_ptr<osgUtil::LineSegmentIntersector> intersector
+                = new osgUtil::LineSegmentIntersector(osgUtil::Intersector::MODEL,
+                    (point - flight * before) * worldToAbove, (point + flight * searchDepth) * worldToAbove);
+            osgUtil::IntersectionVisitor visitor(intersector);
+            visitor.setTraversalMask(~static_cast<unsigned int>(Mask_Effect));
+            searched->accept(visitor);
+            for (const auto& intersection : intersector->getIntersections())
+                if (within != nullptr || canHoldStuckProjectile(intersection.nodePath))
+                    return intersection.getWorldIntersectPoint() * aboveToWorld;
+            return std::nullopt;
+        };
+        auto surface = trace(hitPosition);
+        if (!surface && within != nullptr && mPtr == MWBase::Environment::get().getWorld()->getPlayerPtr())
+        {
+            // The raised player shield has a gameplay volume in front of the body. Its first-person mesh
+            // uses the viewmodel pose and projection. Find a nearby point on the board after a confirmed block.
+            osg::ComputeBoundsVisitor bounds;
+            bounds.setTraversalMask(~static_cast<unsigned int>(Mask_Effect));
+            within->accept(bounds);
+            if (bounds.getBoundingBox().valid())
             {
-                hit = &intersection;
-                break;
+                const osg::Vec3f center = bounds.getBoundingBox().center() * aboveToWorld;
+                const osg::Vec3f offset = hitPosition - center;
+                const osg::Vec3f across = offset - flight * (offset * flight);
+                for (float scale : { .65f, .3f, 0.f })
+                {
+                    surface = trace(center + across * scale);
+                    if (surface)
+                        break;
+                }
             }
-        if (hit == nullptr)
+        }
+        if (!surface)
             return false;
-        const osg::Vec3f surface = hit->getWorldIntersectPoint() * aboveToWorld;
         // Deeper in flesh than in a shield board.
         const float embed = within != nullptr ? 3.f : 6.f;
-        const osg::Vec3f tipPosition = surface + flight * embed;
+        const osg::Vec3f tipPosition = *surface + flight * embed;
 
         osg::Group* parent = nullptr;
         osg::Matrixf parentToWorld;
