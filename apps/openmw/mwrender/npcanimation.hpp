@@ -255,7 +255,7 @@ namespace MWRender
             const osg::Vec3f& origin, const osg::Vec3f& end, bool combat = false) const;
         bool hasNpcTwoHandGuardMeshForCombat() const;
         std::optional<NpcGuardMeshTrace> traceNpcGuardMeshSnapshot(
-            const osg::Vec3f& origin, const osg::Vec3f& end, bool combat) const;
+            const osg::Vec3f& origin, const osg::Vec3f& end, bool combat, osg::Matrixf* itemToWorld = nullptr) const;
 
         std::vector<std::pair<osg::observer_ptr<osg::MatrixTransform>, osg::Matrixf>> mClinchSourcePose;
         std::vector<std::pair<osg::observer_ptr<osg::MatrixTransform>, osg::Matrixf>> mBackstabSourcePose;
@@ -439,6 +439,8 @@ namespace MWRender
         bool canHoldStuckProjectile(const osg::NodePath& path) const override;
         /// The scene node of an equipped part (for example ESM::PRT_Shield), if it is shown.
         osg::Node* getPartNode(ESM::PartReferenceType part) const;
+        bool attachStuckProjectileToShield(VFS::Path::NormalizedView model, const osg::Vec3f& hitPosition,
+            const osg::Vec3f& flight, const std::pair<osg::Vec3f, osg::Vec3f>& path);
         bool addBloodDecal(const osg::Vec3f& position, const osg::Vec3f& outward,
             std::string_view kind, bool power, int hitPart = -1);
         std::string getBloodDecalData() const;

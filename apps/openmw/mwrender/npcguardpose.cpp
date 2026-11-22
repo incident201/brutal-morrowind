@@ -21,6 +21,7 @@
 #include "../mwbase/environment.hpp"
 #include "../mwbase/world.hpp"
 #include "../mwmechanics/actorutil.hpp"
+#include "../mwmechanics/combat.hpp"
 #include "../mwmechanics/creaturestats.hpp"
 #include "../mwworld/class.hpp"
 #include "actorutil.hpp"
@@ -129,7 +130,7 @@ namespace MWRender
     }
 
     std::optional<NpcAnimation::NpcGuardMeshTrace> NpcAnimation::traceNpcGuardMeshSnapshot(
-        const osg::Vec3f& origin, const osg::Vec3f& end, bool combat) const
+        const osg::Vec3f& origin, const osg::Vec3f& end, bool combat, osg::Matrixf* itemToWorld) const
     {
         if (mNpcTwoHandGuardPose)
             return traceNpcTwoHandGuardMeshForAudit(origin, end, combat);
@@ -147,6 +148,8 @@ namespace MWRender
                 return {};
             itemWorld = pose.meshItemActor * *actorWorld;
         }
+        if (itemToWorld != nullptr)
+            *itemToWorld = itemWorld;
         SegmentMeshGap nearest;
         float firstHit = std::numeric_limits<float>::infinity();
         for (const auto& local : pose.triangles)
@@ -180,6 +183,28 @@ namespace MWRender
         if (std::isfinite(nearest.squared))
             return NpcGuardMeshTrace{ pose.meshFrame, false, float(std::sqrt(nearest.squared)), nearest.point };
         return {};
+    }
+
+    bool NpcAnimation::attachStuckProjectileToShield(VFS::Path::NormalizedView model, const osg::Vec3f& hitPosition,
+        const osg::Vec3f& flight, const std::pair<osg::Vec3f, osg::Vec3f>& path)
+    {
+        osg::Node* part = getPartNode(ESM::PRT_Shield);
+        osg::Group* shield = part != nullptr ? part->asGroup() : nullptr;
+        if (shield == nullptr)
+            return false;
+        if (mNpcGuardPose && mNpcGuardPose->shield && !mNpcTwoHandGuardPose)
+        {
+            // The fitted pose used for the hit can be restored to the source
+            // animation between draw updates. Mount against the same mesh pose as combat.
+            osg::Matrixf itemToWorld;
+            const auto contact = traceNpcGuardMeshSnapshot(path.first, path.second, true, &itemToWorld);
+            if (contact && contact->gap <= MWMechanics::sNpcProjectileGuardContactMargin)
+            {
+                addStuckProjectile(model, contact->point + flight * 3.f, flight, {}, *shield, itemToWorld);
+                return true;
+            }
+        }
+        return attachStuckProjectile(model, hitPosition, flight, ESM::RefId(), shield);
     }
 
     void NpcAnimation::setNpcGuardTarget(bool enabled, bool shield, const osg::Vec3f& worldPoint,

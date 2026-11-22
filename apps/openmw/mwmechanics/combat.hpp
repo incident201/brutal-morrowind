@@ -17,6 +17,7 @@ namespace MWWorld
 namespace MWMechanics
 {
     inline constexpr float sNpcGuardContactMargin = 4.f;
+    inline constexpr float sNpcProjectileGuardContactMargin = 1.f;
 
     bool applyOnStrikeEnchantment(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, const MWWorld::Ptr& object,
         const osg::Vec3f& hitPosition, const bool fromProjectile = false);

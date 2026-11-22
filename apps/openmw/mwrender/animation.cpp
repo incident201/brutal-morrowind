@@ -2464,6 +2464,13 @@ namespace MWRender
                 return false;
         }
 
+        addStuckProjectile(model, tipPosition, flight, item, *parent, parentToWorld);
+        return true;
+    }
+
+    void Animation::addStuckProjectile(VFS::Path::NormalizedView model, const osg::Vec3f& tipPosition,
+        const osg::Vec3f& flight, const ESM::RefId& item, osg::Group& parent, const osg::Matrixf& parentToWorld)
+    {
         osg::ref_ptr<osg::Node> projectile = mResourceSystem->getSceneManager()->getInstance(model);
         // Missile models point along +Y; the tip is the far end.
         osg::ComputeBoundsVisitor bounds;
@@ -2484,8 +2491,8 @@ namespace MWRender
         attached->setNodeMask(Mask_Effect);
         attached->setName("Brutal Stuck Projectile");
         attached->addChild(projectile);
-        parent->addChild(attached);
-        mStuckProjectiles.push_back({ parent, attached, item });
+        parent.addChild(attached);
+        mStuckProjectiles.push_back({ &parent, attached, item });
 
         // A body carries a bounded number; the oldest spent ones go first.
         constexpr std::size_t maxStuckProjectiles = 12;
@@ -2499,7 +2506,6 @@ namespace MWRender
                 group->removeChild(oldest->mNode);
             mStuckProjectiles.erase(oldest);
         }
-        return true;
     }
 
     float Animation::mapToOriginalGroupTime(std::string_view group, float time, bool relative) const

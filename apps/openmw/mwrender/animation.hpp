@@ -218,6 +218,8 @@ namespace MWRender
         void syncStuckProjectiles();
         /// Whether a missile flying into the body may stick in what this path leads to (not a held weapon).
         virtual bool canHoldStuckProjectile(const osg::NodePath& path) const { return true; }
+        void addStuckProjectile(VFS::Path::NormalizedView model, const osg::Vec3f& tipPosition,
+            const osg::Vec3f& flight, const ESM::RefId& item, osg::Group& parent, const osg::Matrixf& parentToWorld);
 
         osg::ref_ptr<osg::Group> mObjectRoot;
         SceneUtil::Skeleton* mSkeleton;

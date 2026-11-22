@@ -699,7 +699,7 @@ namespace MWMechanics
             if (blocker != getPlayer() && animation->hasNpcGuardMeshForCombat())
             {
                 const auto trace = animation->traceNpcGuardMeshForCombat(flight.first, flight.second);
-                return trace && (trace->hit || trace->gap <= 1.f);
+                return trace && trace->gap <= sNpcProjectileGuardContactMargin;
             }
             osg::Node* shield = animation->getPartNode(ESM::PRT_Shield);
             return shield != nullptr && animation->intersectNode(shield, flight.first, flight.second).has_value();
