@@ -21,6 +21,7 @@
 #include <vector>
 #include <memory>
 #include <span>
+#include <string>
 #include <unordered_map>
 
 namespace osg
@@ -187,6 +188,19 @@ namespace MWRender
 
         RayResult castRay(const osg::Vec3f& origin, const osg::Vec3f& dest, bool ignorePlayer,
             bool ignoreActors = false, std::span<const MWWorld::Ptr> ignoreList = {}, bool melee = false);
+
+        struct SurfaceResult
+        {
+            bool mHit = false;
+            bool mTerrain = false;
+            osg::Vec3f mPosition;
+            osg::Vec3f mNormal;
+            MWWorld::Ptr mObject;
+            std::string mTexture;
+        };
+
+        /// The visible world surface (not actors) on a segment, with its object and base texture.
+        SurfaceResult castRayForSurface(const osg::Vec3f& origin, const osg::Vec3f& dest);
 
         std::vector<float> findSegmentCandidates(
             std::span<const std::pair<osg::Vec3f, osg::Vec3f>> segments,

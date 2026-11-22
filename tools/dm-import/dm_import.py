@@ -29,9 +29,9 @@ ANIMATION = ROOT / 'scripts/animation'
 CREATURES = ROOT / 'scripts/creatures'
 EFFECTS = ROOT / 'scripts/effects'
 CALIBRATION = HERE / 'calibration'
-RECIPE_VERSION = 24  # Misc::DarkMessiahData::sRecipe in the engine must match.
+RECIPE_VERSION = 25  # Misc::DarkMessiahData::sRecipe in the engine must match.
 # Conversion steps per import, for progress reporting.
-TOTAL_STEPS = 43
+TOTAL_STEPS = 44
 KEYFRAMES = ('.kf', '.yaml')
 # Steps run side by side, one core each; the matrices involved are 4x4.
 ENVIRONMENT = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1')
@@ -530,6 +530,9 @@ class Importer:
                 self.run('Camera motion', ANIMATION / 'import_camera_head.py', '--vpk-root', self.vpks,
                          '--work-dir', self.cache, '--arms', arms, '--camera-contract', self.contract,
                          '--output', self.stage('clinch'))
+                # The bow keeps its own Dark Messiah clips; no head camera motion of its own.
+                self.run('Bow', ANIMATION / 'import_bow.py', *self.source,
+                         '--camera-contract', self.contract, '--arms', arms, '--calibration', CALIBRATION)
                 self.run('Two-handed player viewmodels', ANIMATION / 'import_two_hand_viewmodel.py',
                          '--arms', arms, '--clinch', self.stage('clinch'),
                          '--native-skeleton', self.meshes / 'xbase_anim.1st.nif',

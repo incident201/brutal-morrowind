@@ -70,7 +70,12 @@ backstab. Click attack or release a charged attack to execute it. Sneak, Short
 Blade and both weapons determine its damage. Witnesses who detect the attack
 can report it. The backstab has its own switch in Brutal Morrowind settings.
 
-This branch uses **Dark Messiah import recipe 24**. Its launcher asks to reimport
+Bows use Dark Messiah's first-person draw, aim and release. Arrows, bolts and
+thrown weapons are physical: they fall on an arc, hit whatever they touch, stay
+in bodies until looted, stick in wood and wooden shields, and glance off stone,
+metal and metal shields. A raised shield blocks only the missiles that strike it.
+
+This branch uses **Dark Messiah import recipe 25**. Its launcher asks to reimport
 older data. See `CHANGELOG.md` for the other unreleased changes.
 
 ## Requirements

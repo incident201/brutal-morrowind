@@ -360,9 +360,21 @@ namespace MWRender
             BrutalViewmodel_Dagger,
             BrutalViewmodel_Paired,
             BrutalViewmodel_PairedBlunt,
+            BrutalViewmodel_Bow,
         };
         static constexpr std::string_view sBrutalLeftWeaponBone = "Brutal Left Weapon";
         BrutalViewmodel mViewmodelSet = BrutalViewmodel_Default; // Clip set loaded for the first-person rig.
+        // Dark Messiah bow: the nock in the right hand's frame and the arrow rest in the left hand's frame.
+        struct ArrowMount
+        {
+            osg::Vec3f mNock;
+            osg::Vec3f mRest;
+            osg::Vec3f mHold; // The arrow's direction in the right hand before it is nocked.
+        };
+        std::optional<ArrowMount> mArrowMount;
+        osg::ref_ptr<osg::MatrixTransform> mNockedArrow;
+        float mNockedArrowBack = 0.f;
+        void loadArrowMount();
         bool hasPolearmViewmodel() const
         {
             return mViewmodelSet == BrutalViewmodel_Staff || mViewmodelSet == BrutalViewmodel_Spear;
@@ -424,6 +436,9 @@ namespace MWRender
 
         void enableHeadAnimation(bool enable) override;
         int getPartForNodePath(const osg::NodePath& path) const;
+        bool canHoldStuckProjectile(const osg::NodePath& path) const override;
+        /// The scene node of an equipped part (for example ESM::PRT_Shield), if it is shown.
+        osg::Node* getPartNode(ESM::PartReferenceType part) const;
         bool addBloodDecal(const osg::Vec3f& position, const osg::Vec3f& outward,
             std::string_view kind, bool power, int hitPart = -1);
         std::string getBloodDecalData() const;
@@ -454,6 +469,8 @@ namespace MWRender
         void restoreTransientPose() override;
         void fitSwordClinchPose(osg::NodeVisitor& visitor);
         void fitBackstabPose(osg::NodeVisitor& visitor);
+        /// With the Dark Messiah bow, keep a nocked arrow between the right fingers and the bow's arrow rest.
+        void fitNockedArrow();
         bool canFitSwordClinchPose(NpcAnimation& opponent);
         const SwordClinchGeometry& getSwordClinchGeometryForAudit() const { return mSwordClinchGeometry; }
         // worldPoint is the threatened body point; incomingDirection points

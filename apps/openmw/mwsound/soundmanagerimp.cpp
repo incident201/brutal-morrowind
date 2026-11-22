@@ -605,6 +605,15 @@ namespace MWSound
             { "Brutal Sword Parry", "parry", 3, { .5f, .7f }, { .95f, 1.05f }, "Heavy Armor Hit" },
             // Bounce: a charged swing stopped by a wall (Dark Messiah sword_on_stone).
             { "Brutal Sword Stone", "stone_hit", 4, { .85f, .95f }, { .95f, 1.05f }, "Heavy Armor Hit" },
+            // Physical arrows: into flesh, into wood, snapping or glancing off stone and metal.
+            { "Brutal Arrow Flesh", "arrow_flesh", 3, { .55f, .7f }, { .95f, 1.05f }, "Health Damage" },
+            { "Brutal Arrow Wood", "arrow_wood", 3, { .7f, .8f }, { .95f, 1.05f }, "Light Armor Hit" },
+            { "Brutal Arrow Break", "arrow_break", 1, { .6f, .7f }, { .9f, 1.1f }, "Light Armor Hit" },
+            { "Brutal Arrow Stone", "stone_hit", 4, { .25f, .35f }, { 1.15f, 1.3f }, "Light Armor Hit" },
+            { "Brutal Arrow Metal", "metal_hit", 4, { .3f, .4f }, { 1.1f, 1.25f }, "Light Armor Hit" },
+            { "Brutal Bow Draw", "bow_draw", 2, { .3f, .4f }, { 1.f, 1.f }, "Weapon Swish" },
+            { "Brutal Bow Release", "bow_release", 1, { .35f, .45f }, { .9f, 1.1f }, "Weapon Swish" },
+            { "Brutal Bow Take Arrow", "bow_take_arrow", 4, { .5f, .6f }, { 1.f, 1.f }, "Weapon Swish" },
             // Dual-dagger stealth backstab: blade impacts and muffled victim gasps.
             { "Brutal Backstab Stab", "backstab_stab", 2, { .85f, 1.f }, { .95f, 1.05f }, "Health Damage" },
             { "Brutal Backstab Voice Male", "backstab_voice_male", 2, { .85f, 1.f }, { .96f, 1.04f }, "Health Damage" },

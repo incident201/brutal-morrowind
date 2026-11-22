@@ -61,6 +61,8 @@ woundedNpcs: Wounded NPCs
 woundedNpcsDescription: "Below 30% health an NPC fights and walks wounded, as in Dark Messiah: its parry and shield block often give way, blows stagger it, and a charged blow, kick or shield bash can knock it down. Argonians and Khajiit keep their own stance and walk."
 npcFlee: NPC flight
 npcWeaponPickup: NPCs pick up weapons
+physicalProjectiles: Physical arrows and missiles
+physicalProjectilesDescription: "Arrows, bolts and thrown weapons fall on an arc and hit what they touch without a skill roll. They stay in bodies until looted, stick in wood and wooden shields and glance off stone and metal. A raised shield blocks only the missiles that strike it."
 npcWeaponPickupDescription: "An NPC left without a weapon in a fight runs to a weapon lying nearby, picks it up and fights with it. A shield lying right beside it is taken too."
 npcFleeDescription: "A blow that leaves an NPC below 10% health makes it run away for up to 20 seconds; then it fights on until the next blow."
 hitRecovery: Suppress player hit recoil

@@ -32,6 +32,7 @@
 #include <osgUtil/IncrementalCompileOperation>
 
 #include <osg/Depth>
+#include <osg/ComputeBoundsVisitor>
 #include <osg/MatrixTransform>
 #include <osg/UserDataContainer>
 
@@ -60,6 +61,7 @@
 #include <components/sceneutil/visitor.hpp>
 #include <components/settings/values.hpp>
 
+#include <components/files/istreamptr.hpp>
 #include <components/vfs/manager.hpp>
 
 #include "../mwmechanics/brutaloptions.hpp"
@@ -1487,6 +1489,11 @@ namespace MWRender
                 loadAdditionalAnimations(VFS::Path::NormalizedView("meshes/brutal_fp_paired.nif"), smodel);
             else if (mViewmodelSet == BrutalViewmodel_PairedBlunt)
                 loadAdditionalAnimations(VFS::Path::NormalizedView("meshes/brutal_fp_paired_blunt.nif"), smodel);
+            else if (mViewmodelSet == BrutalViewmodel_Bow)
+            {
+                loadAdditionalAnimations(VFS::Path::NormalizedView("meshes/brutal_fp_bow.nif"), smodel);
+                loadArrowMount();
+            }
         }
 
         if (is1stPerson)
@@ -2146,6 +2153,9 @@ namespace MWRender
             if (mResourceSystem->getVFS()->exists(clips))
                 return sword ? BrutalViewmodel_Paired : BrutalViewmodel_PairedBlunt;
         }
+        if (type == ESM::Weapon::MarksmanBow
+            && mResourceSystem->getVFS()->exists(VFS::Path::NormalizedView("animations/brutal_fp_bow/bowandarrow.kf")))
+            return BrutalViewmodel_Bow;
         if (MWMechanics::getWeaponType(type)->mFlags & ESM::WeaponType::TwoHanded)
             return BrutalViewmodel_Default;
         if (carriesShield())
@@ -2713,6 +2723,20 @@ namespace MWRender
         return -1;
     }
 
+    bool NpcAnimation::canHoldStuckProjectile(const osg::NodePath& path) const
+    {
+        // Shield impacts are handled separately. Search for the body under carried equipment.
+        const int part = getPartForNodePath(path);
+        return part != ESM::PRT_Weapon && part != ESM::PRT_Shield;
+    }
+
+    osg::Node* NpcAnimation::getPartNode(ESM::PartReferenceType part) const
+    {
+        if (part < 0 || part >= ESM::PRT_Count || !mObjectParts[part])
+            return nullptr;
+        return mObjectParts[part]->getNode().get();
+    }
+
     std::map<std::string, osg::Vec3f> NpcAnimation::getFootGeometryForAudit(const osg::Vec3f& normal) const
     {
         std::map<std::string, osg::Vec3f> result;
@@ -2761,6 +2785,20 @@ namespace MWRender
         WeaponGripGeometry result;
         const auto* leftItem = mObjectParts[ESM::PRT_Shield].get();
         result.leftItemVisible = leftItem && leftItem->getNode()->getNodeMask() != 0u;
+        if (mViewmodelSet == BrutalViewmodel_Bow && mArrowMount && mAmmunition)
+        {
+            const auto arrow = mAmmunition->getNode();
+            const auto paths = arrow->getParentalNodePaths();
+            const auto right = getBoneWorldMatrix("Bip01 R Hand");
+            const auto left = getBoneWorldMatrix("Bip01 L Hand");
+            if (!paths.empty() && right && left)
+            {
+                const osg::Matrixf arrowWorld = osg::computeLocalToWorld(paths.front());
+                result.roots["arrowNock"] = osg::Matrixf::translate(0.f, mNockedArrowBack, 0.f) * arrowWorld;
+                result.roots["bowNock"] = osg::Matrixf::translate(mArrowMount->mNock * *right);
+                result.roots["bowRest"] = osg::Matrixf::translate(mArrowMount->mRest * *left);
+            }
+        }
         const std::function<std::optional<osg::Matrixf>(std::string_view)> boneWorld
             = [&](std::string_view name) { return getBoneWorldMatrix(name); };
         for (const auto& [name, part] : { std::pair{ "leftHand", ESM::PRT_LHand },
@@ -4111,7 +4149,12 @@ namespace MWRender
             std::string_view bonename = sPartList.at(type);
             if (type == ESM::PRT_Shield && carriesLeftWeapon())
                 bonename = sBrutalLeftWeaponBone;
-            if (type == ESM::PRT_Weapon)
+            // The Dark Messiah bow set holds the bow in the left hand's own mount.
+            const bool leftBow = type == ESM::PRT_Weapon && mViewMode == VM_FirstPerson
+                && mViewmodelSet == BrutalViewmodel_Bow && getNode(sBrutalLeftWeaponBone);
+            if (leftBow)
+                bonename = sBrutalLeftWeaponBone;
+            else if (type == ESM::PRT_Weapon)
             {
                 const MWWorld::InventoryStore& inv = mPtr.getClass().getInventoryStore(mPtr);
                 MWWorld::ConstContainerStoreIterator weapon = inv.getSlot(MWWorld::InventoryStore::Slot_CarriedRight);
@@ -4418,9 +4461,103 @@ namespace MWRender
         updateHolsteredShield(mShowCarriedLeft);
     }
 
+    void NpcAnimation::loadArrowMount()
+    {
+        mArrowMount.reset();
+        constexpr VFS::Path::NormalizedView path("animations/brutal_fp_bow/arrow-mount.txt");
+        if (!mResourceSystem->getVFS()->exists(path))
+            return;
+        try
+        {
+            Files::IStreamPtr stream = mResourceSystem->getVFS()->get(path);
+            std::string word;
+            ArrowMount mount;
+            int found = 0;
+            while (*stream >> word)
+            {
+                osg::Vec3f* target = word == "nock" ? &mount.mNock
+                    : word == "rest"                ? &mount.mRest
+                    : word == "hold"                ? &mount.mHold
+                                                    : nullptr;
+                if (target == nullptr)
+                    continue;
+                *stream >> target->x() >> target->y() >> target->z();
+                ++found;
+            }
+            if (found >= 2)
+                mArrowMount = mount;
+        }
+        catch (const std::exception& e)
+        {
+            Log(Debug::Warning) << "Bow arrow mount: " << e.what();
+        }
+    }
+
+    void NpcAnimation::fitNockedArrow()
+    {
+        if (!mArrowMount || !mNockedArrow || !mAmmunition || mViewMode != VM_FirstPerson
+            || mViewmodelSet != BrutalViewmodel_Bow || mNockedArrow->getNumParents() == 0)
+            return;
+        const auto right = getBoneWorldMatrix("Bip01 R Hand");
+        const auto left = getBoneWorldMatrix("Bip01 L Hand");
+        const osg::NodePathList paths = mNockedArrow->getParent(0)->getParentalNodePaths();
+        if (!right || !left || paths.empty())
+            return;
+        const osg::Vec3f nock = mArrowMount->mNock * *right;
+        const osg::Vec3f rest = mArrowMount->mRest * *left;
+        osg::Vec3f forward = rest - nock;
+        if (forward.normalize() < 1e-3f)
+            return;
+        // Turn the arrow onto the rest as the source animation starts pulling the string.
+        osg::Vec3f held = osg::Matrixf::transform3x3(mArrowMount->mHold, *right);
+        const float pull = getTextKeyTime("bowandarrow: shoot min attack");
+        const float time = getCurrentTime("bowandarrow");
+        if (pull >= 0.f && time >= 0.f && time < pull && held.normalize() > 1e-3f)
+        {
+            constexpr float nockTime = .15f;
+            const float u = std::clamp(1.f + (time - pull) / nockTime, 0.f, 1.f);
+            const float onBow = u * u * (3.f - 2.f * u);
+            forward = held * (1.f - onBow) + forward * onBow;
+            if (forward.normalize() < 1e-3f)
+                return;
+        }
+        // Same orientation as in flight: +Y forward, no roll.
+        osg::Vec3f side = forward ^ osg::Z_AXIS;
+        if (side.normalize() < 1e-4f)
+            side = osg::X_AXIS;
+        const osg::Vec3f up = side ^ forward;
+        const osg::Matrixf world = osg::Matrixf(side.x(), side.y(), side.z(), 0.f, forward.x(), forward.y(),
+                                       forward.z(), 0.f, up.x(), up.y(), up.z(), 0.f, 0.f, 0.f, 0.f, 1.f)
+            * osg::Matrixf::translate(nock - forward * mNockedArrowBack);
+        mNockedArrow->setMatrix(world * osg::Matrixf::inverse(osg::computeLocalToWorld(paths.front())));
+    }
+
     void NpcAnimation::attachArrow()
     {
         WeaponAnimation::attachArrow(mPtr);
+
+        // The Dark Messiah bow: the arrow follows the fingers that hold it, not the bow's own arrow bone.
+        if (mArrowMount && mAmmunition && mViewMode == VM_FirstPerson && mViewmodelSet == BrutalViewmodel_Bow)
+        {
+            osg::ref_ptr<osg::Node> arrow = mAmmunition->getNode();
+            if (arrow->getNumParents() > 0)
+            {
+                osg::Group* bone = arrow->getParent(0);
+                if (!mNockedArrow)
+                    mNockedArrow = new osg::MatrixTransform;
+                if (mNockedArrow->getNumParents() > 0 && mNockedArrow->getParent(0) != bone)
+                    mNockedArrow->getParent(0)->removeChild(mNockedArrow);
+                if (mNockedArrow->getNumParents() == 0)
+                    bone->addChild(mNockedArrow);
+                bone->removeChild(arrow);
+                mNockedArrow->addChild(arrow);
+                osg::ComputeBoundsVisitor bounds;
+                arrow->accept(bounds);
+                // The nock is the back end of the shaft.
+                mNockedArrowBack = bounds.getBoundingBox().valid() ? bounds.getBoundingBox().yMin() : 0.f;
+                fitNockedArrow();
+            }
+        }
 
         const MWWorld::InventoryStore& inv = mPtr.getClass().getInventoryStore(mPtr);
         MWWorld::ConstContainerStoreIterator ammo = inv.getSlot(MWWorld::InventoryStore::Slot_Ammunition);

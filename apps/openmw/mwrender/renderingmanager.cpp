@@ -12,6 +12,7 @@
 #include <osg/Light>
 #include <osg/Material>
 #include <osg/NodeCallback>
+#include <osg/Texture>
 #include <osg/observer_ptr>
 #include <osg/Matrix>
 #include <osg/UserDataContainer>
@@ -117,6 +118,7 @@ namespace MWRender
             {
                 owner->fitSwordClinchPose(*visitor);
                 owner->fitBackstabPose(*visitor);
+                owner->fitNockedArrow();
             }
         }
     };
@@ -1224,6 +1226,56 @@ namespace MWRender
                 }
             }
         }
+        return result;
+    }
+
+    // Derived from sunspotdark/morrowind-modern-physics
+    // (https://github.com/sunspotdark/morrowind-modern-physics, commit eb50a40), GPLv3.
+    RenderingManager::SurfaceResult RenderingManager::castRayForSurface(
+        const osg::Vec3f& origin, const osg::Vec3f& dest)
+    {
+        osg::ref_ptr<osgUtil::LineSegmentIntersector> intersector(
+            new osgUtil::LineSegmentIntersector(osgUtil::LineSegmentIntersector::MODEL, origin, dest));
+        intersector->setIntersectionLimit(osgUtil::LineSegmentIntersector::LIMIT_NEAREST);
+        mRootNode->accept(*getIntersectionVisitor(intersector, true, true));
+
+        SurfaceResult result;
+        if (!intersector->containsIntersections())
+            return result;
+        const osgUtil::LineSegmentIntersector::Intersection& intersection = intersector->getFirstIntersection();
+        result.mHit = true;
+        result.mPosition = intersection.getWorldIntersectPoint();
+        result.mNormal = intersection.getWorldIntersectNormal();
+        for (osg::Node* node : intersection.nodePath)
+        {
+            if (node->getNodeMask() == Mask_Terrain)
+                result.mTerrain = true;
+            if (osg::UserDataContainer* data = node->getUserDataContainer())
+                for (unsigned int i = 0; i < data->getNumUserObjects(); ++i)
+                    if (const auto* holder = dynamic_cast<const PtrHolder*>(data->getUserObject(i)))
+                        result.mObject = holder->mPtr;
+        }
+
+        // The base texture, looking from the drawable up towards the root, as rendering would apply it.
+        const auto findTexture = [](const osg::StateSet* stateSet) -> std::string {
+            if (stateSet == nullptr)
+                return {};
+            for (unsigned int unit = 0; unit < stateSet->getTextureAttributeList().size(); ++unit)
+            {
+                const auto* texture = dynamic_cast<const osg::Texture*>(
+                    stateSet->getTextureAttribute(unit, osg::StateAttribute::TEXTURE));
+                if (texture == nullptr || texture->getNumImages() == 0 || texture->getImage(0) == nullptr)
+                    continue;
+                if (unit == 0 || texture->getName() == "diffuseMap")
+                    return texture->getImage(0)->getFileName();
+            }
+            return {};
+        };
+        if (intersection.drawable)
+            result.mTexture = findTexture(intersection.drawable->getStateSet());
+        for (auto it = intersection.nodePath.rbegin(); result.mTexture.empty() && it != intersection.nodePath.rend();
+             ++it)
+            result.mTexture = findTexture((*it)->getStateSet());
         return result;
     }
 

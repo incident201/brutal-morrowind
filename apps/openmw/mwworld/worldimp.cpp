@@ -3830,7 +3830,8 @@ namespace MWWorld
 
         if (result.mHit)
         {
-            MWMechanics::projectileHit(actor, result.mHitObject, bow, projectile, result.mHitPos, attackStrength);
+            mProjectileManager->landProjectile(actor, result.mHitObject, bow, projectile, result.mHitPos,
+                result.mHitNormal, orient * osg::Vec3f(0, 1, 0) * speed, attackStrength, false);
             return;
         }
 

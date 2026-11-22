@@ -490,7 +490,7 @@ namespace MWLua
                 {"swordParry", g.mDarkMessiahSwordParry}, {"comboAttacks", g.mDarkMessiahComboAttacks},
                 {"npcStagger", g.mNpcHurtHealthFraction > 0.f}, {"hitRecovery", !g.mPlayerHitRecovery},
                 {"woundedNpcs", g.mBrutalWoundedNpcs}, {"npcFlee", g.mBrutalNpcFlee},
-                {"npcWeaponPickup", g.mBrutalNpcWeaponPickup},
+                {"npcWeaponPickup", g.mBrutalNpcWeaponPickup}, {"physicalProjectiles", g.mBrutalPhysicalProjectiles},
                 {"stamina", g.mBrutalStamina}, {"wallBounce", g.mBrutalWallBounce},
                 {"controlsEnabled", g.mBrutalControlsEnabled}, {"slide", g.mBrutalSlide}, {"clinch", g.mBrutalClinch}, {"fastAttacks", g.mBrutalFastAttacks},
                 {"combatSounds", g.mBrutalCombatSounds}, {"heroVoice", g.mBrutalHeroVoice}, {"bloodEffects", g.mBrutalBloodEffects},
@@ -579,6 +579,7 @@ namespace MWLua
                 g.mBrutalWoundedNpcs.set(on("woundedNpcs"));
                 g.mBrutalNpcFlee.set(on("npcFlee"));
                 g.mBrutalNpcWeaponPickup.set(on("npcWeaponPickup"));
+                g.mBrutalPhysicalProjectiles.set(on("physicalProjectiles"));
                 g.mBrutalStamina.set(on("stamina"));
                 g.mPlayerFatigueRegenFraction.set(on("stamina") ? 1.f/18.f : 0.f);
                 g.mBrutalWallBounce.set(on("wallBounce"));
@@ -1217,6 +1218,7 @@ namespace MWLua
             result["blockRaised"] = stats.mBrutalBlockRaised;
             result["parry"] = stats.mBrutalParry;
             result["blockRaisedAt"] = stats.mBrutalBlockRaisedAt;
+            result["blockLoweredAt"] = stats.mBrutalBlockLoweredAt;
             result["fastStrike"] = stats.mBrutalFastStrike;
             result["attacking"] = stats.getAttackingOrSpell();
             result["hitRecovery"] = stats.getHitRecovery();

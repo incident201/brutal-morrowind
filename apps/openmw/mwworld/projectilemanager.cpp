@@ -5,6 +5,11 @@
 #include <optional>
 #include <sstream>
 
+#include <algorithm>
+#include <cmath>
+#include <map>
+
+#include <osg/ComputeBoundsVisitor>
 #include <osg/PositionAttitudeTransform>
 
 #include <components/debug/debuglog.hpp>
@@ -23,6 +28,7 @@
 #include <components/misc/constants.hpp>
 #include <components/misc/convert.hpp>
 #include <components/misc/resourcehelpers.hpp>
+#include <components/misc/rng.hpp>
 
 #include <components/resource/resourcesystem.hpp>
 #include <components/resource/scenemanager.hpp>
@@ -38,9 +44,11 @@
 #include "../mwworld/esmstore.hpp"
 #include "../mwworld/inventorystore.hpp"
 #include "../mwworld/manualref.hpp"
+#include "../mwworld/surfacematerial.hpp"
 #include "../mwworld/worldmodel.hpp"
 
 #include "../mwbase/environment.hpp"
+#include "../mwbase/luamanager.hpp"
 #include "../mwbase/soundmanager.hpp"
 #include "../mwbase/windowmanager.hpp"
 #include "../mwbase/world.hpp"
@@ -49,8 +57,10 @@
 #include "../mwmechanics/combat.hpp"
 #include "../mwmechanics/creaturestats.hpp"
 #include "../mwmechanics/spellcasting.hpp"
+#include "../mwmechanics/weapontype.hpp"
 
 #include "../mwrender/animation.hpp"
+#include "../mwrender/npcanimation.hpp"
 #include "../mwrender/renderingmanager.hpp"
 #include "../mwrender/util.hpp"
 #include "../mwrender/vismask.hpp"
@@ -385,6 +395,275 @@ namespace MWWorld
         mProjectiles.push_back(std::move(state));
     }
 
+    namespace
+    {
+        // The rotation that points a missile model's +Y along a direction, as an ESM rotation (no roll).
+        void missileRotation(const osg::Vec3f& direction, float (&rotation)[3])
+        {
+            osg::Vec3f d = direction;
+            d.normalize();
+            const float yaw = std::atan2(d.x(), d.y());
+            const float pitch = std::asin(std::clamp(d.z(), -1.f, 1.f));
+            float best = -2.f;
+            // Try the sign conventions and keep the one that points the model along the flight.
+            for (const float pitchSign : { -1.f, 1.f })
+                for (const float yawSign : { 1.f, -1.f })
+                {
+                    float candidate[3] = { pitchSign * pitch, 0.f, yawSign * yaw };
+                    const float fit = (Misc::Convert::makeOsgQuat(candidate) * osg::Vec3f(0, 1, 0)) * d;
+                    if (fit > best)
+                    {
+                        best = fit;
+                        std::copy(std::begin(candidate), std::end(candidate), std::begin(rotation));
+                    }
+                }
+        }
+
+        float missileTip(Resource::ResourceSystem* resources, VFS::Path::NormalizedView model)
+        {
+            static std::map<std::string, float, std::less<>> tips;
+            if (const auto found = tips.find(model.value()); found != tips.end())
+                return found->second;
+            osg::ref_ptr<osg::Node> node = resources->getSceneManager()->getInstance(model);
+            osg::ComputeBoundsVisitor bounds;
+            node->accept(bounds);
+            const float tip = bounds.getBoundingBox().valid() ? bounds.getBoundingBox().yMax() : 0.f;
+            tips.emplace(std::string(model.value()), tip);
+            return tip;
+        }
+
+        void playMissileSound(const osg::Vec3f& position, std::string_view sound)
+        {
+            if (!sound.empty())
+                MWBase::Environment::get().getSoundManager()->playSound3D(
+                    position, ESM::RefId::stringRefId(sound), 1.f, 1.f);
+        }
+    }
+
+    MWWorld::Ptr ProjectileManager::placeMissile(
+        const ESM::RefId& id, const osg::Vec3f& tip, const osg::Vec3f& direction, float depth)
+    {
+        MWBase::World* world = MWBase::Environment::get().getWorld();
+        MWWorld::CellStore* cell = world->getPlayerPtr().getCell();
+        if (cell == nullptr)
+            return {};
+        osg::Vec3f d = direction;
+        d.normalize();
+        MWWorld::ManualRef ref(*MWBase::Environment::get().getESMStore(), id, 1);
+        const float modelTip = missileTip(mResourceSystem, ref.getPtr().getClass().getCorrectedModel(ref.getPtr()));
+        ESM::Position pos;
+        missileRotation(d, pos.rot);
+        // The model's tip lies modelTip along its +Y from the origin.
+        const osg::Vec3f forward = Misc::Convert::makeOsgQuat(pos.rot) * osg::Vec3f(0, 1, 0);
+        const osg::Vec3f origin = tip + d * depth - forward * modelTip;
+        pos.pos[0] = origin.x();
+        pos.pos[1] = origin.y();
+        pos.pos[2] = origin.z();
+        return world->placeObject(ref.getPtr(), cell, pos);
+    }
+
+    MWWorld::Ptr ProjectileManager::deflectMissile(const MWWorld::Ptr& projectile, const osg::Vec3f& hitPosition,
+        const osg::Vec3f& normal, const osg::Vec3f& velocity, float bounce, bool breakable, std::string_view sound)
+    {
+        MWBase::World* world = MWBase::Environment::get().getWorld();
+        if (breakable && Misc::Rng::rollProbability(world->getPrng()) < 0.35f)
+        {
+            playMissileSound(hitPosition, "Brutal Arrow Break");
+            return {};
+        }
+        playMissileSound(hitPosition, sound);
+        osg::Vec3f n = normal;
+        if (n.normalize() < 1e-4f)
+        {
+            n = -velocity;
+            n.normalize();
+        }
+        // Reflected off the surface, losing most of its speed, with some scatter.
+        osg::Vec3f reflected = velocity - n * (2.f * (velocity * n));
+        reflected *= bounce;
+        auto& prng = world->getPrng();
+        const float scatter = reflected.length() * 0.35f;
+        reflected += osg::Vec3f(Misc::Rng::deviate(0.f, scatter, prng), Misc::Rng::deviate(0.f, scatter, prng),
+            Misc::Rng::deviate(0.f, scatter * 0.5f, prng));
+        constexpr float maximumSpeed = 650.f;
+        if (reflected.length() > maximumSpeed)
+            reflected *= maximumSpeed / reflected.length();
+        osg::Vec3f flight = velocity;
+        flight.normalize();
+        const MWWorld::Ptr placed
+            = placeMissile(projectile.getCellRef().getRefId(), hitPosition - flight * 6.f + n * 4.f, flight, 0.f);
+        if (placed.isEmpty())
+            return {};
+        const float mass = std::clamp(placed.getClass().getWeight(placed), 0.1f, 5.f);
+        try
+        {
+            world->applyObjectImpulse(placed, reflected * mass, mass);
+        }
+        catch (const std::exception& e)
+        {
+            Log(Debug::Verbose) << "Missile could not glance off: " << e.what();
+        }
+        return placed;
+    }
+
+    void ProjectileManager::landProjectile(const MWWorld::Ptr& caster, const MWWorld::Ptr& target,
+        const MWWorld::Ptr& bow, const MWWorld::Ptr& projectile, const osg::Vec3f& hitPosition,
+        const osg::Vec3f& hitNormal, const osg::Vec3f& velocity, float attackStrength, bool hitWater)
+    {
+        std::pair<osg::Vec3f, osg::Vec3f> path;
+        const std::pair<osg::Vec3f, osg::Vec3f>* flightPath = nullptr;
+        if (MWMechanics::physicalProjectiles() && velocity.length2() > 1e-4f)
+        {
+            osg::Vec3f direction = velocity;
+            direction.normalize();
+            // Far enough back to cover a shield held well out in front, on through the body.
+            path = { hitPosition - direction * 140.f, hitPosition + direction * 80.f };
+            flightPath = &path;
+        }
+        const MWMechanics::ProjectileOutcome outcome
+            = MWMechanics::projectileHit(caster, target, bow, projectile, hitPosition, attackStrength, flightPath);
+        if (!MWMechanics::physicalProjectiles())
+            return;
+
+        const ESM::RefId& id = projectile.getCellRef().getRefId();
+        const auto report = [&](std::string_view result, std::string_view material, const MWWorld::Ptr& item,
+                                const osg::Vec3f& where) {
+            MWBase::Environment::get().getLuaManager()->missileLanded(
+                caster, target, item, id, result, material, where);
+        };
+        if (hitWater || velocity.length2() < 1e-4f)
+        {
+            report("water", "", {}, hitPosition);
+            return;
+        }
+
+        osg::Vec3f flight = velocity;
+        flight.normalize();
+        const VFS::Path::Normalized model = projectile.getClass().getCorrectedModel(projectile);
+        // An enchanted missile spends its enchantment and itself on whatever it strikes.
+        const bool enchanted = !projectile.getClass().getEnchantment(projectile).empty();
+        // Thrown weapons (stars, darts, knives) do not snap.
+        const auto* type = MWMechanics::getWeaponType(projectile.get<ESM::Weapon>()->mBase->mData.mType);
+        const bool breakable = type->mWeaponClass == ESM::WeaponType::Ammo;
+        MWBase::World* world = MWBase::Environment::get().getWorld();
+        const auto glance = [&](const osg::Vec3f& where, const osg::Vec3f& normal, float bounce, bool canBreak,
+                                std::string_view sound, std::string_view material) {
+            if (enchanted)
+            {
+                report("spent", material, {}, where);
+                return;
+            }
+            const MWWorld::Ptr loose = deflectMissile(projectile, where, normal, velocity, bounce, canBreak, sound);
+            report(loose.isEmpty() ? "broken" : "glanced", material, loose, where);
+        };
+
+        if (!target.isEmpty() && target.getClass().isActor())
+        {
+            MWRender::Animation* animation = world->getAnimation(target);
+            switch (outcome)
+            {
+                case MWMechanics::ProjectileOutcome::Body:
+                case MWMechanics::ProjectileOutcome::Missed:
+                case MWMechanics::ProjectileOutcome::NoActor:
+                {
+                    // The player's own body is never shown with missiles in it (it would fill the view).
+                    if (target == MWMechanics::getPlayer())
+                    {
+                        playMissileSound(hitPosition, "Brutal Arrow Flesh");
+                        report("body", "flesh", {}, hitPosition);
+                        return;
+                    }
+                    const ESM::RefId item = enchanted ? ESM::RefId() : id;
+                    if (animation != nullptr && animation->attachStuckProjectile(model, hitPosition, flight, item))
+                    {
+                        if (!item.empty())
+                            target.getClass().getContainerStore(target).add(item, 1);
+                        playMissileSound(hitPosition, "Brutal Arrow Flesh");
+                        report("body", "flesh", {}, hitPosition);
+                    }
+                    else
+                        // Its line passes what is seen of the body: it grazed by and falls.
+                        glance(hitPosition, -flight, 0.1f, false, {}, "flesh");
+                    return;
+                }
+                case MWMechanics::ProjectileOutcome::Shield:
+                {
+                    auto* npc = dynamic_cast<MWRender::NpcAnimation*>(animation);
+                    osg::Node* shield = npc != nullptr ? npc->getPartNode(ESM::PRT_Shield) : nullptr;
+                    if (shield != nullptr
+                        && animation->attachStuckProjectile(model, hitPosition, flight, ESM::RefId(), shield))
+                    {
+                        playMissileSound(hitPosition, "Brutal Arrow Wood");
+                        report("shield", "wood", {}, hitPosition);
+                        return;
+                    }
+                    glance(hitPosition, -flight, 0.15f, breakable, {}, "wood");
+                    return;
+                }
+                case MWMechanics::ProjectileOutcome::MetalShield:
+                case MWMechanics::ProjectileOutcome::Parried:
+                    glance(hitPosition, -flight, 0.25f, breakable, {}, "metal");
+                    return;
+            }
+            return;
+        }
+
+        // The physical hit is on the collision shape, which can stand off from what is seen. Look along the
+        // flight for the visible surface, a little either side of it.
+        const MWRender::RenderingManager::SurfaceResult surface
+            = mRendering->castRayForSurface(hitPosition - flight * 24.f, hitPosition + flight * 64.f);
+        const MWWorld::Ptr struck = !surface.mObject.isEmpty() ? surface.mObject : target;
+        if (!struck.isEmpty() && struck.getClass().isItem(struck))
+        {
+            // A loose item takes the knock and the missile drops off it.
+            const float itemMass = std::clamp(struck.getClass().getWeight(struck), 0.2f, 50.f);
+            const float missileMass = std::max(projectile.getClass().getWeight(projectile), 0.1f);
+            try
+            {
+                world->applyObjectImpulse(struck, velocity * (missileMass * 0.5f), itemMass);
+            }
+            catch (const std::exception&)
+            {
+            }
+            glance(surface.mHit ? surface.mPosition : hitPosition, -flight, 0.08f, false, {}, "item");
+            return;
+        }
+
+        const bool terrain = surface.mTerrain || (target.isEmpty() && !surface.mHit && world->isCellExterior());
+        const bool door = !struck.isEmpty() && struck.getClass().isDoor();
+        const std::string structure
+            = !struck.isEmpty() ? std::string(struck.getClass().getCorrectedModel(struck).value()) : std::string();
+        const MWWorld::SurfaceMaterial material = MWWorld::classifySurface(surface.mTexture, structure,
+            door ? MWWorld::SurfaceMaterial::Wood
+                 : (terrain ? MWWorld::SurfaceMaterial::Earth : MWWorld::SurfaceMaterial::Stone));
+        const std::string_view materialName = MWWorld::getSurfaceMaterialName(material);
+        const osg::Vec3f point = surface.mHit ? surface.mPosition : hitPosition;
+        const osg::Vec3f normal = surface.mHit ? surface.mNormal : hitNormal;
+        if (enchanted)
+        {
+            report("spent", materialName, {}, point);
+            return;
+        }
+        if (MWWorld::takesMissiles(material) && !door)
+        {
+            // Driven in a little way, deeper into earth.
+            const float depth = material == MWWorld::SurfaceMaterial::Earth ? 7.f : 5.f;
+            const MWWorld::Ptr placed = placeMissile(id, point, flight, depth);
+            playMissileSound(point,
+                material == MWWorld::SurfaceMaterial::Wood ? "Brutal Arrow Wood" : "Brutal Arrow Flesh");
+            report("stuck", materialName, placed, point);
+            return;
+        }
+        if (door)
+        {
+            // Doors move: the missile drops off them rather than staying in the air when one opens.
+            glance(point, normal, 0.05f, false, "Brutal Arrow Wood", materialName);
+            return;
+        }
+        glance(point, normal, 0.25f, breakable,
+            material == MWWorld::SurfaceMaterial::Metal ? "Brutal Arrow Metal" : "Brutal Arrow Stone", materialName);
+    }
+
     void ProjectileManager::updateCasters()
     {
         for (auto& state : mProjectiles)
@@ -506,10 +785,9 @@ namespace MWWorld
             auto* projectile = mPhysics->getProjectile(projectileState.mProjectileId);
             if (!projectile->isActive())
                 continue;
-            // gravity constant - must be way lower than the gravity affecting actors, since we're not
-            // simulating aerodynamics at all
-            projectileState.mVelocity
-                -= osg::Vec3f(0, 0, Constants::GravityConst * Constants::UnitsPerMeter * 0.1f) * duration;
+            // Vanilla uses a tenth of gravity, since aerodynamics are not simulated; physical missiles
+            // fall on a real arc.
+            projectileState.mVelocity -= osg::Vec3f(0, 0, MWMechanics::getProjectileGravity()) * duration;
 
             projectile->setVelocity(projectileState.mVelocity);
 
@@ -566,8 +844,9 @@ namespace MWWorld
             if (projectile->getHitWater())
                 mRendering->emitWaterRipple(hitPosition);
 
-            MWMechanics::projectileHit(
-                caster, target, bow, projectileRef.getPtr(), hitPosition, projectileState.mAttackStrength);
+            landProjectile(caster, target, bow, projectileRef.getPtr(), hitPosition,
+                Misc::Convert::toOsg(projectile->getHitNormal()), projectileState.mVelocity,
+                projectileState.mAttackStrength, projectile->getHitWater());
             projectileState.mToDelete = true;
         }
         const MWWorld::ESMStore& esmStore = *MWBase::Environment::get().getESMStore();

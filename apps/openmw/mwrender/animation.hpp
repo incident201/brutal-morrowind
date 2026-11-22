@@ -18,6 +18,7 @@
 #include <components/vfs/pathutil.hpp>
 
 #include <osg/MatrixTransform>
+#include <osg/observer_ptr>
 #include <optional>
 #include <map>
 #include <span>
@@ -196,6 +197,27 @@ namespace MWRender
         mutable std::vector<std::pair<std::string, MWWorld::MovementDirectionFlags>> mSupportedDirections;
 
         osg::ref_ptr<osg::Group> mInsert;
+
+        struct StuckProjectile
+        {
+            osg::observer_ptr<osg::Group> mParent;
+            osg::ref_ptr<osg::Node> mNode;
+            ESM::RefId mItem;
+        };
+        std::vector<StuckProjectile> mStuckProjectiles;
+        // Phase-matched (playing, original) key times per group and playing source.
+        struct GroupTimeMap
+        {
+            std::vector<std::pair<float, float>> mTable;
+            float mPlayingStart = 0.f;
+            float mOriginalStart = 0.f;
+        };
+        mutable std::map<std::pair<std::string, const AnimSource*>, GroupTimeMap, std::less<>> mGroupTimeMaps;
+        float mStuckProjectileCheck = 0.f;
+        /// Remove stuck missiles whose items are no longer carried.
+        void syncStuckProjectiles();
+        /// Whether a missile flying into the body may stick in what this path leads to (not a held weapon).
+        virtual bool canHoldStuckProjectile(const osg::NodePath& path) const { return true; }
 
         osg::ref_ptr<osg::Group> mObjectRoot;
         SceneUtil::Skeleton* mSkeleton;
@@ -497,6 +519,23 @@ namespace MWRender
         float getVelocity(std::string_view groupname) const;
 
         virtual osg::Vec3f runAnimation(float duration);
+
+        /// Show an arrow, bolt or thrown weapon stuck where its flight meets the visible body, or the given part
+        /// of it (\a within). Its tip goes a little way in, on the bone nearest to it. \a item names the inventory
+        /// item it stands for: the stuck missile disappears once that is taken. It is empty for one that cannot
+        /// be taken. Returns false when the flight misses what is seen.
+        bool attachStuckProjectile(VFS::Path::NormalizedView model, const osg::Vec3f& hitPosition,
+            const osg::Vec3f& direction, const ESM::RefId& item, osg::Node* within = nullptr);
+        void removeStuckProjectiles();
+        /// Time on the first (original) source's timeline of \a group for a time of the source now playing it,
+        /// matched phase by phase through their shared text keys. Weapon models keep their own animation on the
+        /// original timeline (a bow's bend and arrow bone), while a replacement may time the phases differently.
+        /// With \a relative, both times count from their sources' group starts.
+        float mapToOriginalGroupTime(std::string_view group, float time, bool relative = false) const;
+
+        /// The first point where the world-space segment meets what is shown of \a node's subtree.
+        std::optional<osg::Vec3f> intersectNode(osg::Node* node, const osg::Vec3f& from, const osg::Vec3f& to) const;
+        std::size_t getStuckProjectileCount() const { return mStuckProjectiles.size(); }
 
         // Remove a rendered-only correction before controllers capture or advance their source pose.
         virtual void restoreTransientPose() {}

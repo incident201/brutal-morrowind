@@ -121,6 +121,29 @@ namespace MWMechanics
             return false;
         }
 
+        bool drawsMissile(const MWWorld::Ptr& target)
+        {
+            if (!target.getClass().hasInventoryStore(target)
+                || target.getClass().getCreatureStats(target).getDrawState() != DrawState::Weapon
+                || !MWBase::Environment::get().getMechanicsManager()->isAttackingOrSpell(target))
+                return false;
+            const auto& inventory = target.getClass().getInventoryStore(target);
+            const auto weapon = inventory.getSlot(MWWorld::InventoryStore::Slot_CarriedRight);
+            if (weapon == inventory.end() || weapon->getType() != ESM::Weapon::sRecordId)
+                return false;
+            const auto weaponClass = getWeaponType(weapon->get<ESM::Weapon>()->mBase->mData.mType)->mWeaponClass;
+            return weaponClass == ESM::WeaponType::Ranged || weaponClass == ESM::WeaponType::Thrown;
+        }
+
+        bool carriesShield(const MWWorld::Ptr& actor)
+        {
+            if (!actor.getClass().hasInventoryStore(actor))
+                return false;
+            const auto& inventory = actor.getClass().getInventoryStore(actor);
+            const auto left = inventory.getSlot(MWWorld::InventoryStore::Slot_CarriedLeft);
+            return left != inventory.end() && isShield(*left);
+        }
+
         bool hasShield(const MWWorld::Ptr& actor)
         {
             auto& inventory = actor.getClass().getInventoryStore(actor);
@@ -1213,9 +1236,12 @@ namespace MWMechanics
         }
         const double now = MWBase::Environment::get().getWorld()->getTimeManager()->getSimulationTime();
         const bool exhausted = Settings::game().mBrutalStamina && stats.getFatigue().getCurrent() <= 0.f;
-        const bool available = !stats.isDead() && !stats.isParalyzed() && !stats.getKnockedDown()
-            && !stats.mBrutalClinchActive && now >= stats.mBrutalGuardBrokenUntil && !exhausted
-            && mLOS && getDistanceToBounds(actor, target) <= mAttackRange + 48.f;
+        const bool able = !stats.isDead() && !stats.isParalyzed() && !stats.getKnockedDown()
+            && !stats.mBrutalClinchActive && now >= stats.mBrutalGuardBrokenUntil && !exhausted && mLOS;
+        // A shield bearer covers itself from a player it sees drawing a bow or winding up a throw, at any range.
+        const bool missileThreat = able && target == getPlayer() && MWMechanics::physicalProjectiles()
+            && carriesShield(actor) && drawsMissile(target);
+        const bool available = (able && getDistanceToBounds(actor, target) <= mAttackRange + 48.f) || missileThreat;
         // Count only a continuous guard the NPC can see at close range. A
         // newly raised guard starts over even if the lowered frame fell between updates.
         const bool observingGuard = available && target == getPlayer() && targetStats.mBrutalBlockRequested
@@ -1230,7 +1256,9 @@ namespace MWMechanics
             // attack, while the absolute cap still forces a counterattack gap.
             const bool incomingAttack
                 = MWBase::Environment::get().getMechanicsManager()->isAttackingOrSpell(target);
-            if (!available || now >= stats.mBrutalGuardUntil
+            if (missileThreat)
+                stats.mBrutalGuardUntil = std::max(stats.mBrutalGuardUntil, now + .6);
+            else if (!available || now >= stats.mBrutalGuardUntil
                 || (now - stats.mBrutalLastFastPressureAt > 1.2 && !incomingAttack))
             {
                 stats.mBrutalNpcGuardRequested = false;
@@ -1238,8 +1266,10 @@ namespace MWMechanics
                 mAttackCooldown = std::min(mAttackCooldown, .25f);
             }
         }
-        else if (available && target == getPlayer() && stats.mBrutalFastPressure >= 2
-            && now - stats.mBrutalLastFastPressureAt <= 1.8 && now >= stats.mBrutalGuardReactAt
+        else if (available && target == getPlayer()
+            && ((stats.mBrutalFastPressure >= 2 && now - stats.mBrutalLastFastPressureAt <= 1.8
+                    && now >= stats.mBrutalGuardReactAt)
+                || missileThreat)
             && now >= stats.mBrutalGuardCooldownUntil
             && characterController.readyToStartBrutalGuard())
         {
@@ -1419,20 +1449,11 @@ namespace
             = MWBase::Environment::get().getESMStore()->get<ESM::GameSetting>();
 
         // get projectile speed (depending on weapon type)
+        const bool missile = weapType != 0;
         if (MWMechanics::getWeaponType(weapType)->mWeaponClass == ESM::WeaponType::Thrown)
-        {
-            static float fThrownWeaponMinSpeed = gmst.find("fThrownWeaponMinSpeed")->mValue.getFloat();
-            static float fThrownWeaponMaxSpeed = gmst.find("fThrownWeaponMaxSpeed")->mValue.getFloat();
-
-            projSpeed = fThrownWeaponMinSpeed + (fThrownWeaponMaxSpeed - fThrownWeaponMinSpeed) * strength;
-        }
+            projSpeed = MWMechanics::getProjectileLaunchSpeed(true, strength);
         else if (weapType != 0)
-        {
-            static float fProjectileMinSpeed = gmst.find("fProjectileMinSpeed")->mValue.getFloat();
-            static float fProjectileMaxSpeed = gmst.find("fProjectileMaxSpeed")->mValue.getFloat();
-
-            projSpeed = fProjectileMinSpeed + (fProjectileMaxSpeed - fProjectileMinSpeed) * strength;
-        }
+            projSpeed = MWMechanics::getProjectileLaunchSpeed(false, strength);
         else // weapType is 0 ==> it's a target spell projectile
         {
             projSpeed = gmst.find("fTargetSpellMaxSpeed")->mValue.getFloat();
@@ -1475,7 +1496,15 @@ namespace
         else
             tCollision = 0; // speed of projectile is not enough to reach moving target
 
-        return vDirToTarget + vTargetMoveDir * tCollision;
+        osg::Vec3f aim = vDirToTarget + vTargetMoveDir * tCollision;
+        if (missile && MWMechanics::physicalProjectiles() && projSpeed > 0.f)
+        {
+            // Aim above the target by the drop over the flight. The flight time is taken along the aim line,
+            // which is close enough at the angles a bow is used at.
+            const float flight = aim.length() / projSpeed;
+            aim.z() += 0.5f * MWMechanics::getProjectileGravity() * flight * flight;
+        }
+        return aim;
     }
 
 }

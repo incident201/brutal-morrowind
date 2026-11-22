@@ -15,7 +15,10 @@ commit `eb50a40`, GPLv3. The derived files and functions are marked in the sourc
 * `apps/openmw/mwphysics/object.cpp`: dynamic bodies
 * `apps/openmw/mwphysics/mtphysics.cpp`: dynamic object bodies
 * `apps/openmw/mwphysics/physicssystem.cpp`: `moveDynamicObjects`
-* `apps/openmw/mwrender/animation.cpp`: `getBoneWorldMatrix`, `setBoneWorldMatrix`, `stopAllAnimations`
+* `apps/openmw/mwrender/animation.cpp`: `getBoneWorldMatrix`, `setBoneWorldMatrix`, `stopAllAnimations`,
+  `attachStuckProjectile` (missiles stuck in bodies)
+* `apps/openmw/mwrender/renderingmanager.cpp`: `castRayForSurface`
+* `apps/openmw/mwworld/surfacematerial.cpp`: surface material keywords
 
 ## Dark Messiah importer
 

@@ -944,6 +944,28 @@ namespace MWLua
         });
     }
 
+    void LuaManager::missileLanded(const MWWorld::Ptr& caster, const MWWorld::Ptr& target, const MWWorld::Ptr& item,
+        const ESM::RefId& missile, std::string_view outcome, std::string_view material, const osg::Vec3f& position)
+    {
+        mLua.protectedCall([&](LuaUtil::LuaView& view) {
+            sol::table data = view.newTable();
+            if (!caster.isEmpty())
+                data["attacker"] = LObject(caster);
+            if (!target.isEmpty())
+                data["target"] = LObject(target);
+            if (!item.isEmpty())
+                data["item"] = LObject(item);
+            data["recordId"] = missile.serializeText();
+            data["outcome"] = std::string(outcome);
+            data["material"] = std::string(material);
+            data["position"] = position;
+            if (!caster.isEmpty() && caster.getClass().isActor())
+                sendLocalEvent(caster, "BrutalMissileLanded", data);
+            if (!target.isEmpty() && target != caster && target.getClass().isActor())
+                sendLocalEvent(target, "BrutalMissileLanded", data);
+        });
+    }
+
     void LuaManager::dynamicObjectImpact(const MWWorld::Ptr& player, const MWWorld::Ptr& item,
         const osg::Vec3f& position, const osg::Vec3f& normal, float speed)
     {

@@ -44,8 +44,29 @@ namespace MWMechanics
 
     /// @note for a thrown weapon, \a weapon == \a projectile, for bows/crossbows, \a projectile is the arrow/bolt
     /// @note \a victim may be empty (e.g. for a hit on terrain), a non-actor (environment objects) or an actor
-    void projectileHit(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, MWWorld::Ptr weapon,
-        const MWWorld::Ptr& projectile, const osg::Vec3f& hitPosition, float attackStrength);
+    /// What became of an arrow, bolt or thrown weapon that reached an actor.
+    enum class ProjectileOutcome
+    {
+        NoActor, ///< Hit no actor: the world, an object or nothing.
+        Missed, ///< Reached an actor but did not hurt it (a failed hit roll).
+        Body, ///< Hurt the actor.
+        Shield, ///< Stopped by a raised wooden, chitin or other soft shield.
+        MetalShield, ///< Stopped by a raised metal shield.
+        Parried, ///< Turned by a raised weapon.
+    };
+
+    /// With \a flight (the missile's path through the victim, from and to), a raised shield stops it only
+    /// when that path actually crosses the shield.
+    ProjectileOutcome projectileHit(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, MWWorld::Ptr weapon,
+        const MWWorld::Ptr& projectile, const osg::Vec3f& hitPosition, float attackStrength,
+        const std::pair<osg::Vec3f, osg::Vec3f>* flight = nullptr);
+
+    /// Brutal physical missiles: falling arcs, contact hits, sticking and glancing.
+    bool physicalProjectiles();
+    /// Launch speed of an arrow or bolt (thrown == false) or a thrown weapon at the given draw strength.
+    float getProjectileLaunchSpeed(bool thrown, float attackStrength);
+    /// Downward acceleration of arrows, bolts and thrown weapons, in units per second squared.
+    float getProjectileGravity();
 
     /// Get the chance (in percent) for \a attacker to successfully hit \a victim with a given weapon skill value
     float getHitChance(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, int skillValue);

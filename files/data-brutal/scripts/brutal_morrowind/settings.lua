@@ -38,6 +38,7 @@ local DEFAULTS={
     woundedNpcs=true,
     npcFlee=true,
     npcWeaponPickup=true,
+    physicalProjectiles=true,
     hitRecovery=true,
     adrenalineEnabled=true,
     finisherEnabled=true,

@@ -30,7 +30,11 @@ namespace MWRender
         float current = mAnimation->getCurrentTime(mWeaponGroup);
         if (current == -1)
             return 0;
-        return current - mStartTime;
+        // A replacement group (the Dark Messiah bow) drives the weapon model's own animation on its original
+        // timeline.
+        if (!mRelativeTime)
+            return mAnimation->mapToOriginalGroupTime(mWeaponGroup, current);
+        return mAnimation->mapToOriginalGroupTime(mWeaponGroup, current - mStartTime, true);
     }
 
     void WeaponAnimationTime::setGroup(const std::string& group, bool relativeTime)
@@ -113,9 +117,6 @@ namespace MWRender
         osg::Quat orient = osg::Quat(actor.getRefData().getPosition().rot[0], osg::Vec3f(-1, 0, 0))
             * osg::Quat(actor.getRefData().getPosition().rot[2], osg::Vec3f(0, 0, -1));
 
-        const MWWorld::Store<ESM::GameSetting>& gmst
-            = MWBase::Environment::get().getESMStore()->get<ESM::GameSetting>();
-
         MWMechanics::applyFatigueLoss(actor, *weapon, attackStrength);
 
         if (MWMechanics::getWeaponType(weapon->get<ESM::Weapon>()->mBase->mData.mType)->mWeaponClass
@@ -130,9 +131,7 @@ namespace MWRender
                 return;
             osg::Vec3f launchPos = osg::computeLocalToWorld(nodepaths[0]).getTrans();
 
-            float fThrownWeaponMinSpeed = gmst.find("fThrownWeaponMinSpeed")->mValue.getFloat();
-            float fThrownWeaponMaxSpeed = gmst.find("fThrownWeaponMaxSpeed")->mValue.getFloat();
-            float speed = fThrownWeaponMinSpeed + (fThrownWeaponMaxSpeed - fThrownWeaponMinSpeed) * attackStrength;
+            const float speed = MWMechanics::getProjectileLaunchSpeed(true, attackStrength);
 
             MWWorld::Ptr weaponPtr = *weapon;
             MWBase::Environment::get().getWorld()->launchProjectile(
@@ -158,9 +157,7 @@ namespace MWRender
                 return;
             osg::Vec3f launchPos = osg::computeLocalToWorld(nodepaths[0]).getTrans();
 
-            float fProjectileMinSpeed = gmst.find("fProjectileMinSpeed")->mValue.getFloat();
-            float fProjectileMaxSpeed = gmst.find("fProjectileMaxSpeed")->mValue.getFloat();
-            float speed = fProjectileMinSpeed + (fProjectileMaxSpeed - fProjectileMinSpeed) * attackStrength;
+            const float speed = MWMechanics::getProjectileLaunchSpeed(false, attackStrength);
 
             MWWorld::Ptr weaponPtr = *weapon;
             MWWorld::Ptr ammoPtr = *ammo;

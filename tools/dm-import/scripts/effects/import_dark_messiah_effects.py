@@ -61,6 +61,13 @@ SOUNDS = {
     # combat grunts of its female NPCs: (script, event, chosen rndwave indices).
     'critical_voice_female': ('npc_sounds_leanna', 'Leanna_striking', (0, 3)),
     'object_throw_voice_female': ('npc_sounds_villager_female', 'villager_femaleB_striking', (0,)),
+    # Bow and physical arrows.
+    'arrow_flesh': ('bow', 'Arrow_Hit2.Arx'),
+    'arrow_wood': ('bow', 'Arrow_on_Wood'),
+    'arrow_break': ('bow', 'Arrow_Breaks'),
+    'bow_draw': ('bow', 'Bow_Start'),
+    'bow_release': ('bow', 'Bow_End'),
+    'bow_take_arrow': ('bow', 'Bow_TakeArrow'),
     # Dual-dagger stealth backstab: blade impacts and muffled victim death gasps.
     'backstab_stab': ('daggers', 'Daggers_Backstab'),
     'backstab_voice_male': ('npc_sounds_guard', 'Guard_backstabbed'),

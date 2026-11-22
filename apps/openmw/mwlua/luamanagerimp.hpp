@@ -112,6 +112,9 @@ namespace MWLua
         void actorExternalImpact(const MWWorld::Ptr& actor, const MWWorld::Ptr& hitObject,
             const osg::Vec3f& position, const osg::Vec3f& normal, float speed) override;
         void npcKickRagdoll(const MWWorld::Ptr& attacker, const MWWorld::Ptr& target) override;
+        void missileLanded(const MWWorld::Ptr& caster, const MWWorld::Ptr& target, const MWWorld::Ptr& item,
+            const ESM::RefId& missile, std::string_view outcome, std::string_view material,
+            const osg::Vec3f& position) override;
         void thrownObjectHit(const MWWorld::Ptr& attacker, const MWWorld::Ptr& item,
             const MWWorld::Ptr& victim, const osg::Vec3f& hitPos, const osg::Vec3f& normal,
             const osg::Vec3f& velocity, float mass, bool adrenaline, bool headHit, bool knockedDown,

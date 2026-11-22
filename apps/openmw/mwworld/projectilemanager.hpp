@@ -2,6 +2,7 @@
 #define OPENMW_MWWORLD_PROJECTILEMANAGER_H
 
 #include <string>
+#include <string_view>
 
 #include <osg/PositionAttitudeTransform>
 #include <osg/ref_ptr>
@@ -57,6 +58,12 @@ namespace MWWorld
             const osg::Quat& orient, const MWWorld::Ptr& bow, float speed, float attackStrength);
 
         void updateCasters();
+
+        /// Resolve an arrow, bolt or thrown weapon arriving at \a hitPosition: the hit itself and, with physical
+        /// missiles, where the missile ends up (stuck in a body, a shield or a soft surface, or glancing off).
+        void landProjectile(const MWWorld::Ptr& caster, const MWWorld::Ptr& target, const MWWorld::Ptr& bow,
+            const MWWorld::Ptr& projectile, const osg::Vec3f& hitPosition, const osg::Vec3f& hitNormal,
+            const osg::Vec3f& velocity, float attackStrength, bool hitWater);
 
         void update(float dt);
 
@@ -125,6 +132,14 @@ namespace MWWorld
 
         std::vector<MagicBoltState> mMagicBolts;
         std::vector<ProjectileState> mProjectiles;
+
+        /// Place a missile as a world item with its tip \a depth past \a tip along \a direction.
+        MWWorld::Ptr placeMissile(const ESM::RefId& id, const osg::Vec3f& tip, const osg::Vec3f& direction,
+            float depth);
+        /// Throw a missile off what it struck, or snap it when \a breakable and unlucky.
+        /// Returns the loose missile, or an empty Ptr when it snapped.
+        MWWorld::Ptr deflectMissile(const MWWorld::Ptr& projectile, const osg::Vec3f& hitPosition,
+            const osg::Vec3f& normal, const osg::Vec3f& velocity, float bounce, bool breakable, std::string_view sound);
 
         void cleanupProjectile(ProjectileState& state);
         void cleanupMagicBolt(MagicBoltState& state);
