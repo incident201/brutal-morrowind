@@ -334,10 +334,7 @@ namespace MWLua
                                             break;
                                         }
                             if (added)
-                                context.mLua->protectedCall([&](LuaUtil::LuaView& view){
-                                    sol::table receipt=view.newTable();receipt["data"]=npc->getBloodDecalData();receipt["restored"]=true;
-                                    context.mLuaManager->sendLocalEvent(ptr,"BrutalBloodDecalsStored",receipt);
-                                });
+                                context.mLuaManager->storeNpcBloodDecals(ptr, npc->getBloodDecalData());
                         }
                 }
             }, "SpawnBrutalImpact");

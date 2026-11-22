@@ -57,7 +57,7 @@ eventHandlers = {
         world.spawnBrutalImpact(data.kind, data.position, data.direction, {
             intensity = math.max(0.25, math.min(2, data.intensity or 1)), power = data.power == true,
             contactExact = data.contactExact == true,
-            actor = data.kind == 'blood' and actor
+            actor = data.kind == 'blood' and data.woundKind ~= 'projectile' and actor
                 or not data.contactExact and data.kind == 'sparks' and data.attachment == 'shield' and actor or nil,
             woundKind = data.woundKind,
             woundPart = data.woundPart,

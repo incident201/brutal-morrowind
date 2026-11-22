@@ -762,6 +762,16 @@ namespace MWLua
         bool brutalPowered, bool brutalBlocked, int contactPart, bool brutalGroundFinisher,
         const osg::Vec3f* contactNormal)
     {
+        const bool rangedContact
+            = sourceType == MWMechanics::DamageSourceType::Ranged && contactNormal && victim.getClass().isNpc();
+        if (rangedContact && Settings::game().mNpcBloodDecals)
+        {
+            // Anchor to the pose that was hit, before damage or the next animation step moves the surface.
+            if (auto* npc
+                = dynamic_cast<MWRender::NpcAnimation*>(MWBase::Environment::get().getWorld()->getAnimation(victim)))
+                if (npc->addBloodDecal(hitPos, *contactNormal, "projectile", false, contactPart))
+                    storeNpcBloodDecals(victim, npc->getBloodDecalData());
+        }
         mLua.protectedCall([&](LuaUtil::LuaView& view) {
             sol::table damageTable = view.newTable();
             if (isHealth)
@@ -810,8 +820,6 @@ namespace MWLua
             if (classifyAnatomy)
                 headContact = classifyMeleeHeadContact(attacker, victim, hitPos, contactPart);
             data["brutalContactPart"] = contactPart;
-            const bool rangedContact
-                = sourceType == MWMechanics::DamageSourceType::Ranged && contactNormal && victim.getClass().isNpc();
             if (rangedContact)
             {
                 data["brutalContactNormal"] = *contactNormal;
@@ -899,6 +907,16 @@ namespace MWLua
             }
 
             sendLocalEvent(victim, "Hit", data);
+        });
+    }
+
+    void LuaManager::storeNpcBloodDecals(const MWWorld::Ptr& actor, const std::string& data)
+    {
+        mLua.protectedCall([&](LuaUtil::LuaView& view) {
+            sol::table receipt = view.newTable();
+            receipt["data"] = data;
+            receipt["restored"] = true;
+            sendLocalEvent(actor, "BrutalBloodDecalsStored", receipt);
         });
     }
 

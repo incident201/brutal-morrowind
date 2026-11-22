@@ -882,6 +882,15 @@ namespace MWMechanics
                     true);
                 return blocked;
             }
+
+            // A humanoid's broad collision shape also covers empty space around the visible body.
+            if (flight && !contact && victim.getClass().isNpc() && victim != getPlayer() && world->getAnimation(victim))
+            {
+                reduceWeaponCondition(damage, false, weapon, attacker);
+                MWBase::Environment::get().getLuaManager()->onHit(attacker, victim, weapon, projectile, 0,
+                    attackStrength, 0.f, true, hitPosition, false, MWMechanics::DamageSourceType::Ranged);
+                return ProjectileOutcome::Missed;
+            }
         }
 
         reduceWeaponCondition(damage, validVictim, weapon, attacker);
