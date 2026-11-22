@@ -3148,8 +3148,11 @@ namespace MWMechanics
             const bool continuousNpcSwordRelease = mPtr != getPlayer() && cls.isNpc()
                 && mCurrentWeapon == "weapononehand"
                 && mAnimation->getTextKeyTime(mCurrentWeapon + ": brutal continuous release") >= 0.f;
-            const bool continuousSwordRelease = continuousPlayerSwordRelease || continuousNpcSwordRelease;
-            if (continuousSwordRelease && currentTime < maxAttackTime)
+            const bool continuousThrowRelease = mPtr == getPlayer() && mCurrentWeapon == "throwweapon"
+                && mAnimation->getTextKeyTime("throwweapon: brutal continuous release") >= 0.f;
+            const bool continuousRelease
+                = continuousPlayerSwordRelease || continuousNpcSwordRelease || continuousThrowRelease;
+            if (continuousRelease && currentTime < maxAttackTime)
             {
                 // Strength was captured by prepareHit at release. Traverse the remaining
                 // authored windup without seeking to its final pose; then restore normal
@@ -3157,14 +3160,14 @@ namespace MWMechanics
                 mAnimation->adjustSpeedMult(mCurrentWeapon, weapSpeed * 3.f);
             }
             if (minAttackTime <= currentTime && currentTime <= maxAttackTime
-                && (!continuousSwordRelease || currentTime >= maxAttackTime))
+                && (!continuousRelease || currentTime >= maxAttackTime))
             {
                 std::string hit = mAttackType != "shoot" ? "hit" : "release";
 
                 float startPoint = 0.f;
 
                 // Skip a bit of the pre-hit section based on the attack strength
-                if (!continuousSwordRelease && minAttackTime != -1.f && minAttackTime < maxAttackTime)
+                if (!continuousRelease && minAttackTime != -1.f && minAttackTime < maxAttackTime)
                 {
                     startPoint = 1.f - mAttackStrength;
                     float minHitTime = mAnimation->getTextKeyTime(mCurrentWeapon + ": " + attackAnimation + " min hit");

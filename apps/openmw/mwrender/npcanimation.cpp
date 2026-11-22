@@ -1494,6 +1494,7 @@ namespace MWRender
                 loadAdditionalAnimations(VFS::Path::NormalizedView("meshes/brutal_fp_bow.nif"), smodel);
                 loadArrowMount();
             }
+            loadAdditionalAnimations(VFS::Path::NormalizedView("meshes/brutal_fp_thrown.nif"), smodel);
         }
 
         if (is1stPerson)

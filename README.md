@@ -75,7 +75,11 @@ thrown weapons are physical: they fall on an arc, hit whatever they touch, stay
 in bodies until looted, stick in wood and wooden shields, and glance off stone,
 metal and metal shields. A raised shield blocks only the missiles that strike it.
 
-This branch uses **Dark Messiah import recipe 25**. Its launcher asks to reimport
+Thrown weapons use the right-hand preparation, hold and release from Dark
+Messiah's dagger throw. Darts and throwing stars use their own models and
+consume one item on release.
+
+This branch uses **Dark Messiah import recipe 26**. Its launcher asks to reimport
 older data. See `CHANGELOG.md` for the other unreleased changes.
 
 ## Requirements
