@@ -3816,7 +3816,8 @@ namespace MWWorld
         // the projectile. So we cast a 1-yard-length ray from shooter to launch position and check if there are
         // collisions in this area.
         // TODO: as a better solutuon we should handle projectiles during physics update, not during world update.
-        const osg::Vec3f sourcePos = worldPos + orient * osg::Vec3f(0, -1, 0) * 64.f;
+        const osg::Vec3f forward = orient * osg::Vec3f(0, 1, 0);
+        const osg::Vec3f sourcePos = worldPos - forward * 64.f;
 
         // For AI actors, get combat targets to use in the ray cast. Only those targets will return a positive hit
         // result.
@@ -3830,8 +3831,20 @@ namespace MWWorld
 
         if (result.mHit)
         {
+            // A close enemy can extend past the muzzle. Start a locked shot just before the contact
+            // on the clear part of the launch segment so its flight and slow motion still precede the hit.
+            if (actor == MWMechanics::getPlayer() && !result.mHitObject.isEmpty()
+                && result.mHitObject.getClass().isActor())
+            {
+                const float lead = std::min(24.f, (result.mHitPos - sourcePos).length());
+                const osg::Vec3f clearPos = result.mHitPos - forward * lead;
+                if (!isUnderwater(actor.getCell(), clearPos)
+                    && mProjectileManager->launchProjectile(
+                        actor, projectile, clearPos, orient, bow, speed, attackStrength, result.mHitObject))
+                    return;
+            }
             mProjectileManager->landProjectile(actor, result.mHitObject, bow, projectile, result.mHitPos,
-                result.mHitNormal, orient * osg::Vec3f(0, 1, 0) * speed, attackStrength, false);
+                result.mHitNormal, forward * speed, attackStrength, false);
             return;
         }
 

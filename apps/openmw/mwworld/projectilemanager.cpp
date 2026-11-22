@@ -454,8 +454,8 @@ namespace MWWorld
         mMagicBolts.push_back(std::move(state));
     }
 
-    void ProjectileManager::launchProjectile(const Ptr& actor, const ConstPtr& projectile, const osg::Vec3f& pos,
-        const osg::Quat& orient, const Ptr& bow, float speed, float attackStrength)
+    bool ProjectileManager::launchProjectile(const Ptr& actor, const ConstPtr& projectile, const osg::Vec3f& pos,
+        const osg::Quat& orient, const Ptr& bow, float speed, float attackStrength, const Ptr& immediateTarget)
     {
         ProjectileState state;
         state.mCaster = actor.getCellRef().getRefNum();
@@ -474,6 +474,8 @@ namespace MWWorld
             if (!stats.isDead() && !stats.mPowerStrike.token.empty() && stats.mPowerStrike.weapon == bow)
                 selected = findFinisherTarget(actor, pos, *mRendering->getCamera(), *mPhysics);
         }
+        if (!immediateTarget.isEmpty() && (!selected || selected->mActor != immediateTarget))
+            return false;
         if (selected)
         {
             // Give close shots enough travel for the existing time-scale controller to engage
@@ -506,6 +508,7 @@ namespace MWWorld
                 actor, selected->mActor, state.mFinisher->mAttackId, "launched", stats.mLastConsumedPowerStrikeToken);
         }
         mProjectiles.push_back(std::move(state));
+        return true;
     }
 
     namespace

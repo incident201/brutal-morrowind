@@ -56,8 +56,10 @@ namespace MWWorld
         void launchMagicBolt(const ESM::RefId& spellId, const MWWorld::Ptr& caster, const osg::Vec3f& fallbackDirection,
             ESM::RefNum item);
 
-        void launchProjectile(const MWWorld::Ptr& actor, const MWWorld::ConstPtr& projectile, const osg::Vec3f& pos,
-            const osg::Quat& orient, const MWWorld::Ptr& bow, float speed, float attackStrength);
+        /// With a contact already in front of the muzzle, launch only a finisher locked on that actor.
+        bool launchProjectile(const MWWorld::Ptr& actor, const MWWorld::ConstPtr& projectile, const osg::Vec3f& pos,
+            const osg::Quat& orient, const MWWorld::Ptr& bow, float speed, float attackStrength,
+            const MWWorld::Ptr& immediateTarget = {});
 
         void updateCasters();
 
