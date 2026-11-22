@@ -4,6 +4,8 @@ import argparse
 import json
 from pathlib import Path
 
+import numpy as np
+
 from import_bow import blend, clip_poses, ease_in, source
 from import_object_grab import ObjectGrabImporter
 from import_viewmodel import Viewmodel
@@ -28,17 +30,28 @@ def main():
     folder = args.arms / 'Animations/brutal_fp_thrown'
     folder.mkdir(parents=True, exist_ok=True)
     mount = vm.local('Weapon Bone')
+    shoulder = 'Bip01 R Clavicle'
+    shoulder_parent = vm.rest[vm.parents[shoulder]][:3, :3]
+    # Keep the point of the dart and the face of the star in the held shot.
+    framing = shoulder_parent.T @ np.array([0., 9., -7.])
 
-    def right_arm(poses):
-        # Preserve the native mount of each dart, star or knife. The left arm and
-        # what it carries continue to use their own animation layers.
-        return [{**{name: value for name, value in pose.items() if name.startswith('Bip01 R ')},
-                 'Weapon Bone': mount} for pose in poses]
+    def throw_poses(poses):
+        # The camera and neck need keyed transforms for first-person pitch.
+        # Leave the left arm and its equipment to their own animation layers.
+        converted = []
+        for pose in poses:
+            result = {name: value for name, value in pose.items()
+                      if not name.startswith('Bip01 L ') and name != 'Shield Bone'}
+            rotation, position = result[shoulder]
+            result[shoulder] = rotation, position + framing
+            result['Weapon Bone'] = mount
+            converted.append(result)
+        return converted
 
     def clip(model, name):
         length = vm.duration(model, name)
         times, poses = clip_poses(vm, name, 0., length, model=model)
-        return times, right_arm(poses)
+        return times, throw_poses(poses)
 
     idle_times, idle_poses = clip(BASIC, IDLE)
     ready = idle_poses[0]
@@ -75,7 +88,7 @@ def main():
     times, poses = clip(DAGGERS, WINDUP)
     add(times, ease_in(ready, times, poses, .14), WINDUP, DAGGERS, .08)
     mark('shoot min attack', windup_start + .08)
-    charged = right_arm([vm.pose_from_dm(vm.dm_world(DAGGERS, CHARGED, 0.))])[0]
+    charged = throw_poses([vm.pose_from_dm(vm.dm_world(DAGGERS, CHARGED, 0.))])[0]
     add(*blend(poses[-1], charged, .04), CHARGED, DAGGERS)
     mark('shoot max attack')
     mark('shoot min hit')
