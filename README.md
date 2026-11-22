@@ -79,6 +79,11 @@ Thrown weapons use the right-hand preparation, hold and release from Dark
 Messiah's dagger throw. Darts and throwing stars use their own models and
 consume one item on release.
 
+With full adrenaline, bows and thrown weapons guide a shot to the visible head
+nearest the crosshair within a radius of 7% of the screen height. A lock spends
+the charge. Time slows just before contact, and a head hit kills with one shot.
+Shields and cover can intercept the shot.
+
 This branch uses **Dark Messiah import recipe 26**. Its launcher asks to reimport
 older data. See `CHANGELOG.md` for the other unreleased changes.
 

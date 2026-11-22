@@ -132,11 +132,12 @@ interface.adjustDamageForDifficulty = function(attack)
     -- kill, including attribution, ragdoll, and the equipment drop.
     local ground = attack.brutalGroundFinisher and settings.get('groundFinisherEnabled')
     local powered = attack.brutalPowered and settings.get('finisherEnabled') and settings.get('adrenalineEnabled')
-    if (ground or powered) and attack.successful and not attack.brutalBlocked
-        and attack.sourceType=='melee' and attack.attacker and attack.attacker:isValid()
+    local ranged = powered and attack.sourceType == 'ranged'
+    if (ranged or ((ground or powered) and attack.sourceType == 'melee'))
+        and attack.successful and not attack.brutalBlocked and attack.attacker and attack.attacker:isValid()
         and types.Player.objectIsInstance(attack.attacker)
         and not types.Player.objectIsInstance(self)
-        and not types.Actor.isDead(self) and attack.damage and (ground or (attack.damage.health or 0)>0) then
+        and not types.Actor.isDead(self) and attack.damage and (ground or ranged or (attack.damage.health or 0)>0) then
         attack.damage.health=math.max(attack.damage.health or 0,types.Actor.stats.dynamic.health(self).current)
     end
 end
@@ -149,7 +150,8 @@ interface.onHit = function(attack)
     local hitArmor = selectedArmor
     currentAttack, selectedArmor = outerAttack, outerArmor
     local healthDamage = (attack.damage or {}).health or 0
-    if settings.get('finisherEnabled') and settings.get('adrenalineEnabled') and attack.brutalAttackId and attack.brutalPowered then
+    if attack.sourceType == 'melee' and settings.get('finisherEnabled') and settings.get('adrenalineEnabled')
+        and attack.brutalAttackId and attack.brutalPowered then
         -- Combat queues native damage. Confirm the outcome of THIS damage action,
         -- rather than sampling death before it runs or attributing a later death.
         pendingDecapitation[attack.brutalAttackId] = {attack = attack, age = 0}

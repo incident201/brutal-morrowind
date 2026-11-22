@@ -623,8 +623,7 @@ namespace MWClass
             weapon = *weaponslot;
 
         // One receipt per native melee hit frame, including empty/range/occlusion failures.
-        static uint64_t nextBrutalAttackId = 0;
-        const uint64_t brutalAttackId = ++nextBrutalAttackId;
+        const uint64_t brutalAttackId = MWMechanics::nextCombatAttackId();
         bool brutalPowered = false, brutalBlocked = false, brutalSuccessful = false;
         float brutalMultiplier = 1.f, damage = 0.f;
         std::string brutalToken;

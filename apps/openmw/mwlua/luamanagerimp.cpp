@@ -959,10 +959,25 @@ namespace MWLua
             data["outcome"] = std::string(outcome);
             data["material"] = std::string(material);
             data["position"] = position;
+            data["timeScale"] = MWBase::Environment::get().getWorld()->getTimeManager()->getSimulationTimeScale();
             if (!caster.isEmpty() && caster.getClass().isActor())
                 sendLocalEvent(caster, "BrutalMissileLanded", data);
             if (!target.isEmpty() && target != caster && target.getClass().isActor())
                 sendLocalEvent(target, "BrutalMissileLanded", data);
+        });
+    }
+
+    void LuaManager::projectileFinisher(const MWWorld::Ptr& player, const MWWorld::Ptr& target, std::uint64_t attackId,
+        std::string_view phase, std::string_view token)
+    {
+        mLua.protectedCall([&](LuaUtil::LuaView& view) {
+            sol::table data = view.newTable();
+            data["target"] = LObject(target);
+            data["attackId"] = attackId;
+            data["phase"] = std::string(phase);
+            if (!token.empty())
+                data["token"] = std::string(token);
+            sendLocalEvent(player, "BrutalProjectileFinisher", data);
         });
     }
 

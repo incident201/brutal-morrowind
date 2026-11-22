@@ -678,8 +678,9 @@ namespace MWLua
                 const auto it = inv.getSlot(MWWorld::InventoryStore::Slot_CarriedRight);
                 if (it == inv.end() || it->getType() != ESM::Weapon::sRecordId) return;
                 const int type = it->get<ESM::Weapon>()->mBase->mData.mType;
-                // Finishers work with every melee weapon, one- and two-handed.
-                if (MWMechanics::getWeaponType(type)->mWeaponClass != ESM::WeaponType::Melee) return;
+                if (MWMechanics::getWeaponType(type)->mWeaponClass != ESM::WeaponType::Melee
+                    && !(MWMechanics::physicalProjectiles() && MWMechanics::supportsRangedFinisher(type)))
+                    return;
                 auto& armed = ptr.getClass().getCreatureStats(ptr).mPowerStrike;
                 if (ptr.getClass().getCreatureStats(ptr).mLastConsumedPowerStrikeToken != token
                     && (armed.token.empty() || armed.token == token))
@@ -695,10 +696,11 @@ namespace MWLua
                 if (armed.token == token) armed = {};
             }, "CancelPowerStrike");
         };
-        actor["getPowerStrikeToken"] = [](const SelfObject& self) {
-            if (self.ptr() != MWMechanics::getPlayer()) throw std::runtime_error("Power strike requires player SELF");
-            const auto& armed = self.ptr().getClass().getCreatureStats(self.ptr()).mPowerStrike;
-            return armed.token;
+        actor["getPowerStrikeToken"] = [](const SelfObject& self, sol::optional<bool> consumed) {
+            if (self.ptr() != MWMechanics::getPlayer())
+                throw std::runtime_error("Power strike requires player SELF");
+            const auto& stats = self.ptr().getClass().getCreatureStats(self.ptr());
+            return consumed.value_or(false) ? stats.mLastConsumedPowerStrikeToken : stats.mPowerStrike.token;
         };
 
         actor["stagger"] = [context](const SelfObject& self) {

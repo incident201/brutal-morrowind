@@ -1,6 +1,7 @@
 #ifndef OPENMW_MECHANICS_COMBAT_H
 #define OPENMW_MECHANICS_COMBAT_H
 
+#include <cstdint>
 #include <string_view>
 #include <utility>
 
@@ -18,6 +19,9 @@ namespace MWMechanics
 {
     inline constexpr float sNpcGuardContactMargin = 4.f;
     inline constexpr float sNpcProjectileGuardContactMargin = 1.f;
+
+    std::uint64_t nextCombatAttackId();
+    bool supportsRangedFinisher(int weaponType);
 
     bool applyOnStrikeEnchantment(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, const MWWorld::Ptr& object,
         const osg::Vec3f& hitPosition, const bool fromProjectile = false);
@@ -60,7 +64,7 @@ namespace MWMechanics
     /// when that path actually crosses the shield.
     ProjectileOutcome projectileHit(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, MWWorld::Ptr weapon,
         const MWWorld::Ptr& projectile, const osg::Vec3f& hitPosition, float attackStrength,
-        const std::pair<osg::Vec3f, osg::Vec3f>* flight = nullptr);
+        const std::pair<osg::Vec3f, osg::Vec3f>* flight = nullptr, std::uint64_t finisherId = 0);
 
     /// Brutal physical missiles: falling arcs, contact hits, sticking and glancing.
     bool physicalProjectiles();

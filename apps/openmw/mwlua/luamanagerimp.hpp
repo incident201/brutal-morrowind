@@ -115,6 +115,8 @@ namespace MWLua
         void missileLanded(const MWWorld::Ptr& caster, const MWWorld::Ptr& target, const MWWorld::Ptr& item,
             const ESM::RefId& missile, std::string_view outcome, std::string_view material,
             const osg::Vec3f& position) override;
+        void projectileFinisher(const MWWorld::Ptr& player, const MWWorld::Ptr& target, std::uint64_t attackId,
+            std::string_view phase, std::string_view token) override;
         void thrownObjectHit(const MWWorld::Ptr& attacker, const MWWorld::Ptr& item,
             const MWWorld::Ptr& victim, const osg::Vec3f& hitPos, const osg::Vec3f& normal,
             const osg::Vec3f& velocity, float mass, bool adrenaline, bool headHit, bool knockedDown,

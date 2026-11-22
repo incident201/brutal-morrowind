@@ -1,6 +1,7 @@
 #ifndef GAME_MWBASE_LUAMANAGER_H
 #define GAME_MWBASE_LUAMANAGER_H
 
+#include <cstdint>
 #include <filesystem>
 #include <map>
 #include <string>
@@ -103,6 +104,8 @@ namespace MWBase
         virtual void missileLanded(const MWWorld::Ptr& caster, const MWWorld::Ptr& target, const MWWorld::Ptr& item,
             const ESM::RefId& missile, std::string_view outcome, std::string_view material, const osg::Vec3f& position)
             = 0;
+        virtual void projectileFinisher(const MWWorld::Ptr& player, const MWWorld::Ptr& target, std::uint64_t attackId,
+            std::string_view phase, std::string_view token = {}) = 0;
         virtual void thrownObjectHit(const MWWorld::Ptr& attacker, const MWWorld::Ptr& item,
             const MWWorld::Ptr& victim, const osg::Vec3f& hitPos, const osg::Vec3f& normal,
             const osg::Vec3f& velocity, float mass, bool adrenaline, bool headHit, bool knockedDown,

@@ -800,6 +800,18 @@ namespace MWMechanics
         return Settings::game().mBrutalEnabled && Settings::game().mBrutalPhysicalProjectiles;
     }
 
+    std::uint64_t nextCombatAttackId()
+    {
+        static std::uint64_t id = 0;
+        return ++id;
+    }
+
+    bool supportsRangedFinisher(int weaponType)
+    {
+        return weaponType == ESM::Weapon::MarksmanBow
+            || getWeaponType(weaponType)->mWeaponClass == ESM::WeaponType::Thrown;
+    }
+
     float getProjectileLaunchSpeed(bool thrown, float attackStrength)
     {
         const auto& gmst = MWBase::Environment::get().getESMStore()->get<ESM::GameSetting>();
@@ -821,7 +833,7 @@ namespace MWMechanics
 
     ProjectileOutcome projectileHit(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, MWWorld::Ptr weapon,
         const MWWorld::Ptr& projectile, const osg::Vec3f& hitPosition, float attackStrength,
-        const std::pair<osg::Vec3f, osg::Vec3f>* flight)
+        const std::pair<osg::Vec3f, osg::Vec3f>* flight, std::uint64_t finisherId)
     {
         MWBase::World* world = MWBase::Environment::get().getWorld();
         const MWWorld::Store<ESM::GameSetting>& gmst = world->getStore().get<ESM::GameSetting>();
@@ -913,7 +925,8 @@ namespace MWMechanics
             }
 
             MWBase::Environment::get().getLuaManager()->onHit(attacker, victim, weapon, projectile, 0, attackStrength,
-                damage, true, hitPosition, true, MWMechanics::DamageSourceType::Ranged);
+                damage, true, hitPosition, true, MWMechanics::DamageSourceType::Ranged, finisherId, finisherId != 0,
+                false, finisherId != 0 ? ESM::PRT_Head : -1);
             return ProjectileOutcome::Body;
         }
         return ProjectileOutcome::NoActor;
