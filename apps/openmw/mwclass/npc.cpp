@@ -958,6 +958,16 @@ namespace MWClass
 
         if (!wasDead && getCreatureStats(ptr).isDead())
         {
+            if (ptr == MWMechanics::getPlayer() && hasHealthDamage && !attacker.isEmpty() && attacker != ptr
+                && (sourceType == MWMechanics::DamageSourceType::Melee
+                    || sourceType == MWMechanics::DamageSourceType::Ranged))
+            {
+                osg::Vec3f away
+                    = ptr.getRefData().getPosition().asVec3() - attacker.getRefData().getPosition().asVec3();
+                away.z() = 0.f;
+                if (away.normalize() > .001f)
+                    stats.mBrutalPlayerDeathPush = away * 110.f + osg::Vec3f(0, 0, 8.f);
+            }
             if (!silentBackstabHit)
                 stats.mBrutalSilentBackstab = false;
             // NPC was killed

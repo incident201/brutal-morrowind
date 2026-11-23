@@ -265,6 +265,7 @@ namespace MWMechanics
     {
         if (mDead)
         {
+            mBrutalPlayerDeathPush = {};
             mDynamic[0].setCurrent(mDynamic[0].getBase());
             mDead = false;
             mDeathAnimationFinished = false;
@@ -560,6 +561,7 @@ namespace MWMechanics
 
     void CreatureStats::readState(const ESM::CreatureStats& state)
     {
+        mBrutalPlayerDeathPush = {};
         mPowerStrike = {};
         mLastConsumedPowerStrikeToken.clear();
         mBrutalAdrenalineEffectActive = false;

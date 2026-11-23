@@ -4667,7 +4667,8 @@ namespace MWMechanics
             return false;
         auto fatigue = stats.getFatigue();
         const float cost = std::max(1.f, fatigue.getBase() * .15f);
-        if (fatigue.getCurrent() < cost || !bowKickDirection(mPtr, target, 28.f) || !stagger(sBowKick))
+        const float minimumFatigue = std::max(cost, fatigue.getModified() * .30f);
+        if (fatigue.getCurrent() < minimumFatigue || !bowKickDirection(mPtr, target, 28.f) || !stagger(sBowKick))
             return false;
         if (mWeaponType == ESM::Weapon::MarksmanBow)
             mAnimation->detachArrow();
@@ -4675,7 +4676,7 @@ namespace MWMechanics
         stats.setFatigue(fatigue);
         mBrutalBowKickTarget = MWWorld::SafePtr(target);
         mBrutalBowKickWeapon = mWeapon;
-        mBrutalBowKickReadyAt = brutalSimulationTime() + 5.;
+        mBrutalBowKickReadyAt = brutalSimulationTime() + 10.;
         return true;
     }
 
@@ -6171,6 +6172,8 @@ namespace MWMechanics
         if (mDeathState == CharState_None)
         {
             cancelGroundFinisher();
+            auto& stats = mPtr.getClass().getCreatureStats(mPtr);
+            const osg::Vec3f deathPush = std::exchange(stats.mBrutalPlayerDeathPush, {});
             if (hasPhysicalDeath())
             {
                 // Capture the last evaluated pose before a death animation or
@@ -6186,7 +6189,7 @@ namespace MWMechanics
                     {
                         if (playerAnimation)
                             playerAnimation->preparePlayerDeathPose();
-                        physical = world->startNpcRagdoll(mPtr, {});
+                        physical = world->startNpcRagdoll(mPtr, deathPush);
                     }
                     catch (const std::exception& error)
                     {
@@ -6214,7 +6217,7 @@ namespace MWMechanics
                 // for dying words, death counts, scripts and spell cleanup.
                 mDeathState = CharState_Death1;
                 mCurrentDeath = deathStateToAnimGroup(mDeathState);
-                mPtr.getClass().getCreatureStats(mPtr).setDeathAnimation(0);
+                stats.setDeathAnimation(0);
                 resetCurrentMovementState();
                 resetCurrentWeaponState();
                 resetCurrentHitState();
