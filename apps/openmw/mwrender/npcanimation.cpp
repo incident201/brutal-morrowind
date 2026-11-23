@@ -990,12 +990,13 @@ namespace MWRender
         clearRagdollGarmentCoverage();
         mGarmentAudit.reset();
         resetBodyAwareness();
+        resetPlayerShadow();
         mAmmunition.reset();
     }
 
     NpcAnimation::NpcAnimation(const MWWorld::Ptr& ptr, osg::ref_ptr<osg::Group> parentNode,
         Resource::ResourceSystem* resourceSystem, bool disableSounds, ViewMode viewMode, float firstPersonFieldOfView,
-        bool bodyAwareness)
+        FirstPersonBody body)
         : ActorAnimation(ptr, std::move(parentNode), resourceSystem)
         , mViewMode(viewMode)
         , mShowWeapons(false)
@@ -1003,7 +1004,8 @@ namespace MWRender
         , mNpcType(getNpcType(ptr))
         , mFirstPersonFieldOfView(firstPersonFieldOfView)
         , mSoundsDisabled(disableSounds)
-        , mBodyAwareness(bodyAwareness)
+        , mBodyAwareness(body != FirstPersonBody::None)
+        , mShadowOnly(body == FirstPersonBody::Shadow)
         , mAccurateAiming(false)
         , mAimingFactor(0.f)
     {
@@ -1227,15 +1229,18 @@ namespace MWRender
         osg::ref_ptr<osg::StateSet> mStateSet;
     };
 
-    class BodyAwarenessClinchCullCallback : public osg::NodeCallback
+    class FirstPersonBodyCullCallback : public osg::NodeCallback
     {
         osg::observer_ptr<NpcAnimation> mOwner;
+        bool mHideInClinch;
     public:
-        explicit BodyAwarenessClinchCullCallback(NpcAnimation* owner) : mOwner(owner) {}
+        FirstPersonBodyCullCallback(NpcAnimation* owner, bool hideInClinch)
+            : mOwner(owner), mHideInClinch(hideInClinch) {}
         void operator()(osg::Node* node, osg::NodeVisitor* visitor) override
         {
             osg::ref_ptr<NpcAnimation> owner;
-            if (mOwner.lock(owner) && owner->isBodyAwarenessHiddenForClinch())
+            if (mOwner.lock(owner) && ((mHideInClinch && owner->isBodyAwarenessHiddenForClinch())
+                    || (owner->hasPlayerShadowBody() && (visitor->getTraversalMask() & Mask_PlayerShadow))))
                 return;
             traverse(node, visitor);
         }
@@ -1382,6 +1387,7 @@ namespace MWRender
         clearNpcTwoHandGuardPose();
         clearRagdollGarmentCoverage();
         resetBodyAwareness();
+        resetPlayerShadow();
         clearAnimSources();
         for (size_t i = 0; i < ESM::PRT_Count; i++)
             removeIndividualPart((ESM::PartReferenceType)i);
@@ -1518,6 +1524,7 @@ namespace MWRender
 
         mWeaponAnimationTime->updateStartTime();
         updateBodyAwareness();
+        updatePlayerShadow();
     }
 
     bool NpcAnimation::skipAdditionalAnimation(const VFS::Path::Normalized& kf) const
@@ -1568,11 +1575,11 @@ namespace MWRender
         mBodyAwarenessRoot = new osg::MatrixTransform;
         mBodyAwarenessRoot->setName("First Person Body Awareness");
         mBodyAwarenessRoot->setNodeMask(Mask_Player);
-        mBodyAwarenessRoot->addCullCallback(new BodyAwarenessClinchCullCallback(this));
+        mBodyAwarenessRoot->addCullCallback(new FirstPersonBodyCullCallback(this, true));
         // Traversed before the arm rig, so the eye can read this frame's torso pose.
         mInsert->insertChild(0, mBodyAwarenessRoot);
         mBodyAwarenessAnimation = new NpcAnimation(mPtr, mBodyAwarenessRoot, mResourceSystem,
-            true, VM_Normal, mFirstPersonFieldOfView, true);
+            true, VM_Normal, mFirstPersonFieldOfView, FirstPersonBody::Visible);
         mBodyAwarenessAnimation->enableHeadAnimation(false);
         mBodyAwarenessAnimation->setActive(2);
         if (MWMechanics::brutalDmFirstPerson() && mBodyAwarenessAnimation->hasAnimation("idle"))
@@ -1597,6 +1604,35 @@ namespace MWRender
                 }
             body.stopAllAnimations();
         }
+    }
+
+    void NpcAnimation::resetPlayerShadow()
+    {
+        mPlayerShadowAnimation = nullptr;
+        if (mPlayerShadowRoot)
+            mInsert->removeChild(mPlayerShadowRoot);
+        mPlayerShadowRoot = nullptr;
+    }
+
+    void NpcAnimation::updatePlayerShadow()
+    {
+        const auto& shadows = Settings::shadows();
+        if (mBodyAwareness || mViewMode != VM_FirstPerson || mPtr != MWMechanics::getPlayer()
+            || !shadows.mEnableShadows || !shadows.mPlayerShadows)
+            return;
+
+        mPlayerShadowRoot = new osg::MatrixTransform;
+        mPlayerShadowRoot->setName("First Person Player Shadow");
+        mPlayerShadowRoot->setNodeMask(Mask_PlayerShadow);
+        mInsert->addChild(mPlayerShadowRoot);
+        mPlayerShadowAnimation = new NpcAnimation(mPtr, mPlayerShadowRoot, mResourceSystem, true, VM_Normal,
+            mFirstPersonFieldOfView, FirstPersonBody::Shadow);
+        mPlayerShadowAnimation->enableHeadAnimation(false);
+        mPlayerShadowAnimation->setActive(2);
+        mPlayerShadowAnimation->showWeapons(mShowWeapons);
+        mPlayerShadowAnimation->showCarriedLeft(mShowCarriedLeft);
+        if (useFullBodyFirstPerson())
+            mObjectRoot->addCullCallback(new FirstPersonBodyCullCallback(this, false));
     }
 
     void NpcAnimation::alignBodyAwareness(float duration)
@@ -1805,7 +1841,7 @@ namespace MWRender
             && MWBase::Environment::get().getWorld()->isFirstPerson();
     }
 
-    std::string NpcAnimation::bodyAwarenessGroup(const std::string& group, bool sneaking) const
+    std::string NpcAnimation::bodyAwarenessGroup(const NpcAnimation& body, const std::string& group, bool sneaking) const
     {
         // The paired arms reuse the matching sword clock. The visible body has
         // no arms or weapon, so it can use the same imported lower-body motion.
@@ -1816,7 +1852,7 @@ namespace MWRender
             if (group.ends_with("2b") || group.ends_with("2c"))
             {
                 const std::string mapped = group.substr(0, group.size() - 2) + "1h";
-                if (mBodyAwarenessAnimation->hasAnimation(mapped))
+                if (body.hasAnimation(mapped))
                     return mapped;
             }
         }
@@ -1845,7 +1881,6 @@ namespace MWRender
         }
         if (base.empty())
             return group;
-        const NpcAnimation& body = *mBodyAwarenessAnimation;
         const bool armed = !suffix.empty() && suffix != "hh" && suffix != "spell";
         if (armed && body.hasAnimation(base + "1h"))
             return base + "1h";
@@ -1976,11 +2011,23 @@ namespace MWRender
     void NpcAnimation::syncBodyAwareness(float duration)
     {
         updateBodyAwarenessClinchVisibility();
-        if (!mBodyAwarenessAnimation)
-            return;
+        if (mBodyAwarenessAnimation)
+        {
+            alignBodyAwareness(duration);
+            syncFirstPersonBodyPose(*mBodyAwarenessAnimation, duration);
+            updateBodyEyeFollow(duration);
+        }
+        if (mPlayerShadowAnimation)
+        {
+            if (mBodyAwarenessRoot)
+                mPlayerShadowRoot->setMatrix(mBodyAwarenessRoot->getMatrix());
+            mPlayerShadowAnimation->setPitchFactor(mPitchFactor);
+            syncFirstPersonBodyPose(*mPlayerShadowAnimation, duration);
+        }
+    }
 
-        alignBodyAwareness(duration);
-        NpcAnimation& body = *mBodyAwarenessAnimation;
+    void NpcAnimation::syncFirstPersonBodyPose(NpcAnimation& body, float duration)
+    {
         if (body.mAlpha != mAlpha)
             body.setAlpha(mAlpha);
         body.mLegsYawRadians = mLegsYawRadians;
@@ -2002,7 +2049,7 @@ namespace MWRender
             const bool spearStep = mViewmodelSet == BrutalViewmodel_Spear && group == "weapononehand"
                 && (source.mStartKey.starts_with("fast") || source.mStartKey.starts_with("thrust "))
                 && body.hasAnimation("brutal_spear_step");
-            std::string target = spearStep ? "brutal_spear_step" : bodyAwarenessGroup(group, sneaking);
+            std::string target = spearStep ? "brutal_spear_step" : bodyAwarenessGroup(body, group, sneaking);
             if (wanted.insert(target).second)
                 sources.emplace_back(std::move(target), &source);
         }
@@ -2098,7 +2145,6 @@ namespace MWRender
         if (reset || body.mDeferredActiveGroupReset)
             body.resetActiveGroups();
         body.runAnimation(0.f); // Updates pose controllers only; no text-key listener or root motion consumer.
-        updateBodyEyeFollow(duration);
     }
 
     void NpcAnimation::setFirstPersonGeometryVisibleForAudit(bool visible)
@@ -2108,6 +2154,8 @@ namespace MWRender
         mObjectRoot->setNodeMask(visible ? mask : 0u);
         if (mBodyAwarenessRoot)
             mBodyAwarenessRoot->setNodeMask(visible ? Mask_Player : 0u);
+        if (mPlayerShadowRoot)
+            mPlayerShadowRoot->setNodeMask(visible ? Mask_PlayerShadow : 0u);
     }
 
     std::string NpcAnimation::getSheathedShieldMesh(const MWWorld::ConstPtr& shield) const
@@ -2313,7 +2361,7 @@ namespace MWRender
                 const ESM::Light* light = part.get<ESM::Light>()->mBase;
                 addOrReplaceIndividualPart(ESM::PRT_Shield, MWWorld::InventoryStore::Slot_CarriedLeft, 1,
                     Misc::ResourceHelpers::correctMeshPath(VFS::Path::Normalized(light->mModel)), false, nullptr, true);
-                if (mObjectParts[ESM::PRT_Shield])
+                if (!mShadowOnly && mObjectParts[ESM::PRT_Shield])
                     addExtraLight(mObjectParts[ESM::PRT_Shield]->getNode()->asGroup(), SceneUtil::LightCommon(*light));
             }
         }
@@ -2354,6 +2402,8 @@ namespace MWRender
             attachArrow();
         if (mBodyAwarenessAnimation)
             mBodyAwarenessAnimation->updateParts();
+        if (mPlayerShadowAnimation)
+            mPlayerShadowAnimation->updateParts();
         prewarmDecapitationMaterial();
         prewarmBloodDecals();
         rebuildBloodDecals();
@@ -2681,7 +2731,7 @@ namespace MWRender
             }
         }
 
-        if (!mBodyAwareness)
+        if (!mBodyAwareness || mShadowOnly)
             WeaponAnimation::configureControllers(mPtr.getRefData().getPosition().rot[0] + getBodyPitchRadians());
         syncBodyAwareness(timepassed);
         if (mFirstPersonNeckController)
@@ -4133,7 +4183,7 @@ namespace MWRender
     bool NpcAnimation::addOrReplaceIndividualPart(ESM::PartReferenceType type, int group, int priority,
         VFS::Path::NormalizedView mesh, bool enchantedGlow, osg::Vec4f* glowColor, bool isLight)
     {
-        if (mBodyAwareness)
+        if (mBodyAwareness && !mShadowOnly)
         {
             // Keep the actual worn torso/leg records. Arms, head and carried equipment
             // belong exclusively to the primary viewmodel, including during a kick.
@@ -4148,13 +4198,13 @@ namespace MWRender
                     return false;
             }
         }
-        if ((mPlayerDeathView || Settings::game().mFirstPersonFullBody) && mPtr == MWMechanics::getPlayer())
+        if ((mPlayerDeathView || useFullBodyFirstPerson()) && mPtr == MWMechanics::getPlayer())
         {
             // A death pose can expose the collar. Keep its neck surface in place.
             if (type == ESM::PRT_Head || type == ESM::PRT_Hair || (type == ESM::PRT_Neck && !mPlayerDeathView))
                 return false;
         }
-        if (!mPlayerDeathView && (Settings::game().mFirstPersonFullBody || MWMechanics::brutalDmFirstPerson())
+        if (!mShadowOnly && !mPlayerDeathView && (Settings::game().mFirstPersonFullBody || MWMechanics::brutalDmFirstPerson())
             && mPtr == MWMechanics::getPlayer() && (type == ESM::PRT_LPauldron || type == ESM::PRT_RPauldron))
             return false;
         if (priority <= mPartPriorities[type])
@@ -4195,10 +4245,10 @@ namespace MWRender
             // PRT_Hair seems to be the only type that breaks consistency and uses a filter that's different from the
             // attachment bone
             const std::string_view bonefilter = (type == ESM::PRT_Hair) ? std::string_view{ "hair" } : bonename;
-            mObjectParts[type] = insertBoundedPart(mesh, bonename, bonefilter, enchantedGlow, glowColor, isLight);
+            mObjectParts[type] = insertBoundedPart(mesh, bonename, bonefilter, enchantedGlow && !mShadowOnly, glowColor, isLight);
             mPartModels[type] = mesh.value();
             if (group == MWWorld::InventoryStore::Slot_Robe && mPtr == MWMechanics::getPlayer()
-                && (mBodyAwareness || (mViewMode == VM_FirstPerson && !useFullBodyFirstPerson())))
+                && !mShadowOnly && (mBodyAwareness || (mViewMode == VM_FirstPerson && !useFullBodyFirstPerson())))
                 fitFirstPersonRobe(*mObjectParts[type]->getNode());
         }
         catch (std::exception& e)
@@ -4326,8 +4376,8 @@ namespace MWRender
     {
         Animation::addControllers();
 
-        // This world-space body never aims its limbs with the camera pitch.
-        if (mBodyAwareness)
+        // The visible torso and legs keep their world-space pose.
+        if (mBodyAwareness && !mShadowOnly)
             return;
         mFirstPersonNeckController = nullptr;
         WeaponAnimation::deleteControllers();
@@ -4360,7 +4410,7 @@ namespace MWRender
 
     void NpcAnimation::showWeapons(bool showWeapon)
     {
-        if (mBodyAwareness)
+        if (mBodyAwareness && !mShadowOnly)
             return; // In particular, do not clear the real player's attacking flag.
         mShowWeapons = showWeapon;
         mAmmunition.reset();
@@ -4390,12 +4440,14 @@ namespace MWRender
         {
             removeIndividualPart(ESM::PRT_Weapon);
             // If we remove/hide weapon from player, we should reset attack animation as well
-            if (mPtr == MWMechanics::getPlayer())
+            if (!mBodyAwareness && mPtr == MWMechanics::getPlayer())
                 mPtr.getClass().getCreatureStats(mPtr).setAttackingOrSpell(false);
         }
 
         updateHolsteredWeapon(!mShowWeapons);
         updateQuiver();
+        if (mPlayerShadowAnimation)
+            mPlayerShadowAnimation->showWeapons(mShowWeapons);
     }
 
     bool NpcAnimation::updateCarriedLeftVisible(const int weaptype) const
@@ -4439,7 +4491,7 @@ namespace MWRender
 
     void NpcAnimation::showCarriedLeft(bool show)
     {
-        if (mBodyAwareness)
+        if (mBodyAwareness && !mShadowOnly)
             return;
         if (show && mViewMode == VM_FirstPerson && MWMechanics::brutalDmFirstPerson()
             && mPtr == MWMechanics::getPlayer() && carriesShield()
@@ -4469,7 +4521,7 @@ namespace MWRender
             {
                 if (mesh.empty())
                     reserveIndividualPart(ESM::PRT_Shield, MWWorld::InventoryStore::Slot_CarriedLeft, 1);
-                if (iter->getType() == ESM::Light::sRecordId && mObjectParts[ESM::PRT_Shield])
+                if (!mShadowOnly && iter->getType() == ESM::Light::sRecordId && mObjectParts[ESM::PRT_Shield])
                     addExtraLight(mObjectParts[ESM::PRT_Shield]->getNode()->asGroup(),
                         SceneUtil::LightCommon(*iter->get<ESM::Light>()->mBase));
             }
@@ -4478,6 +4530,8 @@ namespace MWRender
             removeIndividualPart(ESM::PRT_Shield);
 
         updateHolsteredShield(mShowCarriedLeft);
+        if (mPlayerShadowAnimation)
+            mPlayerShadowAnimation->showCarriedLeft(mShowCarriedLeft);
     }
 
     void NpcAnimation::loadArrowMount()
@@ -4693,6 +4747,8 @@ namespace MWRender
         mHeadAnimationTime->updatePtr(updated);
         if (mBodyAwarenessAnimation)
             mBodyAwarenessAnimation->updatePtr(updated);
+        if (mPlayerShadowAnimation)
+            mPlayerShadowAnimation->updatePtr(updated);
     }
 
     // Remember body parts so we only have to search through the store once for each race/gender/viewmode combination

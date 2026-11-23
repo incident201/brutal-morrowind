@@ -212,7 +212,7 @@ namespace MWRender
         if (Settings::shadows().mActorShadows)
             shadowCastingTraversalMask |= Mask_Actor;
         if (Settings::shadows().mPlayerShadows)
-            shadowCastingTraversalMask |= Mask_Player;
+            shadowCastingTraversalMask |= Mask_Player | Mask_PlayerShadow;
 
         int indoorShadowCastingTraversalMask = shadowCastingTraversalMask;
         if (Settings::shadows().mObjectShadows)
@@ -221,7 +221,8 @@ namespace MWRender
             shadowCastingTraversalMask |= Mask_Terrain;
 
         mShadowManager = std::make_unique<SceneUtil::ShadowManager>(sceneRoot, mRootNode, shadowCastingTraversalMask,
-            indoorShadowCastingTraversalMask, Mask_Terrain | Mask_Object | Mask_Static, Settings::shadows(),
+            indoorShadowCastingTraversalMask, Mask_Terrain | Mask_Object | Mask_Static, Mask_PlayerShadow,
+            Settings::shadows(),
             mResourceSystem->getSceneManager()->getShaderManager());
 
         Shader::ShaderManager::DefineMap globalDefines = Shader::getDefaultDefines();
@@ -396,7 +397,7 @@ namespace MWRender
         mViewer->getCamera()->setCullingMode(cullingMode);
         mViewer->getCamera()->setName(Constants::SceneCamera);
 
-        auto mask = ~(Mask_UpdateVisitor | Mask_SimpleWater);
+        auto mask = ~(Mask_UpdateVisitor | Mask_SimpleWater | Mask_PlayerShadow);
         MWBase::Environment::get().getWindowManager()->setCullMask(mask);
         NifOsg::Loader::setHiddenNodeMask(Mask_UpdateVisitor);
         NifOsg::Loader::setIntersectionDisabledNodeMask(Mask_Effect);
@@ -1051,7 +1052,7 @@ namespace MWRender
 
         unsigned int mask = ~0u;
         mask &= ~(Mask_RenderToTexture | Mask_Sky | Mask_Debug | Mask_Effect | Mask_Water | Mask_SimpleWater
-            | Mask_Groundcover);
+            | Mask_Groundcover | Mask_PlayerShadow);
         if (ignorePlayer)
             mask &= ~(Mask_Player);
         if (ignoreActors)

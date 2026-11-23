@@ -59,6 +59,13 @@ namespace MWRender
             VM_HeadOnly
         };
 
+        enum class FirstPersonBody
+        {
+            None,
+            Visible,
+            Shadow
+        };
+
         struct SwordWallContact
         {
             bool armed = false, pending = false, soundPlayed = false;
@@ -316,15 +323,17 @@ namespace MWRender
 
         bool mSoundsDisabled;
 
-        // A secondary normal skeleton supplies only the world-space torso and legs.
-        // It has no inventory/text-key listener and cannot drive combat or actor motion.
+        // These secondary skeletons mirror the player. They cannot drive combat or actor motion.
         bool mBodyAwareness = false;
+        bool mShadowOnly = false;
         bool mBeastRace = false; // Khajiit/Argonian anatomy: keeps the Morrowind gait.
         bool skipAdditionalAnimation(const VFS::Path::Normalized& kf) const override;
         bool mBodyAwarenessHiddenForClinch = false;
         void updateBodyAwarenessClinchVisibility();
         osg::ref_ptr<osg::MatrixTransform> mBodyAwarenessRoot;
         osg::ref_ptr<NpcAnimation> mBodyAwarenessAnimation;
+        osg::ref_ptr<osg::MatrixTransform> mPlayerShadowRoot;
+        osg::ref_ptr<NpcAnimation> mPlayerShadowAnimation;
         osg::Vec3f mBodyGroundNormal{ 0.f, 0.f, 1.f };
         osg::Vec3f mBodyGroundUp{ 0.f, 0.f, 1.f };
         osg::Vec3f mBodyGroundAnchor;
@@ -333,9 +342,12 @@ namespace MWRender
         float mBodyGroundBlend = 0.f;
         void resetBodyAwareness();
         void updateBodyAwareness();
+        void resetPlayerShadow();
+        void updatePlayerShadow();
         void syncBodyAwareness(float duration);
+        void syncFirstPersonBodyPose(NpcAnimation& body, float duration);
         void alignBodyAwareness(float duration);
-        std::string bodyAwarenessGroup(const std::string& group, bool sneaking) const;
+        std::string bodyAwarenessGroup(const NpcAnimation& body, const std::string& group, bool sneaking) const;
 
         // The first-person eye rides on the visible torso: the body rig's neck
         // displacement from its settled standing pose, in object root space.
@@ -435,7 +447,7 @@ namespace MWRender
          */
         NpcAnimation(const MWWorld::Ptr& ptr, osg::ref_ptr<osg::Group> parentNode,
             Resource::ResourceSystem* resourceSystem, bool disableSounds = false, ViewMode viewMode = VM_Normal,
-            float firstPersonFieldOfView = 55.f, bool bodyAwareness = false);
+            float firstPersonFieldOfView = 55.f, FirstPersonBody body = FirstPersonBody::None);
         virtual ~NpcAnimation();
 
         void enableHeadAnimation(bool enable) override;
@@ -560,6 +572,7 @@ namespace MWRender
         unsigned int getBodyAwarenessVisibilityMask() const
         { return mBodyAwarenessRoot ? mBodyAwarenessRoot->getNodeMask() : 0u; }
         bool isBodyAwarenessHiddenForClinch() const { return mBodyAwarenessHiddenForClinch; }
+        bool hasPlayerShadowBody() const { return mPlayerShadowAnimation.valid(); }
         /// True when the eye follows the visible torso instead of a fixed sneak height.
         bool hasBodyEyeFollow() const;
         /// The torso displacement applied to the eye and arms (object root space).

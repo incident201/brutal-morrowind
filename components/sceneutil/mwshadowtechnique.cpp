@@ -824,6 +824,7 @@ MWShadowTechnique::MWShadowTechnique(const MWShadowTechnique& vdsm, const osg::C
     _shadowRecievingPlaceholderStateSet = new osg::StateSet;
     _enableShadows = vdsm._enableShadows;
     mSetDummyStateWhenDisabled = vdsm.mSetDummyStateWhenDisabled;
+    _shadowOnlyMask = vdsm._shadowOnlyMask;
 }
 
 MWShadowTechnique::~MWShadowTechnique()
@@ -1044,7 +1045,7 @@ void MWShadowTechnique::cull(osgUtil::CullVisitor& cv)
             cv.pushStateSet(dummyState);
         }
 
-        _shadowedScene->osg::Group::traverse(cv);
+        cullShadowReceivingScene(&cv);
 
         if (mSetDummyStateWhenDisabled)
             cv.popStateSet();
@@ -1057,7 +1058,7 @@ void MWShadowTechnique::cull(osgUtil::CullVisitor& cv)
     if (!_shadowCastingStateSet)
     {
         OSG_INFO<<"Warning, init() has not yet been called so ShadowCastingStateSet has not been setup yet, unable to create shadows."<<std::endl;
-        _shadowedScene->osg::Group::traverse(cv);
+        cullShadowReceivingScene(&cv);
         return;
     }
 
@@ -1066,7 +1067,7 @@ void MWShadowTechnique::cull(osgUtil::CullVisitor& cv)
     if (!vdd)
     {
         OSG_INFO<<"Warning, now ViewDependentData created, unable to create shadows."<<std::endl;
-        _shadowedScene->osg::Group::traverse(cv);
+        cullShadowReceivingScene(&cv);
         return;
     }
     
@@ -3173,7 +3174,8 @@ void MWShadowTechnique::cullShadowCastingScene(osgUtil::CullVisitor* cv, osg::Ca
     // record the traversal mask on entry so we can reapply it later.
     unsigned int traversalMask = cv->getTraversalMask();
 
-    cv->setTraversalMask( traversalMask & _shadowedScene->getShadowSettings()->getCastsShadowTraversalMask() );
+    // Cast-only geometry is deliberately absent from the camera's ordinary cull mask.
+    cv->setTraversalMask((traversalMask | _shadowOnlyMask) & _shadowedScene->getShadowSettings()->getCastsShadowTraversalMask());
 
         if (camera) camera->accept(*cv);
 
