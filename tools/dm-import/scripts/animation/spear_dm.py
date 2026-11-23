@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
-"""Spear strokes made of Dark Messiah's one straight staff jab.
+"""Build first-person spear strokes from the second jab of DM's charged staff attack.
 
-Every DM staff stroke that is labelled a thrust starts with an overhead swing,
-except one: the second jab of the charged staff attack. There the haft keeps
-pointing forward, the rear fist draws it back while the left hand regrips,
-then drives it forward to the crosshair and holds. The spear's guard is
-that chamber. Quick thrusts drive from it and return to it. A charged
-thrust pulls the haft farther back through the front hand before driving.
-Sidesteps use the staff's swings. The staff's parry, draw and sheathe
-join the spear guard along a continuous path for the haft and both hands.
+Forward jabs start in the same right-side guard and aim along several lines.
+Both palms keep their orientation and finger curl. The shaft slides a short
+distance through the lead palm only during a charged draw. Sidesteps use
+the donor's lateral swings.
+The running carry moves the closed grip with the player's stride.
+The staff's parry, draw and sheathe join the spear guard on continuous paths.
 """
 import argparse
 import hashlib
@@ -27,13 +25,17 @@ from arm_steering import LocalPose, blend, ease, steer_arm
 from import_staff_native_grasp import swing as rotate_between
 
 # The straight jab inside DM's charged staff attack, relative to its hit2 key.
-JAB_CHAMBER, JAB_END = -.19, .18   # deepest draw (both hands on the haft), end of the steady hold
-SETTLE = .12          # each stroke holds the chamber while the engine blends into it
-RETURN = .38          # draw back from the held thrust to the guard
+READY_BEFORE_HIT = .032   # both palms on the shaft, elbows still bent
+JAB_END = .18            # end of the donor's held extension after hit2
+QUICK_DRIVE, QUICK_SETTLE, QUICK_RETURN = .155, .085, .275
+QUICK_CONTACT = .925     # contact before the end of the extension
+QUICK_FOLLOW = .026      # the last part of the extension brakes after contact
+CHARGED_DRIVE, CHARGED_RETURN = .19, .38
+CHARGE_PALM_TRAVEL = 2.    # along the shaft, less than the width of the lead palm
 RATE = 60.
-CHARGE_DRAW = np.array((8., -15., -7.))
-CHARGE_SLIDE = 19.      # the front palm lets the shaft slide as the rear palm pulls
-CHARGE_RELEASE = .16   # time to regain the donor's drive after the extra draw
+# A charged release moves the wrist through its most tightly bent pose quickly.
+# Extra samples keep the shaft and closed hand together between rotation keys.
+CHARGED_SAMPLE_RATE = 3 * RATE
 SWEEPS = {
     # Use the two passes across the front in the staff's charged slash. The
     # quick staff combo twirls the haft behind the player between attacks.
@@ -42,7 +44,7 @@ SWEEPS = {
 }
 SWEEP_ENTRY, SWEEP_RETURN = .35, .46
 SWEEP_LEAD, SWEEP_TAIL = .065, .112
-SWEEP_DIP = (0., 1., -5.)            # clear the view without folding the rear arm against its shoulder
+SWEEP_DIP = (0., 12., -5.)            # clear the view without folding the rear arm against its shoulder
 # The staff's own sections (side swing, draw, sheathe) start and end in the
 # staff guard, haft across the view with the point up and left. Blending from
 # the spear guard straight into it swings the haft through the camera in a
@@ -53,14 +55,10 @@ SWING_JOIN, SWING_LEAVE = .5, .24     # after 'slash start' / after 'slash hit2'
 JOIN, LEAVE = .53, .54                # blend lengths into and out of the swing
 DIP = (0., 6., -16.)                  # the hands' detour under the eye during those blends
 DRAW_EARLY = .1                       # leave DM's draw this long before the attach key
-# A person never strikes the same spot twice. Each quick stroke turns both
-# arms and the spear together about the neck by its own (yaw, pitch, roll) in
-# degrees: z up, positive yaw to the left, positive pitch tip up, positive roll
-# clockwise from behind. The turn grows during the drive and goes back during
-# the draw, so every stroke still starts and ends in the same guard.
-AIM = {'fasta': (5.5, -2.2, -8.), 'fastb': (-6., 1.8, 9.), 'fastc': (1.6, -5.2, 4.),
-       'fastd': (-3.6, -3., -10.), 'fastloopa': (6.4, 1., 6.), 'thrust': (0., -.8, 0.),
-       'neutral': (-1.5, -1.5, -3.)}
+# Offsets in rig units at the far end of the line of aim, horizontal and vertical.
+# The front palm travels on the same line while the tip picks out the offset.
+AIM = {'fasta': (5., 9.), 'fastb': (-14., 2.), 'fastc': (-3., -11.), 'fastd': (12., -6.),
+       'fastloopa': (-7., 14.), 'thrust': (0., 0.), 'neutral': (0., -.1)}
 
 
 def recovery_clock(elapsed, duration):
@@ -82,8 +80,8 @@ def sweep_clock(elapsed, start, stop):
 
 def sampled_poses(segments):
     samples = {}
-    for begin, stop, fn in segments:
-        for t in np.linspace(begin, stop, max(2, int(np.ceil((stop - begin) * RATE)) + 1)):
+    for begin, stop, fn, rate in segments:
+        for t in np.linspace(begin, stop, max(2, int(np.ceil((stop - begin) * rate)) + 1)):
             samples[float(t)] = fn(float(t - begin))
     return samples
 
@@ -115,6 +113,20 @@ def replace_frames(stream, samples, intervals, stop_time=None):
             controller.stop_time = max(controller.stop_time, stop_time)
 
 
+def retime_gait(stream, ratio):
+    """Keep the first-person gait on the same loop clock as the visible body."""
+    text = keys(stream)
+    text.keys = np.array([(time * ratio, label) for time, label in text.keys], dtype=text.keys.dtype)
+    for controller in stream.root.controllers:
+        controller.start_time *= ratio
+        controller.stop_time *= ratio
+        for channel in (controller.data.rotations, controller.data.translations, controller.data.scales):
+            if channel is not None and channel.keys is not None and len(channel.keys):
+                scaled = channel.keys.copy()
+                scaled[:, 0] *= ratio
+                channel.keys = scaled
+
+
 def body_footwork(body, weapon):
     """Fit the imported walking footfalls to the spear's actual contact keys."""
     folder = body / 'Animations/brutal_firstperson'
@@ -129,10 +141,12 @@ def body_footwork(body, weapon):
     group = 'brutal_spear_step: '
     ranges = {}
     for clip in ('fasta', 'fastb', 'fastc', 'fastd', 'fastloopa'):
-        start, plant, hit, stop = [marks[clip+' '+key] for key in ('start','plant','thrust hit','stop')]
+        start, plant, hit, weight, stop = [marks[clip+' '+key] for key in
+                                          ('start','plant','thrust hit','weight forward','stop')]
         lead = .5 if clip in ('fastb', 'fastd') else 0.
         ranges[clip] = [(start, lead-.13, 0.), (plant, lead-.05, .36),
-                        (hit, lead+.22, .76), (hit+.085, lead+.29, .76), (stop, lead+.48, 0.)]
+                        (hit, lead+.19, .72), (weight, lead+.25, .84),
+                        (hit+QUICK_SETTLE, lead+.29, .82), (stop, lead+.48, 0.)]
     for letter in 'abcd':
         name = 'fastend'+letter
         ranges[name] = [(marks[name+' start'], 0., 0.), (marks[name+' stop'], 0., 0.)]
@@ -188,117 +202,125 @@ def build(arms, body=None):
     animated = list(channels)
 
     hit2 = marks['thrust hit2']
-    chamber, jab1 = hit2 + JAB_CHAMBER, hit2 + JAB_END
-    # The spear's guard is the jab's drawn chamber: haft forward, both hands
-    # on it. Thrusts start and end there without sweeping across the view.
+    ready_time = hit2 - READY_BEFORE_HIT
 
     def at(t, source_channels=channels):
         pose = Pose(rig, source_channels, t)
         return {n: pose.local(n) for n in animated}
 
-    guard_local = at(chamber)
-
-    segments = []          # (start, stop, fn(elapsed) -> local transforms)
+    segments = []          # (start, stop, fn(elapsed) -> local transforms, sample rate)
     labels = []
 
-    def section(start, length, fn, name, events):
-        segments.append((start, start + length, fn))
+    def section(start, length, fn, name, events, rate=RATE):
+        segments.append((start, start + length, fn, rate))
         labels.extend((start + t, 'weapononehand: ' + name + ' ' + e) for t, e in events)
 
-    drive = jab1 - chamber
-
-    reach = hit2 - chamber      # the drive itself, without the static hold
-
-    contact_pose, guard_pose = Pose(rig, channels, hit2), Pose(rig, channels, chamber)
+    contact_pose = Pose(rig, channels, hit2)
     grasps = {side: Grasp(contact_pose, side, False) for side in 'RL'}
-    left = grasps['L']
-    grip_contact = inverse(contact_pose.world(ITEM)) @ contact_pose.world(left.names[-1])
-    grip_guard = inverse(guard_pose.world(ITEM)) @ guard_pose.world(left.names[-1])
 
-    def returning(e):
-        # Draw the haft back along the same line: DM's own drive, reversed,
-        # from the contact pose. The static hold is not replayed; its last
-        # 0.6-unit settle is closed in the first 0.04 s. The left hand does
-        # not replay DM's regrip backwards: it slides smoothly from its
-        # contact pose to its guard pose, holding the haft.
-        if e < .04:
-            return at(jab1 - (jab1 - hit2) * e / .04)
-        u = ease(min(1., (e - .04) / (RETURN - .04)))
-        pose = at(hit2 - reach * u)
-        now = LocalPose(rig, pose)
-        # The left palm stays on the moving haft; its station and roll on
-        # the haft move from the contact grip to the guard grip.
-        hand = now.world(ITEM) @ blend(grip_contact, grip_guard, u)
-        neck = now.world(rig.parents[left.names[0]])
-        pose.update(steer_arm(contact_pose, guard_pose, left, hand, u, parent=neck))
-        for n in left.fingers:
-            if n in pose:
-                pose[n] = blend(contact_pose.local(n), guard_pose.local(n), u)
-        return pose
+    # The calibrated native grasp places the center of the shaft inside the
+    # curl of the fingers. Finger joints on the right rig mirror their local Z.
+    profile = json.loads((arms / 'staff-native-grasp-profile.json').read_text())
+    contact_item = contact_pose.world(ITEM)
+    mirror_local = np.diag((1., 1., -1.))
+    mirror_world = np.diag((-1., 1., 1.))
+    shaft_axis = np.array((0., 1., 0.))
+    # Extra local flexion of base, middle and tip joints for a slim shaft.
+    # Measured against the iron spear and steel halberd in the native hand.
+    finger_curl = ((24., 11., 29.), (23., -5., 24.), (10., 24., 0.),
+                   (-3., 32., -3.), (7., 22., -10.))
+    palm_anchor = np.array(profile['shaft_anchor_native_hand']) + (.44, -.87, 0.)
+    lead_station = -7.
+    for side, station, roll in (('L', lead_station, 165.), ('R', -25., -40.)):
+        grasp = grasps[side]
+        reflection = mirror_local if side == 'R' else np.eye(3)
+        rotation = turn_about(shaft_axis, roll) @ turn_about((1., 0., 0.), 180.) @ grasp.grip[:3, :3]
+        axis = rotation @ reflection @ profile['shaft_axis_native_hand_reference']
+        rotation = rotate_between(axis, shaft_axis * np.sign(axis[1])) @ rotation
+        anchor = rotation @ reflection @ palm_anchor
+        grasp.grip = matrix(rotation, station * shaft_axis - anchor)
+        for digit, bends in enumerate(finger_curl):
+            for suffix, degrees in zip(('', '1', '2'), bends):
+                name = f'Bip01 {side} Finger{digit}{suffix}'
+                left_finger = name.replace(' R ', ' L ')
+                closed = profile['closed_finger_local_rotations'][left_finger] @ turn_about((0., 0., 1.), degrees)
+                grasp.fingers[name][:3, :3] = reflection @ closed @ reflection
 
-    clavicles = [n for n in animated if n.endswith('Clavicle')]
+    # Use one donor stance for the torso throughout the straight stroke.
+    # Shoulder sockets stay fixed while elbows and wrists follow the haft.
+    source_pose = Pose(rig, channels, ready_time)
+    eye = source_pose.world('Camera')[:3, 3]
+    rest = np.array((8.5, 23., -11.))
+    line_of_aim = np.array((1.8, 101., -.7)) - rest
+    drive_axis = unit(line_of_aim)
 
-    def aimed(pose, angles, weight):
-        # Turn both clavicles by one rigid motion about the neck: the arms,
-        # hands and spear move as one body and the shoulders stay seated.
-        if not weight or not any(angles):
-            return pose
-        yaw, pitch, roll = (a * weight for a in angles)
-        turn = turn_about((0., 0., 1.), yaw) @ turn_about((1., 0., 0.), pitch) @ turn_about((0., 1., 0.), roll)
-        pose = dict(pose)
-        now = LocalPose(rig, pose)
-        for name in clavicles:
-            parent = now.world(rig.parents[name])
-            pivot = now.world(rig.parents[name])[:3, 3]
-            motion = matrix(turn, pivot - turn @ pivot)
-            pose[name] = inverse(parent) @ motion @ parent @ pose[name]
-        return pose
-
-    def drawn(e):
-        # Weight of the stroke's own aim while drawing back.
-        return 1. - ease(min(1., max(0., (e - .04) / (RETURN - .04))))
-
-    def draw_haft(pose, weight):
-        if not weight:
-            return pose
-        old = LocalPose(rig, pose)
-        base = old.world(ITEM)
-        turn = turn_about((0., 0., 1.), -5. * weight) @ turn_about((1., 0., 0.), -3. * weight)
-        spear = matrix(turn @ base[:3, :3], base[:3, 3] + weight * CHARGE_DRAW)
-        pose = dict(pose)
+    def fitted_grip(item, lead_slide=0.):
+        result = {n: source_pose.local(n) for n in animated}
         for side, grasp in grasps.items():
-            grip = inverse(base) @ old.world(grasp.names[-1])
+            clavicle, upper, fore, wrist = grasp.names
+            opposite = clavicle.replace(' L ', ' R ') if side == 'L' else clavicle.replace(' R ', ' L ')
+            other = source_pose.world(opposite)
+            shoulder_base = matrix(mirror_world @ other[:3, :3] @ mirror_local, mirror_world @ other[:3, 3])
+            if side == 'R':
+                shoulder_base = blend(source_pose.world(clavicle), shoulder_base, .4)
+            result[clavicle] = inverse(source_pose.world(rig.parents[clavicle])) @ shoulder_base
+            shoulder = (shoulder_base @ source_pose.local(upper))[:3, 3]
+            offset = matrix(np.eye(3), shoulder - grasp.shoulder)
+            mount = item.copy()
             if side == 'L':
-                grip[1, 3] += CHARGE_SLIDE * weight
-            pose.update(steer_arm(old, old, grasp, spear @ grip, 0.))
-        pose[ITEM] = inverse(LocalPose(rig, pose).world(rig.parents[ITEM])) @ spear
-        return pose
+                mount[:3, 3] += item[:3, 1] * lead_slide
+            hand = mount @ grasp.grip
+            outward = np.array((.8 if side == 'R' else -.8, -.7, -1.15))
+            pole = (1.75 if side == 'R' else .55) * outward - hand[:3, :3] @ grasp.palm_along
+            chain, _ = grasp.fit(inverse(offset) @ mount, elbow_hint=grasp.shoulder + pole, swivels=np.zeros(1))
+            parent = shoulder_base
+            for name, joint in zip((upper, fore, wrist), chain[1:]):
+                world = offset @ joint
+                result[name] = inverse(parent) @ world
+                parent = world
+            result.update(grasp.fingers)
+        result[ITEM] = inverse(LocalPose(rig, result).world(rig.parents[ITEM])) @ item
+        return result
 
-    def jab_for(angles, charged=False):
-        # Each stroke starts and ends in the guard (the drawn chamber), so a
-        # series chains without the engine blending between far-apart poses:
-        # settle, DM's drive and held extension, then draw back to guard.
-        def jab(elapsed):
-            if elapsed <= SETTLE:
-                return draw_haft(guard_local, 1.) if charged else guard_local
-            if elapsed <= SETTLE + drive:
-                drive_time = elapsed - SETTLE
-                pose = at(chamber + drive_time)
-                if charged:
-                    pose = draw_haft(pose, 1. - ease(drive_time / CHARGE_RELEASE))
-                return aimed(pose, angles, ease(drive_time / reach))
-            e = elapsed - SETTLE - drive
-            return aimed(returning(e), angles, drawn(e))
-        return jab
+    def thrust_pose(advance, target=(0., 0.), draw=0.):
+        axis = unit(line_of_aim + advance * np.array((target[0], 0., target[1])))
+        rotation = rotate_between(contact_item[:3, 1], axis) @ contact_item[:3, :3]
+        anchor = eye + rest + drive_axis * (17. * advance - 11. * draw)
+        item = matrix(rotation, anchor - lead_station * axis)
+        return fitted_grip(item, CHARGE_PALM_TRAVEL * draw)
+
+    guard_local = thrust_pose(0.)
+
+    def quick_jab(elapsed, target):
+        if elapsed < QUICK_DRIVE:
+            u = elapsed / QUICK_DRIVE
+            # Accelerate from the guard and still carry speed across the hit.
+            extension = QUICK_CONTACT * u * u * (2. - u)
+        elif elapsed < QUICK_DRIVE + QUICK_FOLLOW:
+            remaining = 1. - (elapsed - QUICK_DRIVE) / QUICK_FOLLOW
+            extension = 1. - (1. - QUICK_CONTACT) * remaining**2
+        elif elapsed < QUICK_DRIVE + QUICK_SETTLE:
+            extension = 1.
+        else:
+            extension = 1. - ease((elapsed - QUICK_DRIVE - QUICK_SETTLE) / QUICK_RETURN)
+        return thrust_pose(extension, target)
+
+    def charged_jab(elapsed, target):
+        if elapsed < CHARGED_DRIVE:
+            u = ease(elapsed / CHARGED_DRIVE)
+            return thrust_pose(u, target, 1. - u)
+        if elapsed < CHARGED_DRIVE + JAB_END:
+            return thrust_pose(1., target)
+        return thrust_pose(1. - ease((elapsed - CHARGED_DRIVE - JAB_END) / CHARGED_RETURN), target)
 
     cursor = max(float(t) for t, _ in text.keys) + 1.
-    hit = SETTLE + hit2 - chamber
-    length = SETTLE + drive + RETURN
-    events = [(0., 'start'), (SETTLE - .04, 'plant'), (SETTLE, 'swing'),
-              (hit, 'thrust hit'), (hit + .035, 'weight forward'), (hit + .07, 'settle end'), (length, 'stop')]
+    hit = QUICK_DRIVE
+    length = hit + QUICK_SETTLE + QUICK_RETURN
+    events = [(0., 'start'), (.010, 'plant'), (.018, 'swing'), (hit, 'thrust hit'),
+              (hit + QUICK_FOLLOW, 'weight forward'), (hit + .098, 'settle end'), (length, 'stop')]
     for letter in 'abcd':
         for name in (('fasta', 'fastloopa') if letter == 'a' else ('fast' + letter,)):
-            section(cursor, length, jab_for(AIM[name]), name, events)
+            section(cursor, length, lambda e, target=AIM[name]: quick_jab(e, target), name, events, rate=2 * RATE)
             cursor += length + .2
         section(cursor, .05, lambda e: guard_local, 'fastend' + letter, [(0., 'start'), (.05, 'stop')])
         cursor += .25
@@ -307,25 +329,24 @@ def build(arms, body=None):
     # it. The standing charge ("neutral") gets the same thrust: the engine
     # starts it on every click before it knows the click is a quick stroke,
     # and the staff's overhead start showed as a jump of the spear.
-    chamber_local = draw_haft(guard_local, 1.)
+    chamber_local = thrust_pose(0., draw=1.)
     holds = []
-    total = drive + RETURN + .25
+    total = CHARGED_DRIVE + JAB_END + CHARGED_RETURN + .25
     for kind in ('thrust', 'neutral'):
         start, maximum, release = (marks[kind + ' ' + k] for k in ('start', 'max attack', 'min hit'))
         section(start, maximum - start,
-                lambda e, s=maximum - start: draw_haft(guard_local, ease(e / s)),
+                lambda e, s=maximum - start: thrust_pose(0., draw=ease((e - .09) / (s - .09))),
                 kind, [(0., 'start'), (marks[kind + ' min attack'] - start, 'min attack'), (maximum - start, 'max attack')])
         hold, hold_stop = marks[kind + ' hold start'], marks[kind + ' hold stop']
         holds.append((hold, hold_stop))
         section(hold, hold_stop - hold, lambda e: chamber_local, kind + ' hold',
                 [(0., 'start'), (0., 'loop start'), (hold_stop - hold, 'loop stop'), (hold_stop - hold, 'stop')])
-        jab = jab_for(AIM[kind], charged=True)
-        section(release, total, lambda e, jab=jab: jab(e + SETTLE),
-                kind, [(0., 'min hit'), (0., 'plant'), (hit2 - chamber, 'hit'),
-                       (hit2 - chamber + .035, 'weight forward'), (hit2 - chamber + .07, 'settle end'),
-                       (drive + .1, 'chain')] +
-                [(t, size + ' follow ' + edge) for t, edge in ((hit2 - chamber + .001, 'start'), (total, 'stop'))
-                 for size in ('small', 'medium', 'large')])
+        section(release, total, lambda e, target=AIM[kind]: charged_jab(e, target),
+                kind, [(0., 'min hit'), (0., 'plant'), (CHARGED_DRIVE, 'hit'),
+                       (CHARGED_DRIVE + .035, 'weight forward'), (CHARGED_DRIVE + .07, 'settle end'),
+                       (CHARGED_DRIVE + JAB_END + .1, 'chain')] +
+                [(t, size + ' follow ' + edge) for t, edge in ((CHARGED_DRIVE + .001, 'start'), (total, 'stop'))
+                 for size in ('small', 'medium', 'large')], rate=CHARGED_SAMPLE_RATE)
 
     # Moving between the spear guard and a staff pose: DM regrips the arms
     # (upper arms differ by ~170 degrees of twist), so blending the bones
@@ -482,7 +503,7 @@ def build(arms, body=None):
             'unequip', [])
 
     # Sample and merge: replace keys inside every authored interval.
-    replace_frames(stream, sampled_poses(segments), [(begin, stop) for begin, stop, _ in segments], cursor)
+    replace_frames(stream, sampled_poses(segments), [(begin, stop) for begin, stop, _, _ in segments], cursor)
 
     replaced = ('fasta ', 'fastb ', 'fastc ', 'fastd ', 'fastend', 'fastloopa ', 'thrust ', 'neutral ')
     kept = []
@@ -528,23 +549,61 @@ def build(arms, body=None):
     block_stream.save(target / block.name)
     shutil.copyfile(block.with_suffix('.yaml'), target / block.with_suffix('.yaml').name)
 
-    # Idle and gait: hold the spear guard in the arms and on the weapon; the
-    # gait's own trunk, head and camera motion stay.
-    arm_bones = [n for n in animated if n == ITEM or ((' L ' in n or ' R ' in n) and not n.endswith(('Thigh', 'Calf', 'Foot', 'Toe0')))]
+    guard_rotation = LocalPose(rig, guard_local).world(ITEM)[:3, :3]
+
+    def run_pose(phase, sprint):
+        stride = 2. * np.pi * phase
+        # The hands shift sideways over a full stride and yield at each plant.
+        # The point pitches a little behind the downward stroke of the hands.
+        plant = 2. * stride - 1.16 * np.pi
+        strength = 1.65 if sprint else 1.
+        travel = strength * np.array((1.3 * np.sin(stride), .85 * np.cos(plant - .75), -1.2 * np.cos(plant)))
+        if sprint:
+            travel += (0., -.55, -.85)
+        yaw = strength * 2.3 * np.cos(stride - .32)
+        pitch = -strength * (.45 + 2.7 * np.cos(plant - .38))
+        roll = strength * 2.4 * np.sin(stride + .45)
+        rotation = (turn_about((0., 0., 1.), yaw) @ turn_about((1., 0., 0.), pitch)
+                    @ turn_about(drive_axis, roll) @ guard_rotation)
+        item = matrix(rotation, eye + rest + travel - lead_station * rotation[:, 1])
+        return fitted_grip(item)
+
+    # Keep the pose of both palms relative to the shaft through the gait.
+    # The original trunk and camera tracks retain their motion.
+    arm_bones = [name for grasp in grasps.values() for name in (*grasp.names, *grasp.fingers)] + [ITEM]
     for path in sorted(folder.glob('*1h.kf')):
         if not path.stem.startswith(('idle', 'walk', 'run', 'sneak', 'jump', 'brutal_sprint')):
             continue
         gait = load(path)
-        gait_names = [e.string_data for e in gait.root.extra_datas if isinstance(e, nif.NiStringExtraData)]
-        for name, controller in zip(gait_names, gait.root.controllers):
-            if name not in arm_bones or name not in guard_local:
-                continue
-            for index, field in enumerate((controller.data.rotations, controller.data.translations)):
-                old = field.keys
-                if old is None or not len(old):
+        sprint = path.stem.startswith('brutal_sprint')
+        if sprint or path.stem.startswith('run'):
+            start_key, stop_key = (path.stem + ': ' + key for key in ('loop start', 'loop stop'))
+            source_marks = native_starts(path)
+            begin, end = source_marks[start_key], source_marks[stop_key]
+            body_gait = body / 'Animations/brutal_firstperson' / path.name if body is not None else None
+            if body_gait is not None and body_gait.is_file():
+                body_marks = native_starts(body_gait)
+                ratio = (body_marks[stop_key] - body_marks[start_key]) / (end - begin)
+                if abs(ratio - 1.) > 1e-5:
+                    retime_gait(gait, ratio)
+                    begin, end = begin * ratio, end * ratio
+            times = np.linspace(begin, end, int(np.ceil((end - begin) * RATE)) + 1)
+            poses = {}
+            for time in times:
+                pose = run_pose((time - begin) / (end - begin), sprint)
+                poses[float(time)] = {name: pose[name] for name in arm_bones if name in pose}
+            replace_frames(gait, poses, [(begin, end)])
+        else:
+            gait_names = [e.string_data for e in gait.root.extra_datas if isinstance(e, nif.NiStringExtraData)]
+            for name, controller in zip(gait_names, gait.root.controllers):
+                if name not in arm_bones or name not in guard_local:
                     continue
-                value = matrix_quat(guard_local[name][:3, :3]) if index == 0 else guard_local[name][:3, 3]
-                field.keys = np.column_stack((old[:, 0], np.tile(value, (len(old), 1)))).astype(np.float32)
+                for index, field in enumerate((controller.data.rotations, controller.data.translations)):
+                    old = field.keys
+                    if old is None or not len(old):
+                        continue
+                    value = matrix_quat(guard_local[name][:3, :3]) if index == 0 else guard_local[name][:3, 3]
+                    field.keys = np.column_stack((old[:, 0], np.tile(value, (len(old), 1)))).astype(np.float32)
         gait.save(target / path.name)
         if path.with_suffix('.yaml').exists():
             shutil.copyfile(path.with_suffix('.yaml'), target / path.with_suffix('.yaml').name)
@@ -555,7 +614,7 @@ def build(arms, body=None):
     for path in sorted(target.iterdir()):
         manifest['outputs'][path.relative_to(arms).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
     manifest['spear'] = {'base': 'brutal_fp_staff', 'jab': 'dm staff charged attack, second jab',
-                         'chamber': JAB_CHAMBER, 'end': JAB_END, 'settle': SETTLE, 'return': RETURN, 'aim': AIM}
+                         'ready_before_hit': READY_BEFORE_HIT, 'quick_hit': hit, 'quick_stop': length, 'aim': AIM}
     manifest_path.write_text(json.dumps(manifest, indent=1) + '\n')
 
 

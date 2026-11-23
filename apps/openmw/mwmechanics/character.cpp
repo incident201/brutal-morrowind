@@ -5253,12 +5253,16 @@ namespace MWMechanics
         // sword A B C D E B C D E..., daggers A B C D E A..., staff A B C D A...
         const int last = brutalActiveKey("faste start") ? 5 : 4;
         const bool dagger = isBrutalDaggerSet();
-        int next = mBrutalFastIndex + 1;
-        if (next > last)
-            next = last == 5 && !dagger ? 2 : 1;
-        const bool spearLoop = next == 1 && mBrutalFastIndex == last && brutalActiveKey("fastloopa start");
         const std::string side = mBrutalSpearStrafe < 0 ? "faststrafeleft" : "faststraferight";
         const bool spearSweep = mBrutalSpearStrafe != 0 && brutalActiveKey(side + " start");
+        const bool spear = mWeaponType == ESM::Weapon::SpearTwoWide && brutalActiveKey("fastloopa start");
+        const int previous = spear && !spearSweep && mBrutalFastIndex == 0 ? mBrutalLastSpearJab : mBrutalFastIndex;
+        int next = previous + 1;
+        if (next > last)
+            next = last == 5 && !dagger ? 2 : 1;
+        const bool spearLoop = spear && next == 1 && previous == last;
+        if (spear && !spearSweep)
+            mBrutalLastSpearJab = next;
         mBrutalFastIndex = next;
         resetBrutalFastContinuation();
         mBrutalFastQueued = false;

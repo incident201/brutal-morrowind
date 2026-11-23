@@ -257,6 +257,7 @@ namespace MWMechanics
         int mBrutalFastResumeIndex{ 0 };
         int mBrutalFastWindupIndex{ 0 };
         int mBrutalSpearStrafe{ 0 }; // Side sampled when the next stroke is pressed.
+        int mBrutalLastSpearJab{ 0 }; // Keep the jab variation across a return to idle.
         bool mBrutalNeutralAttack{ false }; // Stationary charged swing: its own source clip.
         bool mBrutalGuardPress{ false }; // Attack pressed while the guard is up.
         std::uint64_t mBrutalWallSwing = 0;

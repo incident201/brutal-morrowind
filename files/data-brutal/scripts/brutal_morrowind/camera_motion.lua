@@ -62,12 +62,13 @@ local function addSpearHeadMotion(set, clips)
         clips[name]={fps=12,loop=false,frames=frames}
         set[#set+1]={start=group..' '..from,stop=group..' '..to,clip=name,duration=1}
     end
-    -- Quick strokes: chamber, drive, kick, rebound, settle.
+    -- Keep the point readable through the fast drive. The eye dips briefly as
+    -- the forward foot takes the weight, then settles while the hands return.
     local quick={
-        fasta={cock={0.5,-0.62,1.93,0,0,0},drive={2.25,0.88,-3.85,0,0,0},kick={2.85,1.12,-5.22,0,0,0},rebound={0.5,-0.38,0.82,0,0,0}},
-        fastb={cock={0.5,-0.5,1.65,0,0,0},drive={1.65,0.75,-3.3,0,0,0},kick={2.25,1,-4.4,0,0,0},rebound={0.5,-0.3,0.55,0,0,0}},
-        fastc={cock={0.5,-0.75,2.2,0,0,0},drive={2.85,1,-4.12,0,0,0},kick={3.6,1.25,-5.5,0,0,0},rebound={0.5,-0.45,1.1,0,0,0}},
-        fastd={cock={0.5,-1.12,3.02,0,0,0},drive={3.15,1.5,-6.05,0,0,0},kick={4,1.75,-7.7,0,0,0},rebound={0.5,-0.75,1.65,0,0,0}},
+        fasta={cock={0.2,-0.15,0.55,0,0,0},drive={1.6,0.3,-1.8,0,0,0},kick={3.1,0.45,-3.1,0,0,0},rebound={0.6,0,0.30,0,0,0}},
+        fastb={cock={0.2,-0.10,0.45,0,0,0},drive={1.4,0.2,-1.5,0,0,0},kick={2.8,0.35,-2.7,0,0,0},rebound={0.5,0,0.20,0,0,0}},
+        fastc={cock={0.25,-0.20,0.65,0,0,0},drive={1.7,0.4,-2.0,0,0,0},kick={3.3,0.55,-3.4,0,0,0},rebound={0.6,0,0.35,0,0,0}},
+        fastd={cock={0.30,-0.25,0.80,0,0,0},drive={1.9,0.5,-2.4,0,0,0},kick={3.6,0.65,-4.0,0,0,0},rebound={0.7,0,0.45,0,0,0}},
     }
     quick.fastloopa=quick.fasta
     for _,group in ipairs({'fasta','fastloopa','fastb','fastc','fastd'}) do
