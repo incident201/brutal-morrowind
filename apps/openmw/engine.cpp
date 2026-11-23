@@ -200,8 +200,8 @@ void OMW::Engine::updatePlayerDeath(float duration, bool paused)
     }
 
     constexpr float menuDelay = 2.65f;
-    constexpr float fadeDelay = 1.55f;
-    constexpr float fadeDuration = 2.7f;
+    constexpr float fadeDelay = 5.55f;
+    constexpr float fadeDuration = 5.4f;
     constexpr float fadeEnd = fadeDelay + fadeDuration;
     const bool running = state == MWBase::StateManager::State_Running;
     if (running)
@@ -223,7 +223,7 @@ void OMW::Engine::updatePlayerDeath(float duration, bool paused)
     else if (!mPlayerDeathElapsed || *mPlayerDeathElapsed >= fadeEnd)
         return;
 
-    // The menu pauses the scene, while the fade continues over its backdrop.
+    // The backdrop keeps its own clock after the menu pauses the world.
     mPlayerDeathElapsed = mPlayerDeathElapsed ? std::min(*mPlayerDeathElapsed + duration, fadeEnd) : 0.f;
     const float elapsed = *mPlayerDeathElapsed;
     if (running)
