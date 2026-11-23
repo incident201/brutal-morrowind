@@ -23,6 +23,17 @@ Windows package.
 The package folder is never written to. Settings, saves and the imported Dark
 Messiah data go to ~/.config/brutalmorrowind and ~/.local/share/brutalmorrowind.
 
+=== Dark Messiah import ===
+
+Set up Morrowind in the launcher, then open its Dark Messiah page. Use Browse
+if the launcher needs the Dark Messiah single-player game folder. Choose Play,
+then Import and play when prompted. The same steps update an older import.
+
+Run ./brutalmorrowind-import --recipe in the package directory to see which
+recipe this build uses. Completed imports are stored under dm-assets/<recipe>
+in the user data folder. The launcher removes older recipe folders there
+after a successful import.
+
 === Contents ===
 
 brutalmorrowind            the game

@@ -1,6 +1,15 @@
 Brutal Morrowind (unreleased)
 ----------------------------
 
+    Dark Messiah import recipe 33 includes first-person spear and halberd poses with the shaft held on the right. Quick thrusts keep both grips and vary their paths even across separate clicks. Charged thrusts draw back from the same stance. Dark Messiah's staff sweeps handle lateral attacks, and run and sprint each have their own weapon sway.
+    Staff attacks and polearm side sweeps can hit several enemies. The first target takes the full hit. Later targets take half the base damage before their own defences apply.
+    The player's first-person shadow includes the head and hands.
+    Blood sprays vary in size and shape on floors and walls. Dark puddles grow under bodies, at severed necks and limbs, and at the waist cut on both halves. Wet pools leave blood on actors' feet and tracks fade along their path.
+    Sheathing a bloody one-handed sword in first person plays the Dark Messiah wipe animation when the player is on the ground, out of combat and has a free left hand. Blood clears from the guard towards the tip as the hand passes over it.
+    Arrows and thrown weapons stay embedded when an NPC dies or the shield falls. Loot the corpse or pull a missile from the dropped shield to recover it. Taking the shield also puts any remaining missiles in your inventory.
+    A charged hit on a blocking NPC weapon has a 10% chance to disarm and stagger the NPC. The chance rises to 30% against a wounded NPC.
+    NPCs with ranged or thrown weapons can kick at close range. The kick requires 30% of maximum stamina, costs 15% of base stamina and has a ten-second cooldown.
+    Starting the next bow draw within 1.15 seconds of a shot uses a faster reload at any Marksman skill.
     Full adrenaline guides a bow shot or a thrown weapon to the visible head nearest the crosshair within a small radius. The world slows during the last part of the flight, and the head hit is lethal.
     Arrows and thrown weapons leave a small blood mark at the visible NPC contact. Regular hits do 200% damage to the head, 100% to the torso and 65% to the limbs.
     Darts, throwing stars and other thrown weapons use Dark Messiah's right-hand dagger-throw animation. Import recipe 26 adds the preparation, held pose, release and recovery.
@@ -18,9 +27,7 @@ Brutal Morrowind (unreleased)
     First-person two-handed swords, battle axes and warhammers keep the neutral charge low and prepare the left-step sweep on the right. The forward chop follows the one-handed sword motion and returns to the paired grip.
     First-person two-handed swords, battle axes and warhammers sway less while running and are carried low in the right hand while sprinting.
     First-person two-handed swords, battle axes and warhammers swing through a wider arc with both hands on the grip. Pressing attack in midair raises the weapon and delivers a falling strike on release or landing.
-    After the player's death, the scene starts darkening later and eases to black behind the menu, which opens at the same time as before.
-    Polearm side attacks use both front sweeps from the Dark Messiah staff. The hands and camera ease into each sweep and follow it into recovery. These animations use import recipe 18.
-    Spears and halberds use Dark Messiah staff sweeps while stepping sideways. A charged thrust visibly draws the haft back while standing or stepping forward or backward. Raising, lowering and cancelling guard use a continuous path.
+    A lethal hit gives the player's ragdoll a small impulse in the direction of the impact. The menu opens after 2.65 seconds. The scene starts darkening at 5.55 seconds and takes another 5.4 seconds to fade to black behind the menu.
     NPCs wait for four seconds of continuous player guard at close range before choosing a charged response. A held shield or weapon guard absorbs a charge at a cost of two ninths of base stamina. Holding guard restores stamina at one third of the normal rate.
     Weapon blood spreads across model seams with soft edges. Dry floor and wall splatters keep their shape and colour without a visible decal rectangle.
     The pickup animation reaches towards the prop before it lifts. A held severed head faces the player. The new animations use Dark Messiah import recipe 17.
@@ -38,13 +45,12 @@ Brutal Morrowind (unreleased)
     Animations: Keep two-handed clinch grips and sleeves in view with weapon-specific camera pitch and bounded shoulder and elbow motion.
     Camera: Keep first-person movement and crouching attached to the visible body, including with a readied spell.
     Combat: Rebalance adrenaline, add obstacle trips and configurable weapon drops, and simplify ragdoll settings.
-    Combat: On death the player and NPCs release their weapons, held shields and carried lights. Surviving NPC knockdowns use the weapon-drop chance.
+    Combat: The player and NPCs release held weapons, shields and lights on ordinary deaths and finishers. NPCs that survive a knockdown use the weapon-drop chance.
     Ragdolls: On death the first-person camera follows the head's motion. The downward nod stops short of the neck, and the camera keeps clearance from the body and floor before the screen fades and the menu opens.
     Effects: Import Dark Messiah's incoming-damage flash and separate critical-health vignette below 5 HP.
     Combat: Release a fully charged melee attack while aiming at a downed enemy to perform a ground finisher with matching first-person camera motion. Its switch and default 30% health threshold are available in Brutal Morrowind settings.
     Animations: Restore beast-race locomotion, improve clinches on uneven ground and import Dark Messiah camera motion.
     Ragdolls: Fix delayed corpse cuts and impulses after looting, and support open armor contours in waist cuts.
-    Animations: First-person spears and halberds thrust from a forward guard with Dark Messiah's straight staff jab. Quick thrusts vary their aim, a charged attack thrusts standing still, and side swings, drawing and sheathing join the guard without sweeping the haft across the view. Recipe 13 requires reimporting the Dark Messiah assets.
     Effects: Melee weapons of the player and NPCs keep the blood of living targets. It dries, washes off in water or rain, is cleaned by repair and wears away within a game day. Hits leave Dark Messiah blood splatters on nearby floors and walls; outdoors the rain washes them away. Recipe 11 requires reimporting the Dark Messiah assets.
 
 Brutal Morrowind 0.2.1

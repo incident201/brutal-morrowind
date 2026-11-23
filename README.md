@@ -1,8 +1,10 @@
 # Brutal Morrowind
 
-Brutal Morrowind is Morrowind with the melee combat of Dark Messiah of Might and Magic: kicks,
-directional and charged attacks, parries, sliding, adrenaline finishers, ragdolls and dismemberment,
-with Dark Messiah's own first-person animations. It is a fork of [OpenMW](https://openmw.org) 0.51.0.
+Brutal Morrowind brings Dark Messiah of Might and Magic's combat to Morrowind.
+It uses Dark Messiah's first-person animations for melee, bows, thrown weapons
+and other actions, and adds kicks, directional and charged attacks, parries,
+sliding, adrenaline finishers, ragdolls and dismemberment. It is a fork of
+[OpenMW 0.51.0](https://openmw.org).
 
 No game files are included. Brutal Morrowind uses the games you own.
 
@@ -14,16 +16,23 @@ intercept NPC melee attacks without taking redirected damage.
 
 NPCs direct their weapon or shield towards the incoming attack while keeping
 their grip. The first-person camera follows the visible body during movement
-and crouching, including when holding a spell.
+and crouching, including when holding a spell. The player's shadow includes
+the head and hands in first person.
 
 First-person claymores, battle axes and warhammers use adapted Dark Messiah
 sword motion with both hands on the grip. They support directional charged
 attacks, quick strikes, weapon parries, wall recoil and timed-parry clinches.
 
-First-person spears and halberds hold a forward guard and thrust with Dark
-Messiah's straight staff jab: each quick thrust strikes a little off the last,
-a charged attack thrusts standing still or stepping forward or back, and the
-staff's side swings start and end in the same guard.
+First-person spears and halberds rest on the right with the tip pointing
+towards the crosshair. Quick clicks give sharp thrusts along different paths,
+even when spaced apart. Both hands keep their grip through the thrust and
+return. A charged thrust draws the shaft back, and attacks with a sidestep use
+Dark Messiah's staff sweeps. The weapon sways while running and moves through
+a wider arc while sprinting.
+
+Staff swings and polearm side sweeps can hit multiple enemies. The first
+target in the arc takes the full hit. Later targets take half the base damage
+before their own defences apply.
 
 Incoming damage and critical health use the original Dark Messiah vignette.
 Damage determines how long the flash lasts, and the critical-health layer
@@ -36,9 +45,13 @@ threshold, which defaults to strictly below 30%.
 
 Melee weapons keep the blood of the people and creatures they strike. It dries
 over a few hours, washes off in water or rain, is cleaned by a repair and wears
-away within a game day. Blood also splatters onto nearby floors and walls, using
-Dark Messiah's decals; outdoors the rain washes it away. Both have switches in
-the Brutal Morrowind settings.
+away within a game day. In first person, sheathing a bloody one-handed sword
+with `F` wipes the blade from guard to tip when the player is on the ground,
+out of combat and has a free left hand. Blood sprays onto nearby surfaces
+and pools around bodies and cuts.
+Actors who step in a wet pool leave fading bloody footprints. Outdoor rain
+washes the blood away. Weapon and environmental blood have their own switches
+in the Brutal Morrowind settings.
 
 Aim at small loose items and press `G` (rebindable) to grab and carry them in one
 or two hands while your equipped weapon and shield are hidden and restored after
@@ -48,11 +61,9 @@ reach towards the object before lifting it, and a severed head faces the player
 when held. Hits stagger NPCs by hit location (head or body). Throwing with full
 adrenaline spends the charge to knock living targets into a physical ragdoll.
 
-Spears and halberds sweep like Dark Messiah's staff when you attack during a
-sidestep. A charged thrust draws back before release. A nearby NPC charges in
-response to a guard held for at least four seconds. A frontal guard can absorb
-that hit with two ninths of base stamina available. Stamina regenerates at one
-third of the normal rate while you hold guard.
+A nearby NPC charges in response to a guard held for at least four seconds.
+A frontal guard can absorb that hit with two ninths of base stamina available.
+Stamina regenerates at one third of the normal rate while you hold guard.
 
 NPCs below 30% health fight wounded with Dark Messiah's wounded guard animations.
 Their guard gives way easily, blows stagger them, and a charged blow, kick or
@@ -63,17 +74,27 @@ own stance and walk. Both behaviours have switches in the settings.
 An NPC left without a weapon in a fight runs to the weapon nearby that suits it
 best, whoever owns it, crouches with Dark Messiah's weapon pickup animation (or
 leans over a table) and fights on with it in hand. A shield lying right beside it
-is taken too. Weapons knocked from an NPC's hands no longer drop through the floor.
+is taken too. A charged hit on a blocking weapon can stagger and disarm its
+owner. Wounded NPCs are more likely to drop the weapon. NPCs release held
+weapons and shields on death.
 
 Equip two short blades and sneak up behind an unaware humanoid to ready a
 backstab. Click attack or release a charged attack to execute it. Sneak, Short
 Blade and both weapons determine its damage. Witnesses who detect the attack
 can report it. The backstab has its own switch in Brutal Morrowind settings.
 
-Bows use Dark Messiah's first-person draw, aim and release. Arrows, bolts and
-thrown weapons are physical: they fall on an arc, hit whatever they touch, stay
-in bodies until looted, stick in wood and wooden shields, and glance off stone,
-metal and metal shields. A raised shield blocks only the missiles that strike it.
+Bows use Dark Messiah's first-person draw, aim and release. Start drawing again
+within 1.15 seconds of firing to nock the next arrow faster at any Marksman
+skill. An NPC with a ranged weapon can kick a target that comes too close,
+provided it has at least 30% stamina. The kick costs 15% of base stamina and
+has a ten-second cooldown.
+
+Arrows, bolts and thrown weapons fly in an arc and hit on contact. They can
+stick in flesh and wood, or glance off or break against hard surfaces. A
+raised shield blocks only the missiles that strike it. Embedded missiles
+remain in corpses and dropped shields. You can recover them from the corpse
+or pull them out of the shield. Picking up the shield also takes any
+missiles still lodged in it.
 
 Thrown weapons use the right-hand preparation, hold and release from Dark
 Messiah's dagger throw. Darts and throwing stars use their own models and
@@ -88,8 +109,8 @@ Arrows and thrown weapons leave a small blood mark on the NPC surface they hit.
 Regular hits deal double damage to the head, normal damage to the torso, and
 65% damage to the limbs.
 
-This branch uses **Dark Messiah import recipe 26**. Its launcher asks to reimport
-older data. See `CHANGELOG.md` for the other unreleased changes.
+This branch uses **Dark Messiah import recipe 33**. The published 0.2.1
+packages use recipe 4. See the [changelog](CHANGELOG.md) for other changes.
 
 ## Requirements
 
@@ -117,15 +138,39 @@ folder together; Qt and Boost are bundled.
 ## First run
 
 1. The launcher opens the installation wizard. Choose your Morrowind folder.
-2. Open the Dark Messiah page. The launcher finds a Steam installation of Dark Messiah by itself;
-   otherwise choose its folder. Steam VPK archives, older GCF archives (including those
-   inside `mm/`) and an already extracted `mm/` folder are supported. VPK directory
-   archives may have any name ending in `_dir.vpk`; Steam depot names are not required.
-3. Press Play. The first time, the launcher imports Dark Messiah's animations, sounds and textures
-   (about half a minute) and then starts the game.
+2. Open the **Dark Messiah** page. The launcher looks for the Steam
+   single-player installation. If it cannot find it, use **Browse** to select
+   the game folder. The importer accepts Steam VPK archives, older GCF archives
+   (including archives inside `mm/`) and extracted `mm/` resources. VPK
+   directory archives may have any name ending in `_dir.vpk`.
+3. Press **Play** and select **Import and play** when prompted. The launcher
+   builds the animation, sound and texture data in about a minute, then starts
+   the game.
 
 Settings, saves and the imported data are kept apart from OpenMW's: in `~/.config/brutalmorrowind`
 and `~/.local/share/brutalmorrowind` on Linux, in `Documents\My Games\Brutal Morrowind` on Windows.
+
+### Updating the Dark Messiah import
+
+Each build loads the completed import for its own recipe from
+`dm-assets/<recipe>` inside the user's data folder. When the launcher finds
+an older import, choose **Import and play** on the next launch or **Import**
+on the **Dark Messiah** page. After a successful import, the launcher removes
+older recipe folders from that profile. If you choose **Play without**, the
+game uses Morrowind's animations and switches off features that require Dark
+Messiah assets.
+
+To import from a terminal on Linux, run the importer from the package you plan
+to play. Replace the example game paths with your own.
+
+```sh
+recipe=$(./brutalmorrowind-import --recipe)
+./brutalmorrowind-import \
+  --dark-messiah "/path/to/Dark Messiah Might and Magic Single Player" \
+  --morrowind "/path/to/Morrowind/Data Files" \
+  --output "${XDG_DATA_HOME:-$HOME/.local/share}/brutalmorrowind/dm-assets/$recipe" \
+  --progress
+```
 
 ## FAQ
 
@@ -147,7 +192,8 @@ It runs just like the normal OpenMW engine. Dark Messiah files are only used as 
 
 You need your own installed copy of the game. Animations and resources from Dark Messiah are not included in this repository for obvious legal reasons.
 
-The mod will automatically import all the necessary resources from the game files on startup.
+On the first launch, select **Import and play** to build the required data
+from your installed games.
 
 ### 4. Why do you need these engine modifications? Wasn't Lua scripting enough?
 
@@ -185,9 +231,9 @@ Keep that in mind.
 
 ### 9. Is the magic system also changed? Do you have any plans for magic?
 
-Currently, only melee combat has been implemented (swords, shields, daggers, and staves).
-
-Even two-handed swords still use Morrowind's original animations because there were no suitable animations for two-handed weapons in Dark Messiah.
+Melee and ranged combat use the new animations and rules, including
+first-person two-handed weapon motion. Magic uses Morrowind's spellcasting
+rules.
 
 ### 10. I only want ragdoll physics / FPV / (something else) from the mod, but I don't want the other features. Is that possible?
 
