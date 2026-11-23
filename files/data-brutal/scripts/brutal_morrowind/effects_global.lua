@@ -23,7 +23,7 @@ engineHandlers = {
 },
 eventHandlers = {
     BrutalWeaponBlood = function(data)
-        if not (settings.get('weaponBlood') or settings.get('worldBlood'))
+        if not settings.get('weaponBlood')
             or type(world.addBrutalWeaponBlood) ~= 'function' then return end
         local attacker, victim, player = data.attacker, data.victim, world.players[1]
         if not attacker or not attacker:isValid() or not victim or not victim:isValid() or not victim.cell
@@ -31,7 +31,7 @@ eventHandlers = {
         local connected = victim.cell == player.cell or (victim.cell.isExterior and player.cell.isExterior)
         if not connected or (victim.position - player.position):length() > 6000 then return end
         world.addBrutalWeaponBlood(attacker, victim, data.position, {
-            kind = data.kind, power = data.power == true, direction = data.direction, weapon = data.weapon,
+            kind = data.kind, power = data.power == true, weapon = data.weapon,
         })
     end,
     BrutalRestoreBloodDecals = function(data)

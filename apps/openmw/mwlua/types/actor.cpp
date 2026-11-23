@@ -23,6 +23,7 @@
 #include "apps/openmw/mwmechanics/drawstate.hpp"
 #include "apps/openmw/mwphysics/raycasting.hpp"
 #include "apps/openmw/mwrender/animation.hpp"
+#include "apps/openmw/mwrender/brutalblood.hpp"
 #include "apps/openmw/mwrender/camera.hpp"
 #include "apps/openmw/mwrender/npcanimation.hpp"
 #include "apps/openmw/mwworld/class.hpp"
@@ -1502,6 +1503,17 @@ namespace MWLua
                 sourceType = MWMechanics::DamageSourceType::Ranged;
             else if (sourceTypeStr == "magic")
                 sourceType = MWMechanics::DamageSourceType::Magical;
+            const bool physical = sourceType == MWMechanics::DamageSourceType::Melee
+                || sourceType == MWMechanics::DamageSourceType::Ranged;
+            const auto kind = options.get_or<std::string_view>("brutalAttackType", {});
+            using Impact = MWRender::BrutalBlood::Impact;
+            const Impact impact = sourceType == MWMechanics::DamageSourceType::Ranged || kind == "thrust"
+                ? Impact::Puncture : kind == "slash" ? Impact::Slash : Impact::Chop;
+            osg::Vec3f impactDirection;
+            if (const auto value = options.get<sol::optional<Misc::FiniteVec3f>>("brutalImpactDirection"))
+                impactDirection = *value;
+            else if (const auto aim = options.get<sol::optional<Misc::FiniteVec3f>>("brutalAimDirection"))
+                impactDirection = *aim;
             std::string_view ammoId = options.get_or<std::string_view>("ammo", {});
             ESM::RefId weaponId = ESM::RefId::deserializeText(ammoId);
             if (weaponId.empty())
@@ -1518,10 +1530,11 @@ namespace MWLua
                 [self = Object(self), damages = std::move(damageCpp),
                     attacker = options.get<sol::optional<Object>>("attacker"), weaponId,
                     successful = options.get<bool>("successful"), sourceType = sourceType, lethalVelocity, lethalPoint,
+                    worldBlood = physical && !options.get_or("brutalBlocked", false), impact, impactDirection,
+                    powered = options.get_or("brutalPowered", false),
                     attackId = options.get_or<uint64_t>("brutalAttackId", 0),
                     lua = context.mLua, manager = context.mLuaManager] {
                     MWWorld::Ptr attackerPtr;
-                    MWWorld::Ptr weaponPtr;
                     if (attacker)
                         attackerPtr = attacker->ptrOrEmpty();
                     const auto target = self.ptrOrEmpty();
@@ -1530,8 +1543,18 @@ namespace MWLua
                     const bool aliveBefore = !stats.isDead();
                     const float healthBefore = stats.getHealth().getCurrent();
                     target.getClass().onHit(target, damages, weaponId, attackerPtr, successful, sourceType);
-                    if (lethalVelocity && aliveBefore && stats.isDead()
-                        && healthBefore > stats.getHealth().getCurrent()
+                    const float healthDamage = std::max(0.f, healthBefore - stats.getHealth().getCurrent());
+                    if (worldBlood && successful && aliveBefore && healthDamage > 0.f)
+                    {
+                        if (auto* blood = MWRender::BrutalBlood::get())
+                        {
+                            const auto point = lethalPoint.value_or(
+                                target.getRefData().getPosition().asVec3() + osg::Vec3f(0.f, 0.f, 50.f));
+                            blood->hit(target, attackerPtr, point, impactDirection, impact, powered, stats.isDead(),
+                                healthDamage);
+                        }
+                    }
+                    if (lethalVelocity && aliveBefore && stats.isDead() && healthDamage > 0.f
                         && (target.getType() == ESM::REC_NPC_ || MWPhysics::findCreatureRig(target))
                         && target != MWMechanics::getPlayer())
                     {
@@ -1565,7 +1588,7 @@ namespace MWLua
                             receipt["attackId"] = attackId;
                             receipt["aliveBefore"] = aliveBefore;
                             receipt["deadAfter"] = stats.isDead();
-                            receipt["actualHealthDamage"] = std::max(0.f, healthBefore-stats.getHealth().getCurrent());
+                            receipt["actualHealthDamage"] = healthDamage;
                             manager->sendLocalEvent(target, "BrutalHitApplied", receipt);
                         });
                 },

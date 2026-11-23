@@ -158,6 +158,9 @@ input.registerTriggerHandler('ToggleWeapon', async:callback(function()
     if not combatAllowed() then return end
     if Actor.getStance(self) == Actor.STANCE.Weapon then
         Actor.setStance(self, Actor.STANCE.Nothing)
+        if Actor.getStance(self) == Actor.STANCE.Nothing then
+            Player._requestWeaponWipe(self)
+        end
     elseif Player.getControlSwitch(self, Player.CONTROL_SWITCH.Fighting) then
         Actor.setStance(self, Actor.STANCE.Weapon)
     end

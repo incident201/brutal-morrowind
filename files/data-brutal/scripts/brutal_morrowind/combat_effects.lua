@@ -184,12 +184,11 @@ interface.onHit = function(attack)
             burst('sparks', attack.hitPos, attack)
         end
         if healthDamage > 0 and not attack.brutalBlocked and attack.weapon and attack.attacker
-            and attack.attacker:isValid() and (settings.get('weaponBlood') or settings.get('worldBlood')) then
-            -- Blood that stays: on the weapon, and flung or dripping onto the floor and walls.
+            and attack.attacker:isValid() and settings.get('weaponBlood') then
             core.sendGlobalEvent('BrutalWeaponBlood', {
                 attacker = attack.attacker, victim = self, weapon = attack.weapon,
                 position = attack.hitPos or (self.position + util.vector3(0, 0, 80)),
-                direction = direction(attack), kind = attack.brutalAttackType or '',
+                kind = attack.brutalAttackType or '',
                 power = attack.brutalPowered or false,
             })
         end

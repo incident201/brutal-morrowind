@@ -44,6 +44,7 @@
 #include <components/sceneutil/positionattitudetransform.hpp>
 
 #include "../mwrender/animation.hpp"
+#include "../mwrender/brutalblood.hpp"
 #include "../mwrender/camera.hpp"
 #include "../mwrender/npcanimation.hpp"
 
@@ -83,6 +84,7 @@ namespace
     const std::string sBackstabOut = "brutal_backstab_out";
     const std::string sBackstabVictim = "brutal_backstabbed";
     constexpr std::string_view sBowKick = "brutal_npc_bow_kick";
+    const std::string sSwordWipe = "brutal_sword_wipe";
 
     constexpr int sBackstabGround = MWPhysics::CollisionType_World | MWPhysics::CollisionType_Door
         | MWPhysics::CollisionType_HeightMap;
@@ -530,6 +532,7 @@ namespace MWMechanics
 
     void CharacterController::resetCurrentWeaponState()
     {
+        cancelBrutalWeaponWipe();
         cancelGroundFinisher();
         cancelBackstab(false);
         clearStateAnimation(mCurrentWeapon);
@@ -1322,6 +1325,9 @@ namespace MWMechanics
 
             if (soundgen == "left" || soundgen == "right")
             {
+                if (mPtr != getPlayer())
+                    if (auto* blood = MWRender::BrutalBlood::get())
+                        blood->queueStep(mPtr, soundgen == "left");
                 // The player's Dark Messiah steps follow the leg cycle, not the arms' clip.
                 if (mPtr == getPlayer() && BrutalFootsteps::available())
                     return;
@@ -2499,8 +2505,81 @@ namespace MWMechanics
         }
     }
 
+    ESM::RefNum CharacterController::getWeaponWipeItem() const
+    {
+        if (mWeaponType != ESM::Weapon::LongBladeOneHand || mUpperBodyState != UpperBodyState::WeaponEquipped
+            || !brutalDmFirstPerson() || !Settings::game().mBrutalWeaponBlood || mWeapon.isEmpty()
+            || mInJump || isKnockedDown() || isKnockedOut() || isRecovery() || isScriptedAnimPlaying()
+            || mBrutalBlock != BrutalBlock::None || mBrutalCombo != BrutalCombo::None
+            || mGroundFinisher || mBackstab.mPhase != BrutalBackstabPhase::None
+            || getAttackingOrSpell() || !mAnimation->hasAnimation(sSwordWipe)
+            || mAnimation->isPlaying("brutal_kick1h") || mAnimation->isPlaying("brutal_kick1h_low"))
+            return {};
+
+        const auto world = MWBase::Environment::get().getWorld();
+        const auto& stats = mPtr.getClass().getCreatureStats(mPtr);
+        if (stats.getDrawState() != DrawState::Nothing || stats.isDead() || stats.mBrutalClinchActive
+            || stats.mBrutalCarryingObject || stats.mBrutalSlidePhase != 0 || !world->isFirstPerson()
+            || !world->isOnGround(mPtr) || world->isSwimming(mPtr) || world->isFlying(mPtr)
+            || world->getPlayer().isInCombat())
+            return {};
+
+        const auto& inventory = mPtr.getClass().getInventoryStore(mPtr);
+        const auto right = inventory.getSlot(MWWorld::InventoryStore::Slot_CarriedRight);
+        if (right == inventory.end() || *right != mWeapon)
+            return {};
+        if (inventory.getSlot(MWWorld::InventoryStore::Slot_CarriedLeft) != inventory.end())
+            return {};
+        return mWeapon.getCellRef().getRefNum();
+    }
+
+    bool CharacterController::updateBrutalWeaponWipe(bool requested)
+    {
+        if (!requested && !mBrutalWipeWeapon.isSet())
+            return false;
+        const auto item = getWeaponWipeItem();
+        if (mBrutalWipeWeapon.isSet())
+        {
+            if (item == mBrutalWipeWeapon && mAnimation->isPlaying(sSwordWipe))
+                return true;
+            cancelBrutalWeaponWipe();
+            return false;
+        }
+
+        auto* blood = MWRender::BrutalBlood::get();
+        auto* animation = dynamic_cast<MWRender::NpcAnimation*>(mAnimation);
+        if (!animation || !blood || !blood->isBloody(item))
+            return false;
+
+        MWRender::Animation::AnimPriority priority = Priority_Weapon;
+        priority[MWRender::BoneGroup_LowerBody] = Priority_WeaponLowerBody;
+        mBrutalWipeWeapon = item;
+        playBlendedAnimation(sSwordWipe, priority, MWRender::BlendMask_All, true, 1.f, "start", "stop", 0.f, 0);
+        if (mAnimation->isPlaying(sSwordWipe))
+        {
+            animation->setSwordWipeItem(item);
+            return true;
+        }
+        cancelBrutalWeaponWipe();
+        return false;
+    }
+
+    void CharacterController::cancelBrutalWeaponWipe()
+    {
+        if (!mBrutalWipeWeapon.isSet())
+            return;
+        mBrutalWipeWeapon = {};
+        if (auto* animation = dynamic_cast<MWRender::NpcAnimation*>(mAnimation))
+            animation->setSwordWipeItem({});
+        mAnimation->disable(sSwordWipe);
+    }
+
     bool CharacterController::updateWeaponState()
     {
+        if (mPtr == getPlayer()
+            && updateBrutalWeaponWipe(MWBase::Environment::get().getWorld()->getPlayer().takeWeaponWipeRequest()))
+            return false;
+
         // Source's Use timestamp belongs to the input, not the currently
         // playing attack/parry layer. A guard may cancel a windup without
         // resetting the age of the still-held attack button.
@@ -3866,6 +3945,13 @@ namespace MWMechanics
                                 cls.skillUsageSucceeded(mPtr, ESM::Skill::Acrobatics, ESM::Skill::Acrobatics_Fall);
                         }
                     }
+
+                    if (onground && !inwater)
+                        if (auto* blood = MWRender::BrutalBlood::get())
+                        {
+                            blood->queueStep(mPtr, true);
+                            blood->queueStep(mPtr, false);
+                        }
 
                     if (mPtr.getClass().isNpc()
                         && !BrutalFootsteps::play(
@@ -5677,15 +5763,21 @@ namespace MWMechanics
         mBrutalStepGait = static_cast<int>(gait);
         const float right = gait == Gait::Walk ? .292f : .333f;
         const float left = gait == Gait::Walk ? .792f : .75f;
+        auto* blood = MWRender::BrutalBlood::get();
+        const auto contact = [&](bool isLeft) {
+            if (blood)
+                blood->queueStep(mPtr, isLeft);
+            BrutalFootsteps::play(mPtr, isLeft, false, gait);
+        };
         float from = mBrutalStepPhase;
         float to = from + duration / cycle;
         while (true)
         {
             const float end = std::min(to, 1.f);
             if (from < right && right <= end)
-                BrutalFootsteps::play(mPtr, false, false, gait);
+                contact(false);
             if (from < left && left <= end)
-                BrutalFootsteps::play(mPtr, true, false, gait);
+                contact(true);
             if (to < 1.f)
                 break;
             from = 0.f;

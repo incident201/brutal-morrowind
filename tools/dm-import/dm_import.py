@@ -29,9 +29,9 @@ ANIMATION = ROOT / 'scripts/animation'
 CREATURES = ROOT / 'scripts/creatures'
 EFFECTS = ROOT / 'scripts/effects'
 CALIBRATION = HERE / 'calibration'
-RECIPE_VERSION = 27  # Misc::DarkMessiahData::sRecipe in the engine must match.
+RECIPE_VERSION = 29  # Misc::DarkMessiahData::sRecipe in the engine must match.
 # Conversion steps per import, for progress reporting.
-TOTAL_STEPS = 45
+TOTAL_STEPS = 46
 KEYFRAMES = ('.kf', '.yaml')
 # Steps run side by side, one core each; the matrices involved are 4x4.
 ENVIRONMENT = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1')
@@ -545,6 +545,8 @@ class Importer:
                          '--native-animation', self.meshes / 'xbase_anim.1st.kf')
                 self.run('Spear thrusts', ANIMATION / 'spear_dm.py', '--arms', arms,
                          '--body', self.stage('body-jump'))
+                self.run('Sword cleaning', ANIMATION / 'import_sword_wipe.py', *self.source,
+                         '--camera-contract', self.contract, '--arms', arms, '--calibration', CALIBRATION)
                 self.run('Footstep keys', ANIMATION / 'add_footstep_keys.py', self.stage('npc'))
             except BaseException:
                 # One failed or cancelled step stops the others instead of waiting for them.

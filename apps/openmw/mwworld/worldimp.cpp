@@ -1514,12 +1514,12 @@ namespace MWWorld
             // this path; neither can produce another wound burst.
             try
             {
+                animation->startCutBloodFlow();
                 const auto surfaces = animation->getDecapitationSurfacesForAudit();
                 if (surfaces.count("lowerCenter") && surfaces.count("lowerNormal")
                     && surfaces.count("upperCenter") && surfaces.count("upperNormal"))
                     mRendering->spawnBrutalDecapitation(surfaces.at("lowerCenter"), surfaces.at("lowerNormal"),
                         surfaces.at("upperCenter"), surfaces.at("upperNormal"), cutVelocity);
-                animation->startCutBloodFlow();
             }
             catch (const std::exception& error)
             {
@@ -1579,11 +1579,11 @@ namespace MWWorld
         if (freshCut)
             try
             {
+                animation->startBisectionBloodFlow();
                 if (surfaces.count("lowerCenter") && surfaces.count("lowerNormal")
                     && surfaces.count("upperCenter") && surfaces.count("upperNormal"))
                     mRendering->spawnBrutalDecapitation(surfaces.at("lowerCenter"), surfaces.at("lowerNormal"),
                         surfaces.at("upperCenter"), surfaces.at("upperNormal"), velocity);
-                animation->startBisectionBloodFlow();
             }
             catch (const std::exception& error)
             { Log(Debug::Warning) << "Could not emit bisection blood: " << error.what(); }
@@ -1638,6 +1638,7 @@ namespace MWWorld
         if (fresh)
             try
             {
+                animation->startLimbSeveringBloodFlow();
                 const auto surfaces = animation->getLimbSeveringSurfacesForAudit();
                 for (const auto& [bit, prefix] : std::array<std::pair<unsigned, std::string>, 4>{{
                     {1u,"leftLeg"}, {2u,"rightLeg"}, {4u,"leftArm"}, {8u,"rightArm"}}})
@@ -1649,7 +1650,6 @@ namespace MWWorld
                             surfaces.at(prefix+"StumpNormal"), surfaces.at(prefix+"FragmentCenter"),
                             surfaces.at(prefix+"FragmentNormal"), velocity);
                 }
-                animation->startLimbSeveringBloodFlow();
             }
             catch (const std::exception& error)
             { Log(Debug::Warning) << "Could not emit severed-limb blood: " << error.what(); }

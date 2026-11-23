@@ -391,29 +391,23 @@ namespace MWLua
                 }
             },"RestoreNpcBloodDecals");
         };
-        // Blood that outlives a hit on living flesh: on the attacker's weapon and,
-        // flung or dripping, on the nearby floor and walls.
+        // Mark the weapon item that made contact with living flesh.
         api["addBrutalWeaponBlood"] = [context](const GObject& attacker, const GObject& victim,
                                           Misc::FiniteVec3f position, sol::optional<sol::table> options) {
             std::string kind;
             bool power = false;
-            osg::Vec3f direction(0, 0, 0);
             std::optional<GObject> weapon;
             if (options)
             {
                 kind = options->get<sol::optional<std::string>>("kind").value_or("");
                 power = options->get<sol::optional<bool>>("power").value_or(false);
-                if (const auto value = options->get<sol::optional<osg::Vec3f>>("direction"))
-                    if (std::isfinite(value->x()) && std::isfinite(value->y()) && std::isfinite(value->z()))
-                        direction = *value;
                 if (const auto value = options->get<sol::optional<GObject>>("weapon"))
                     weapon = *value;
             }
-            if (!Settings::game().mBrutalEnabled
-                || (!Settings::game().mBrutalWeaponBlood && !Settings::game().mBrutalWorldBlood))
+            if (!Settings::game().mBrutalEnabled || !Settings::game().mBrutalWeaponBlood)
                 return;
             context.mLuaManager->addAction([attacker, victim, contact = osg::Vec3f(position), kind = std::move(kind),
-                                               power, direction, weapon] {
+                                               power, weapon] {
                 auto* store = MWRender::BrutalBlood::get();
                 const auto source = attacker.ptrOrEmpty(), target = victim.ptrOrEmpty();
                 if (!store || source.isEmpty() || target.isEmpty() || !target.isInCell() || !source.isInCell())
@@ -429,42 +423,17 @@ namespace MWLua
                 if (bloodType != 0 || (contact - target.getRefData().getPosition().asVec3()).length() > 400.f)
                     return;
                 const auto world = MWBase::Environment::get().getWorld();
-                if (Settings::game().mBrutalWeaponBlood)
-                    if (auto* npc = dynamic_cast<MWRender::NpcAnimation*>(world->getAnimation(source)))
-                    {
-                        bool left = false;
-                        if (weapon && source.getClass().hasInventoryStore(source))
-                        {
-                            auto& inventory = source.getClass().getInventoryStore(source);
-                            const auto it = inventory.getSlot(MWWorld::InventoryStore::Slot_CarriedLeft);
-                            const auto item = weapon->ptrOrEmpty();
-                            left = it != inventory.end() && !item.isEmpty() && *it == item;
-                        }
-                        npc->addWeaponBlood(contact, kind, power, left);
-                    }
-                if (!Settings::game().mBrutalWorldBlood)
-                    return;
-                const auto* cell = target.getCell()->getCell();
-                const std::string worldspace = cell->getWorldSpace().serializeText();
-                const bool exterior = cell->isExterior() || cell->isQuasiExterior();
-                const float scale = power ? 1.4f : 1.f;
-                // Blood runs down onto the floor at the victim's feet.
-                if (store->random01() < (power ? 1.f : .7f))
-                    store->dropUnder(contact, (26.f + 26.f * store->random01()) * scale, worldspace, exterior);
-                // And is flung on along the blow onto whatever is behind.
-                osg::Vec3f travel = direction;
-                if (travel.normalize() < 1e-3f)
-                    travel = contact - source.getRefData().getPosition().asVec3();
-                travel.z() = 0.f;
-                if (travel.normalize() < 1e-3f)
-                    return;
-                const int throws = power ? 3 : kind == "thrust" ? 1 : 2;
-                for (int i = 0; i < throws; ++i)
+                if (auto* npc = dynamic_cast<MWRender::NpcAnimation*>(world->getAnimation(source)))
                 {
-                    const osg::Vec3f spread(store->random01() - .5f, store->random01() - .5f,
-                        -.15f - .35f * store->random01());
-                    store->throwSplat(contact, travel + spread, 260.f, (16.f + 24.f * store->random01()) * scale,
-                        worldspace, exterior);
+                    bool left = false;
+                    if (weapon && source.getClass().hasInventoryStore(source))
+                    {
+                        auto& inventory = source.getClass().getInventoryStore(source);
+                        const auto it = inventory.getSlot(MWWorld::InventoryStore::Slot_CarriedLeft);
+                        const auto item = weapon->ptrOrEmpty();
+                        left = it != inventory.end() && !item.isEmpty() && *it == item;
+                    }
+                    npc->addWeaponBlood(contact, kind, power, left);
                 }
             });
         };

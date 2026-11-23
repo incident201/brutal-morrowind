@@ -8,6 +8,7 @@
 #include "../mwbase/environment.hpp"
 #include "../mwbase/world.hpp"
 #include "../mwmechanics/actorutil.hpp"
+#include "../mwmechanics/creaturestats.hpp"
 #include "../mwworld/class.hpp"
 #include "decapitation.hpp"
 #include "bisection.hpp"
@@ -17,6 +18,7 @@
 #include "renderprewarm.hpp"
 #include "vismask.hpp"
 #include <algorithm>
+#include <bit>
 #include <chrono>
 #include <components/debug/debuglog.hpp>
 #include <components/esm3/loadarmo.hpp>
@@ -26,6 +28,7 @@
 #include <components/sceneutil/decalprojector.hpp>
 #include <components/sceneutil/depth.hpp>
 #include <components/sceneutil/positionattitudetransform.hpp>
+#include <components/sceneutil/skeleton.hpp>
 #include <components/sceneutil/texturetype.hpp>
 #include <components/settings/values.hpp>
 #include <components/vfs/manager.hpp>
@@ -343,7 +346,11 @@ namespace MWRender
 
     void NpcAnimation::startCutBloodFlow()
     {
-        if (!mDecapitation || !Settings::game().mNpcBloodDecals || !Settings::game().mBrutalImpactEffects)
+        if (!mDecapitation)
+            return;
+        if (auto* blood = BrutalBlood::get())
+            blood->queueCutPool(mPtr, BloodPoolOutlet::Neck);
+        if (!Settings::game().mNpcBloodDecals || !Settings::game().mBrutalImpactEffects)
             return;
         clearCutBloodFlow();
         mCutBloodFlow = std::make_shared<CutBloodFlow>();
@@ -352,7 +359,14 @@ namespace MWRender
 
     void NpcAnimation::startBisectionBloodFlow()
     {
-        if (!mBisection || !Settings::game().mNpcBloodDecals || !Settings::game().mBrutalImpactEffects)
+        if (!mBisection)
+            return;
+        if (auto* blood = BrutalBlood::get())
+        {
+            blood->queueCutPool(mPtr, BloodPoolOutlet::LowerWaist);
+            blood->queueCutPool(mPtr, BloodPoolOutlet::UpperWaist);
+        }
+        if (!Settings::game().mNpcBloodDecals || !Settings::game().mBrutalImpactEffects)
             return;
         clearCutBloodFlow();
         mCutBloodFlow = std::make_shared<CutBloodFlow>();
@@ -360,14 +374,63 @@ namespace MWRender
         updateCutBloodFlow(0);
     }
 
+    namespace
+    {
+        // The pairs follow LimbSeveringGeometry's mask order, with the body side first.
+        constexpr std::array sLimbPoolOutlets{
+            std::pair{ BloodPoolOutlet::LeftLegStump, BloodPoolOutlet::LeftLegFragment },
+            std::pair{ BloodPoolOutlet::RightLegStump, BloodPoolOutlet::RightLegFragment },
+            std::pair{ BloodPoolOutlet::LeftArmStump, BloodPoolOutlet::LeftArmFragment },
+            std::pair{ BloodPoolOutlet::RightArmStump, BloodPoolOutlet::RightArmFragment },
+        };
+    }
+
     void NpcAnimation::startLimbSeveringBloodFlow()
     {
-        if (!mLimbSevering || !Settings::game().mNpcBloodDecals || !Settings::game().mBrutalImpactEffects)
+        if (!mLimbSevering)
+            return;
+        if (auto* blood = BrutalBlood::get())
+            for (unsigned i = 0; i < sLimbPoolOutlets.size(); ++i)
+                if (mLimbSevering->mask & (1u << i))
+                {
+                    const auto [stump, fragment] = sLimbPoolOutlets[i];
+                    blood->queueCutPool(mPtr, stump);
+                    blood->queueCutPool(mPtr, fragment);
+                }
+        if (!Settings::game().mNpcBloodDecals || !Settings::game().mBrutalImpactEffects)
             return;
         clearCutBloodFlow();
         mCutBloodFlow = std::make_shared<CutBloodFlow>();
         mCutBloodFlow->limbs = true;
         updateCutBloodFlow(0);
+    }
+
+    std::optional<CutPoolPoint> NpcAnimation::getCutPoolPoint(BloodPoolOutlet outlet) const
+    {
+        const auto sample = [&](std::string_view bone, const osg::Vec3f& center, float radius)
+            -> std::optional<CutPoolPoint> {
+            if (const auto matrix = getBoneWorldMatrix(bone))
+                return CutPoolPoint{ center * *matrix, radius };
+            return std::nullopt;
+        };
+        if (outlet == BloodPoolOutlet::Neck && mDecapitation)
+            return sample("Bip01 Neck", mDecapitation->surfaceCenters[0], mDecapitation->surfaceRadius);
+        if ((outlet == BloodPoolOutlet::LowerWaist || outlet == BloodPoolOutlet::UpperWaist) && mBisection)
+        {
+            const bool upper = outlet == BloodPoolOutlet::UpperWaist;
+            return sample(upper ? "Bip01 Spine1" : "Bip01 Pelvis", mBisection->surfaceCenters[upper],
+                mBisection->surfaceRadius);
+        }
+        if (mLimbSevering)
+            for (const auto& cut : mLimbSevering->cuts)
+            {
+                const auto [stump, fragment] = sLimbPoolOutlets[std::countr_zero(cut.bit)];
+                if (outlet == stump)
+                    return sample(cut.parent, cut.surfaceCenters[0], cut.surfaceRadii[0]);
+                if (outlet == fragment)
+                    return sample(cut.child, cut.surfaceCenters[1], cut.surfaceRadii[1]);
+            }
+        return std::nullopt;
     }
 
     void NpcAnimation::updateCutBloodFlow(float dt)
@@ -997,6 +1060,133 @@ namespace MWRender
             std::vector<const osg::StateSet*> states;
             bool operator==(const WeaponLooks&) const = default;
         };
+
+        struct WipeSurface
+        {
+            std::string model;
+            unsigned ordinal;
+            std::uint64_t fingerprint;
+            std::vector<osg::Vec3f> vertices;
+            std::vector<SceneUtil::DecalProjector::Triangle> triangles;
+        };
+
+        struct WipeMark
+        {
+            BrutalBlood::WeaponMark mark;
+            std::vector<float> distances;
+        };
+
+        struct SwordWipe
+        {
+            ESM::RefNum item;
+            osg::observer_ptr<osg::Node> part;
+            std::vector<WipeSurface> surfaces;
+            std::vector<WipeMark> original;
+            unsigned revision = 0;
+            float length = 0.f;
+            float time = -1.f;
+            float cleanedTo = -std::numeric_limits<float>::infinity();
+
+            void captureMarks(const BrutalBlood::ItemBlood& blood)
+            {
+                original.clear();
+                revision = blood.revision;
+                cleanedTo = -std::numeric_limits<float>::infinity();
+                for (const auto& mark : blood.marks)
+                {
+                    auto& sample = original.emplace_back(WipeMark{ mark, {} });
+                    for (const auto& surface : surfaces)
+                    {
+                        if (surface.model != mark.model || surface.ordinal != mark.ordinal
+                            || surface.fingerprint != mark.fingerprint)
+                            continue;
+                        sample.distances.reserve(mark.anchors.size());
+                        for (const auto& anchor : mark.anchors)
+                        {
+                            if (std::ranges::any_of(anchor.indices,
+                                    [&](unsigned index) { return index >= surface.vertices.size(); }))
+                            {
+                                sample.distances.clear();
+                                break;
+                            }
+                            float y = 0.f;
+                            for (unsigned i = 0; i < 3; ++i)
+                                y += surface.vertices[anchor.indices[i]].y() * anchor.weights[i];
+                            sample.distances.push_back(y);
+                        }
+                        break;
+                    }
+                }
+            }
+
+            osg::Vec3f bladeCentre(float position) const
+            {
+                // The mesh is usually straight, but a saber's cross-section can
+                // be offset sideways. Follow its middle at the hand's position.
+                const float y = std::min(position, length - .04f);
+                osg::Vec3f low, high;
+                bool found = false;
+                for (const auto& surface : surfaces)
+                    for (const auto& triangle : surface.triangles)
+                        for (unsigned i = 0; i < 3; ++i)
+                        {
+                            const auto& a = surface.vertices[triangle[i]];
+                            const auto& b = surface.vertices[triangle[(i + 1) % 3]];
+                            if ((a.y() <= y) == (b.y() <= y))
+                                continue;
+                            const osg::Vec3f point = a + (b - a) * ((y - a.y()) / (b.y() - a.y()));
+                            if (!found)
+                                low = high = point;
+                            found = true;
+                            for (const unsigned axis : { 0u, 2u })
+                            {
+                                low[axis] = std::min(low[axis], point[axis]);
+                                high[axis] = std::max(high[axis], point[axis]);
+                            }
+                        }
+                return { (low.x() + high.x()) * .5f, position, (low.z() + high.z()) * .5f };
+            }
+        };
+
+        Anchors clipWipedMark(const WipeMark& original, float cleanTo, bool trimEdges = true)
+        {
+            Anchors result;
+            const auto& anchors = original.mark.anchors;
+            for (std::size_t base = 0; base < anchors.size(); base += 3)
+            {
+                std::array<SceneUtil::SurfaceDecals::Anchor, 4> polygon;
+                std::size_t count = 0;
+                const auto& y = original.distances;
+                if (!trimEdges && std::min({ y[base], y[base + 1], y[base + 2] }) < cleanTo)
+                    continue;
+                for (unsigned k = 0; k < 3; ++k)
+                {
+                    const auto a = base + k, b = base + (k + 1) % 3;
+                    const float da = y[a] - cleanTo, db = y[b] - cleanTo;
+                    if (da >= 0.f)
+                        polygon[count++] = anchors[a];
+                    if ((da < 0.f && db > 0.f) || (da > 0.f && db < 0.f))
+                    {
+                        const float fraction = da / (da - db);
+                        polygon[count++] = { anchors[a].indices,
+                            anchors[a].weights + (anchors[b].weights - anchors[a].weights) * fraction,
+                            anchors[a].uv + (anchors[b].uv - anchors[a].uv) * fraction };
+                    }
+                }
+                for (std::size_t i = 1; i + 1 < count; ++i)
+                    result.insert(result.end(), { polygon[0], polygon[i], polygon[i + 1] });
+            }
+            // Keep the save and draw limits on pathological, heavily tessellated patches.
+            if (trimEdges && result.size() > BrutalBlood::MaxWeaponMarkVertices)
+                return clipWipedMark(original, cleanTo, false);
+            return result;
+        }
+
+        float easeWipe(float amount)
+        {
+            amount = std::clamp(amount, 0.f, 1.f);
+            return amount * amount * (3.f - 2.f * amount);
+        }
     }
 
     struct NpcAnimation::WeaponBloodView
@@ -1011,9 +1201,57 @@ namespace MWRender
             float nextDrip = 0;
         };
         std::array<Hand, 2> hands;
+        std::optional<SwordWipe> wipe;
         std::uint64_t drips = 0, rebuilds = 0, rejected = 0;
         double lastLength = 0, lastThickness = 0, lastWidth = 0;
         std::size_t lastSides = 0, lastMarks = 0;
+
+        void sync(Hand& view, BrutalBlood& store, const BrutalBlood::ItemBlood* blood, ESM::RefNum key,
+            int partIndex, osg::Node* part, const std::string& model, osg::Node* actor)
+        {
+            WeaponLooks looks;
+            const double now = store.now();
+            if (blood)
+                for (const auto& mark : blood->marks)
+                {
+                    const double age = now - mark.hour + blood->wash;
+                    looks.states.push_back(
+                        store.weaponState(mark.style, BrutalBlood::markFade(age), BrutalBlood::markDry(age)));
+                }
+            const unsigned revision = blood ? blood->revision : ~0u - 1;
+            if (part == view.part && key == view.key && revision == view.revision && looks == view.looks)
+                return;
+
+            std::vector<Surface> surfaces;
+            SurfacesVisitor visitor(surfaces, partIndex, model);
+            visitor.collect(part, actor);
+            for (auto& surface : surfaces)
+                if (auto* marks = surface.marks())
+                    marks->clear();
+            view.attached = 0;
+            if (blood)
+                for (std::size_t i = 0; i < blood->marks.size(); ++i)
+                {
+                    const auto& mark = blood->marks[i];
+                    if (!looks.states[i])
+                        continue;
+                    for (auto& surface : surfaces)
+                        if (surface.ordinal == mark.ordinal && surface.model == mark.model
+                            && surface.fingerprint == mark.fingerprint)
+                        {
+                            if (auto* marks = surface.attach())
+                                if (marks->addPatch(mark.anchors,
+                                        const_cast<osg::StateSet*>(looks.states[i]), Mask_Effect))
+                                    ++view.attached;
+                            break;
+                        }
+                }
+            view.part = part;
+            view.key = key;
+            view.revision = revision;
+            view.looks = std::move(looks);
+            ++rebuilds;
+        }
     };
 
     std::optional<std::pair<osg::Vec3f, osg::Vec3f>> NpcAnimation::getWeaponBladeForBlood(bool left) const
@@ -1262,6 +1500,143 @@ namespace MWRender
         }
     }
 
+    void NpcAnimation::fitSwordWipePose()
+    {
+        constexpr std::string_view group = "brutal_sword_wipe";
+        auto* store = BrutalBlood::get();
+        if (!store || !mWeaponBloodView)
+            return;
+        auto& view = *mWeaponBloodView;
+        if (!mSwordWipeItem.isSet() || !isPlaying(group) || mViewMode != VM_FirstPerson || useFullBodyFirstPerson()
+            || mBodyAwareness || mPtr.getClass().getCreatureStats(mPtr).isDead())
+        {
+            view.wipe.reset();
+            return;
+        }
+
+        const float align = getTextKeyTime("brutal_sword_wipe: align");
+        const float start = getTextKeyTime("brutal_sword_wipe: contact start");
+        const float end = getTextKeyTime("brutal_sword_wipe: contact end");
+        const float release = getTextKeyTime("brutal_sword_wipe: release");
+        const float t = getCurrentTime(group);
+        if (align < 0.f || start <= align || end <= start || release <= end || t < align || t >= release)
+        {
+            view.wipe.reset();
+            return;
+        }
+        auto* part = getWeaponNode();
+        const auto held = heldMeleeWeapon(mPtr, false);
+        if (!part || held.item.isEmpty() || held.item.getCellRef().getRefNum() != mSwordWipeItem)
+            return;
+        const auto key = mSwordWipeItem;
+        auto* blood = store->item(key);
+        const auto paths = part->getParentalNodePaths();
+        if (paths.empty())
+            return;
+        const osg::Matrixf weapon = osg::computeLocalToWorld(paths.front());
+        if (!view.wipe || view.wipe->part.get() != part || view.wipe->item != key || t < view.wipe->time)
+        {
+            if (!blood || blood->marks.empty() || t > end)
+                return;
+            auto& wipe = view.wipe.emplace();
+            wipe.part = part;
+            wipe.item = key;
+            const auto inverse = osg::Matrixf::inverse(weapon);
+            std::vector<Surface> surfaces;
+            SurfacesVisitor visitor(surfaces, ESM::PRT_Weapon, mPartModels[ESM::PRT_Weapon]);
+            visitor.collect(part, mPtr.getRefData().getBaseNode());
+            for (const auto& surface : surfaces)
+            {
+                const auto geometry = posed(surface, [this](std::string_view bone) { return getBoneWorldMatrix(bone); });
+                const auto* vertices = geometry ? dynamic_cast<osg::Vec3Array*>(geometry->getVertexArray()) : nullptr;
+                if (!vertices)
+                    continue;
+                auto& sample = wipe.surfaces.emplace_back(WipeSurface{ surface.model, surface.ordinal, surface.fingerprint,
+                    {}, {} });
+                sample.vertices.reserve(vertices->size());
+                for (const auto& vertex : *vertices)
+                {
+                    const osg::Vec3f point = vertex * inverse;
+                    sample.vertices.push_back(point);
+                    wipe.length = std::max(wipe.length, point.y());
+                }
+                for (const auto& triangle : surface.triangles)
+                    if (std::ranges::all_of(triangle, [&](unsigned index) { return index < vertices->size(); }))
+                        sample.triangles.push_back(triangle);
+            }
+            wipe.captureMarks(*blood);
+        }
+        auto& wipe = *view.wipe;
+        wipe.time = t;
+        if (wipe.length < 8.f || wipe.length > 250.f)
+            return;
+        // Match the reference sweep baked into the imported clip. Only the
+        // difference between that reference and this mesh moves the left arm.
+        constexpr float referenceLength = 60.f;
+        constexpr float bladeStart = .135f;
+        const float fraction = std::lerp(bladeStart, 1.f, easeWipe((t - start) / (end - start)));
+        const float position = fraction * wipe.length;
+        {
+            const float weight = easeWipe((t - align) / (start - align)) * easeWipe((release - t) / (release - end));
+            const auto node = getNodeMap().find("Bip01 L Clavicle");
+            if (node != getNodeMap().end())
+            {
+                const auto clavicle = node->second.get();
+                const auto parentPaths = clavicle->getParentalNodePaths();
+                if (!parentPaths.empty())
+                {
+                    auto parent = parentPaths.front();
+                    parent.pop_back();
+                    const osg::Vec3f delta = wipe.bladeCentre(position) - osg::Vec3f(0.f, fraction * referenceLength, 0.f);
+                    auto matrix = clavicle->getMatrix();
+                    mSwordWipeSourcePose = { clavicle, matrix };
+                    const auto local = weapon * osg::Matrixf::inverse(osg::computeLocalToWorld(parent));
+                    matrix.setTrans(matrix.getTrans() + osg::Matrixf::transform3x3(delta * weight, local));
+                    clavicle->setMatrix(matrix);
+                    if (mSkeleton)
+                        mSkeleton->markDirty();
+                }
+            }
+        }
+        if (t < start || !blood || blood->marks.empty())
+            return;
+        if (blood->revision != wipe.revision)
+            wipe.captureMarks(*blood);
+        const float cleanTo = t >= end ? wipe.length + .05f : position;
+        if (cleanTo <= wipe.cleanedTo)
+            return;
+        const bool changed = std::ranges::any_of(wipe.original, [&](const WipeMark& mark) {
+            if (mark.distances.empty())
+                return false;
+            const auto [minimum, maximum] = std::ranges::minmax(mark.distances);
+            return minimum < cleanTo && maximum >= wipe.cleanedTo;
+        });
+        wipe.cleanedTo = cleanTo;
+        if (!changed)
+            return;
+        std::vector<BrutalBlood::WeaponMark> remaining;
+        remaining.reserve(wipe.original.size());
+        for (const auto& original : wipe.original)
+        {
+            auto mark = original.mark;
+            if (!original.distances.empty())
+                mark.anchors = clipWipedMark(original, cleanTo);
+            if (!mark.anchors.empty())
+                remaining.push_back(std::move(mark));
+        }
+        // Write the clipped anchors to the item itself. If movement, combat or
+        // saving interrupts the animation, the uncleaned side remains intact.
+        blood->marks = std::move(remaining);
+        blood->revision = wipe.revision = store->nextRevision();
+        if (blood->marks.empty())
+        {
+            blood->wash = 0.;
+            blood->dripUntil = 0.f;
+        }
+        view.sync(view.hands[0], *store, blood, key, ESM::PRT_Weapon, part, mPartModels[ESM::PRT_Weapon],
+            mPtr.getRefData().getBaseNode());
+    }
+
     void NpcAnimation::updateWeaponBlood(float dt)
     {
         auto* store = BrutalBlood::get();
@@ -1307,49 +1682,8 @@ namespace MWRender
                 continue;
             }
 
-            WeaponLooks looks;
-            const double now = store->now();
-            if (blood)
-                for (const auto& mark : blood->marks)
-                {
-                    const double age = now - mark.hour + blood->wash;
-                    looks.states.push_back(
-                        store->weaponState(mark.style, BrutalBlood::markFade(age), BrutalBlood::markDry(age)));
-                }
-            const unsigned revision = blood ? blood->revision : ~0u - 1;
-            if (part != view.part || key != view.key || revision != view.revision || !(looks == view.looks))
-            {
-                // A shield in the left hand is never marked: only its surfaces' own marks are cleared.
-                std::vector<Surface> surfaces;
-                SurfacesVisitor visitor(surfaces, partIndex, mPartModels[partIndex]);
-                visitor.collect(part, mPtr.getRefData().getBaseNode());
-                for (auto& surface : surfaces)
-                    if (auto* marks = surface.marks())
-                        marks->clear();
-                view.attached = 0;
-                if (blood)
-                    for (std::size_t i = 0; i < blood->marks.size(); ++i)
-                    {
-                        const auto& mark = blood->marks[i];
-                        if (!looks.states[i])
-                            continue;
-                        for (auto& surface : surfaces)
-                            if (surface.ordinal == mark.ordinal && surface.model == mark.model
-                                && surface.fingerprint == mark.fingerprint)
-                            {
-                                if (auto* marks = surface.attach())
-                                    if (marks->addPatch(mark.anchors,
-                                            const_cast<osg::StateSet*>(looks.states[i]), Mask_Effect))
-                                        ++view.attached;
-                                break;
-                            }
-                    }
-                view.part = part;
-                view.key = key;
-                view.revision = revision;
-                view.looks = std::move(looks);
-                ++mWeaponBloodView->rebuilds;
-            }
+            mWeaponBloodView->sync(view, *store, blood, key, partIndex, part, mPartModels[partIndex],
+                mPtr.getRefData().getBaseNode());
 
             // Fresh blood runs off the blade for a few seconds.
             if (blood && blood->dripUntil > store->realTime() && view.attached
@@ -1365,12 +1699,7 @@ namespace MWRender
                         store->effects()->queueCutBlood("cutdrop", tip, osg::Vec3f(0, 0, -1), .9f);
                         ++mWeaponBloodView->drips;
                         // Some drops reach the floor and stay there.
-                        if (Settings::game().mBrutalWorldBlood && store->random01() < .3f && mPtr.isInCell())
-                        {
-                            const auto* cell = mPtr.getCell()->getCell();
-                            store->dropUnder(tip, 6.f + 6.f * store->random01(),
-                                cell->getWorldSpace().serializeText(), cell->isExterior() || cell->isQuasiExterior());
-                        }
+                        store->drip(mPtr, tip);
                     }
                 }
             }
@@ -1380,7 +1709,8 @@ namespace MWRender
     std::map<std::string, double> NpcAnimation::getWeaponBloodStats() const
     {
         std::map<std::string, double> result{ { "attached", 0 }, { "rebuilds", 0 }, { "drips", 0 },
-            { "rejected", 0 }, { "marks", 0 }, { "length", 0 }, { "hasPart", mObjectParts[ESM::PRT_Weapon] ? 1. : 0. } };
+            { "rejected", 0 }, { "marks", 0 }, { "length", 0 }, { "uvArea", 0 },
+            { "hasPart", mObjectParts[ESM::PRT_Weapon] ? 1. : 0. } };
         if (mWeaponBloodView)
         {
             const auto& view = *mWeaponBloodView;
@@ -1404,8 +1734,18 @@ namespace MWRender
                     result["marks"] = double(blood->marks.size());
                     result["wash"] = blood->wash;
                     double newest = -1e9;
+                    double area = 0.;
                     for (const auto& mark : blood->marks)
+                    {
                         newest = std::max(newest, mark.hour);
+                        for (std::size_t i = 0; i < mark.anchors.size(); i += 3)
+                        {
+                            const auto a = mark.anchors[i + 1].uv - mark.anchors[i].uv;
+                            const auto b = mark.anchors[i + 2].uv - mark.anchors[i].uv;
+                            area += .5 * std::abs(a.x() * b.y() - a.y() * b.x());
+                        }
+                    }
+                    result["uvArea"] = area;
                     if (!blood->marks.empty())
                         result["age"] = store->now() - newest + blood->wash;
                 }

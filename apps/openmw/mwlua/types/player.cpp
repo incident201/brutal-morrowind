@@ -289,6 +289,11 @@ namespace MWLua
         sol::state_view lua = context.sol();
         addJournalEntryBindings(player, lua, journal);
 
+        player["_requestWeaponWipe"] = [](const SelfObject& self) {
+            verifyPlayer(self);
+            MWBase::Environment::get().getWorld()->getPlayer().requestWeaponWipe();
+        };
+
         player["quests"] = [](const Object& object) {
             verifyPlayer(object);
             bool allowChanges = object.isGObject() || object.isSelfObject();

@@ -3,8 +3,10 @@
 
 #include "actoranimation.hpp"
 #include "animation.hpp"
+#include "npcblood.hpp"
 #include "weaponanimation.hpp"
 
+#include <components/esm3/refnum.hpp>
 #include <components/vfs/pathutil.hpp>
 
 #include "../mwworld/inventorystore.hpp"
@@ -259,6 +261,8 @@ namespace MWRender
 
         std::vector<std::pair<osg::observer_ptr<osg::MatrixTransform>, osg::Matrixf>> mClinchSourcePose;
         std::vector<std::pair<osg::observer_ptr<osg::MatrixTransform>, osg::Matrixf>> mBackstabSourcePose;
+        std::pair<osg::observer_ptr<osg::MatrixTransform>, osg::Matrixf> mSwordWipeSourcePose;
+        ESM::RefNum mSwordWipeItem;
         std::optional<std::pair<osg::Vec3f, osg::Vec3f>> mBackstabBlade;
         osg::observer_ptr<osg::Node> mClinchBladeNode;
         osg::Vec3f mClinchBladeRange;
@@ -454,6 +458,7 @@ namespace MWRender
         void startCutBloodFlow();
         void startBisectionBloodFlow();
         void startLimbSeveringBloodFlow();
+        std::optional<CutPoolPoint> getCutPoolPoint(BloodPoolOutlet outlet) const;
         struct SwordClinchGeometry
         {
             bool active = false, fitted = false, clamped = false;
@@ -470,6 +475,8 @@ namespace MWRender
         void restoreTransientPose() override;
         void fitSwordClinchPose(osg::NodeVisitor& visitor);
         void fitBackstabPose(osg::NodeVisitor& visitor);
+        void setSwordWipeItem(ESM::RefNum item) { mSwordWipeItem = item; }
+        void fitSwordWipePose();
         /// With the Dark Messiah bow, keep a nocked arrow between the right fingers and the bow's arrow rest.
         void fitNockedArrow();
         bool canFitSwordClinchPose(NpcAnimation& opponent);

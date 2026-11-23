@@ -284,6 +284,7 @@ namespace MWMechanics
 
         int mWeaponType{ ESM::Weapon::None };
         std::string mCurrentWeapon;
+        ESM::RefNum mBrutalWipeWeapon;
         double mBrutalBowRepeatUntil = -1.;
         bool mBrutalBowRepeatQueued = false;
         bool mBrutalBowFastDraw = false;
@@ -476,6 +477,9 @@ namespace MWMechanics
         void updateBrutalNpcGuard();
         void updateBrutalNpcGuardTarget(bool enabled, bool shield);
         void updateBrutalPlayerSteps(float duration, CharacterState movestate, bool grounded);
+        ESM::RefNum getWeaponWipeItem() const;
+        bool updateBrutalWeaponWipe(bool requested);
+        void cancelBrutalWeaponWipe();
         bool updateBrutalCombo();
         void updateBrutalSlide(float duration);
         void cancelBrutalSlide();

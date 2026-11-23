@@ -373,8 +373,6 @@ namespace MWRender
         std::unique_ptr<ScreenshotManager> mScreenshotManager;
         std::unique_ptr<EffectManager> mEffectManager;
         std::unique_ptr<BrutalBlood> mBrutalBlood;
-        std::optional<std::pair<osg::Vec3f, osg::Vec3f>> castBloodSurface(
-            const osg::Vec3f& origin, const osg::Vec3f& end);
         void collectBloodSurfaces(const osg::Vec3f& center, float radius, std::vector<osg::Vec3d>& positions,
             std::vector<std::array<unsigned, 3>>& triangles);
         std::unique_ptr<SceneUtil::ShadowManager> mShadowManager;

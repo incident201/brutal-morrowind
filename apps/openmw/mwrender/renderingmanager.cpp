@@ -118,6 +118,7 @@ namespace MWRender
             {
                 owner->fitSwordClinchPose(*visitor);
                 owner->fitBackstabPose(*visitor);
+                owner->fitSwordWipePose();
                 owner->fitNockedArrow();
             }
         }
@@ -276,8 +277,24 @@ namespace MWRender
 
         mEffectManager = std::make_unique<EffectManager>(sceneRoot, mResourceSystem);
         BrutalBlood::SceneAccess bloodAccess;
-        bloodAccess.castStatic = [this](const osg::Vec3f& origin, const osg::Vec3f& end) {
-            return castBloodSurface(origin, end);
+        bloodAccess.castStatic = [](const osg::Vec3f& origin, const osg::Vec3f& end)
+            -> std::optional<BrutalBlood::Surface> {
+            const auto world = MWBase::Environment::get().getWorld();
+            const auto hit = world->getRayCasting()->castRay(
+                origin, end, MWPhysics::CollisionType_World | MWPhysics::CollisionType_HeightMap);
+            if (!hit.mHit || (!hit.mHitObject.isEmpty() && hit.mHitObject.getType() != ESM::Static::sRecordId))
+                return std::nullopt;
+            const auto player = world->getPlayerPtr();
+            const auto surface = hit.mHitObject.isEmpty() ? player : hit.mHitObject;
+            const auto* cell = surface.isInCell() ? surface.getCell() : nullptr;
+            if (cell && world->isUnderwater(cell, hit.mHitPos))
+                return std::nullopt;
+            osg::Vec3f normal = hit.mHitNormal;
+            if (normal.normalize() < 1e-3f)
+                return std::nullopt;
+            if (normal * (end - origin) > 0.f)
+                normal = -normal;
+            return BrutalBlood::Surface{ hit.mHitPos, normal, hit.mHitObject.isEmpty() };
         };
         bloodAccess.collectStatic = [this](const osg::Vec3f& center, float radius, std::vector<osg::Vec3d>& positions,
                                         std::vector<std::array<unsigned, 3>>& triangles) {
@@ -1058,26 +1075,6 @@ namespace MWRender
             std::vector<std::array<unsigned, 3>> triangles;
             void operator()(unsigned a, unsigned b, unsigned c) { triangles.push_back({ a, b, c }); }
         };
-    }
-
-    std::optional<std::pair<osg::Vec3f, osg::Vec3f>> RenderingManager::castBloodSurface(
-        const osg::Vec3f& origin, const osg::Vec3f& end)
-    {
-        // Physics finds statics and terrain without rebuilding any terrain view.
-        const auto hit = MWBase::Environment::get().getWorld()->getRayCasting()->castRay(
-            origin, end, MWPhysics::CollisionType_World | MWPhysics::CollisionType_HeightMap);
-        if (!hit.mHit)
-            return std::nullopt;
-        // Doors, containers and other objects that can move or vanish keep no blood.
-        if (!hit.mHitObject.isEmpty() && hit.mHitObject.getType() != ESM::Static::sRecordId)
-            return std::nullopt;
-        osg::Vec3f normal = hit.mHitNormal;
-        if (normal.normalize() < 1e-3f)
-            return std::nullopt;
-        // A ray can graze a surface from behind; blood lands on the side it comes from.
-        if (normal * (end - origin) > 0.f)
-            normal = -normal;
-        return std::make_pair(hit.mHitPos, normal);
     }
 
     void RenderingManager::collectBloodSurfaces(const osg::Vec3f& center, float radius,
