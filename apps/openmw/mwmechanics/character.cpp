@@ -6208,7 +6208,10 @@ namespace MWMechanics
                         // Unsupported skeletons keep their current pose. Never
                         // substitute a canned death or retry every update.
                         if (mAnimation)
+                        {
                             mAnimation->beginRagdollPose();
+                            world->releaseNpcRagdollEquipment(mPtr);
+                        }
                         Log(Debug::Warning) << "NPC death retained its current pose without a supported ragdoll: "
                             << mPtr.getCellRef().getRefId();
                     }

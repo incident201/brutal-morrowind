@@ -116,6 +116,25 @@ namespace MWWorld
 {
     namespace
     {
+        osg::Matrixf shieldTransform(float scale, const osg::Quat& rotation, const osg::Vec3f& position)
+        {
+            return osg::Matrixf::scale(scale, scale, scale) * osg::Matrixf::rotate(rotation)
+                * osg::Matrixf::translate(position);
+        }
+
+        ESM::Position embeddedProjectilePose(const osg::Matrixf& transform)
+        {
+            ESM::Position pose;
+            const osg::Vec3f origin = transform.getTrans();
+            const auto angles = Misc::toEulerAnglesZYX(transform.getRotate());
+            for (int axis = 0; axis < 3; ++axis)
+            {
+                pose.pos[axis] = origin[axis];
+                pose.rot[axis] = angles[axis];
+            }
+            return pose;
+        }
+
         std::vector<std::pair<GlobalVariableName, ESM::Variant>> generateDefaultGlobals()
         {
             return {
@@ -1716,8 +1735,11 @@ namespace MWWorld
             osg::Vec3f linear, angular;
             float error = 0.f;
             bool bound = false;
+            bool allowGroundFallback = false;
             ESM::RefNum sourceObjectId;
             std::shared_ptr<const ESM::ReleasedEquipmentState> snapshot;
+            std::vector<std::pair<ESM::RefId, osg::Matrixf>> shieldProjectiles;
+            std::vector<std::pair<ESM::RefId, osg::Matrixf>> groundProjectiles;
         };
         std::vector<Candidate> candidates;
         // Snapshot both attachments before either inventory notification rebuilds
@@ -1756,16 +1778,20 @@ namespace MWWorld
             if (!disarmVelocity && !guaranteed
                 && (player || afterKnockdown || Misc::Rng::rollProbability(getPrng()) >= dropChance))
                 continue;
+            Candidate candidate;
+            candidate.item = item;
+            candidate.slot = slot;
+            // The equipped throwing-weapon stack is one real held item
+            // reference. Loaded ammunition releases only its visible unit.
+            candidate.releaseCount = slot == InventoryStore::Slot_Ammunition
+                ? 1 : item.getCellRef().getCount();
+            candidate.sourceObjectId = item.getCellRef().getRefNum();
+            candidate.bound = MWBase::Environment::get().getMechanicsManager()->isBoundItem(item);
+            candidate.allowGroundFallback = guaranteed && !player;
+            if (shield)
+                candidate.groundProjectiles = animation->captureShieldProjectiles();
             try
             {
-                Candidate candidate;
-                candidate.item = item;
-                candidate.slot = slot;
-                // The equipped throwing-weapon stack is one real held item
-                // reference. Loaded ammunition releases only its visible unit.
-                candidate.releaseCount = slot == InventoryStore::Slot_Ammunition
-                    ? 1 : item.getCellRef().getCount();
-                candidate.sourceObjectId = item.getCellRef().getRefNum();
                 osg::Matrixf frame;
                 const bool leftHand = animation->getReleasedEquipmentOwnerIsLeft(slot);
                 bool hasFrame = false;
@@ -1793,34 +1819,33 @@ namespace MWWorld
                     // Use the exact representable engine root from the outset. Race
                     // scale, attachment offsets, mirror and skinning stay in arrays.
                     const float scale = item.getCellRef().getScale();
-                    const auto itemRoot = osg::Matrixf::scale(scale, scale, scale)
-                        * osg::Matrixf::rotate(Misc::Convert::makeOsgQuat(candidate.position))
-                        * osg::Matrixf::translate(origin);
+                    const auto itemRoot = shieldTransform(scale, Misc::Convert::makeOsgQuat(candidate.position), origin);
                     // Inventory weight is a gameplay encumbrance value, not the
                     // anatomical body's native mass. Use a local modest proxy mass.
                     const float mass = std::clamp(item.getClass().getWeight(item) * .1f, .05f, 20.f);
+                    if (!candidate.groundProjectiles.empty())
+                        candidate.shieldProjectiles = animation->captureShieldProjectiles(&itemRoot);
                     candidate.snapshot = animation->captureReleasedEquipment(slot, itemRoot, mass, candidate.error);
                 }
-                if (!candidate.snapshot)
-                {
-                    if (!guaranteed)
-                        continue;
-                    // Some rigs have no visible mount for an equipped hand item.
-                    // Give it the same ground placement as an ordinary dropped item.
-                    candidate.position = getGroundDropPosition(ptr);
-                }
-                candidate.bound = MWBase::Environment::get().getMechanicsManager()->isBoundItem(item);
-                candidates.push_back(std::move(candidate));
             }
             catch (const std::exception& error)
             {
                 Log(Debug::Warning) << "Equipment release rejected for " << item.getCellRef().getRefId()
                     << ": " << error.what();
+                if (!candidate.allowGroundFallback)
+                    continue;
             }
+            if (!candidate.snapshot)
+            {
+                if (!guaranteed)
+                    continue;
+                // A missing or unsupported hand attachment still leaves a real item to drop.
+                candidate.position = getGroundDropPosition(ptr);
+                candidate.error = 0.f;
+            }
+            candidates.push_back(std::move(candidate));
         }
-        bool released = false;
-        for (const auto& candidate : candidates)
-        {
+        const auto release = [&](const Candidate& candidate, bool& retryOnGround) {
             Ptr dropped;
             bool committed = false;
             bool published = false;
@@ -1869,6 +1894,7 @@ namespace MWWorld
                         || dropped.getCellRef().getSoul() != candidate.item.getCellRef().getSoul())
                         throw std::runtime_error("Released equipment instance data changed during copy");
                     dropped.getRefData().setReleasedEquipment(candidate.snapshot);
+                    retryOnGround = candidate.allowGroundFallback && candidate.snapshot;
                     initObjectInCell(dropped, *cell, !candidate.snapshot, false);
                     if (!dropped.getRefData().getBaseNode())
                         throw std::runtime_error("Released equipment scene preparation failed");
@@ -1877,6 +1903,7 @@ namespace MWWorld
                         if (!getAnimation(dropped) || mPhysics->getReleasedEquipmentState(dropped).size() < 4)
                             throw std::runtime_error("Released equipment physics preparation failed");
                         mPhysics->initializeReleasedEquipment(dropped, ptr, candidate.linear, candidate.angular);
+                        retryOnGround = false;
                         // Test hook: exercise rollback only
                         // after rendering, body creation and grip motion all exist.
                         if (const char* failure = std::getenv("OPENMW_RAGDOLL_RELEASE_TEST_FAIL");
@@ -1966,6 +1993,49 @@ namespace MWWorld
                 }
                 Log(Debug::Warning) << "Equipment release failed for " << candidate.item.getCellRef().getRefId()
                     << ": " << error.what();
+            }
+            if (committed && !dropped.isEmpty())
+            {
+                const auto& projectiles = candidate.snapshot ? candidate.shieldProjectiles : candidate.groundProjectiles;
+                auto& links = dropped.getRefData().getAnimationState().mShieldProjectiles;
+                links.reserve(projectiles.size());
+                const auto& pose = dropped.getRefData().getPosition();
+                const auto frame = shieldTransform(
+                    dropped.getCellRef().getScale(), Misc::Convert::makeOsgQuat(pose), pose.asVec3());
+                // The held visual is gone. Publish each missile once, only after
+                // the shield transfer commits, so a failed attempt cannot duplicate it.
+                for (const auto& [id, local] : projectiles)
+                {
+                    try
+                    {
+                        ManualRef projectile(mStore, id, 1);
+                        const Ptr missile = placeObject(
+                            projectile.getPtr(), dropped.getCell(), embeddedProjectilePose(local * frame));
+                        auto& link = links.emplace_back();
+                        link.mReference = missile.getCellRef().getRefNum();
+                        std::copy_n(local.ptr(), link.mTransform.size(), link.mTransform.begin());
+                    }
+                    catch (const std::exception& error)
+                    {
+                        Log(Debug::Warning) << "Could not release embedded projectile " << id << ": " << error.what();
+                    }
+                }
+            }
+            return committed;
+        };
+        bool released = false;
+        for (auto& candidate : candidates)
+        {
+            bool retryOnGround = false;
+            bool committed = release(candidate, retryOnGround);
+            if (retryOnGround)
+            {
+                // The failed physical instance was rolled back. Use the ordinary
+                // world model when the captured geometry cannot be restored.
+                candidate.snapshot.reset();
+                candidate.position = getGroundDropPosition(ptr);
+                candidate.error = 0.f;
+                committed = release(candidate, retryOnGround);
             }
             released = released || committed;
         }
@@ -2087,6 +2157,35 @@ namespace MWWorld
         // physics step. Never feed this transform into RefData or Bullet.
         mRendering->moveObject(updated, renderedPosition);
         mRendering->rotateObject(updated, renderedRotation);
+        auto& links = updated.getRefData().getAnimationState().mShieldProjectiles;
+        if (!links.empty())
+        {
+            const float scale = updated.getCellRef().getScale();
+            const auto frame = shieldTransform(scale, rotation, position);
+            const auto renderedFrame = shieldTransform(scale, renderedRotation, renderedPosition);
+            std::erase_if(links, [&](const ESM::AnimationState::ShieldProjectile& link) {
+                Ptr missile = mWorldModel.getPtr(link.mReference);
+                if (missile.isEmpty())
+                    return false;
+                if (!missile.isInCell() || missile.mRef->isDeleted() || mPhysics->getObject(missile))
+                    return true;
+                const osg::Matrixf local(link.mTransform.data());
+                if (authoritativeChanged)
+                {
+                    const auto pose = embeddedProjectilePose(local * frame);
+                    if (missile.getCell() != updated.getCell())
+                        missile = moveObject(missile, updated.getCell(), pose.asVec3(), false);
+                    missile.getRefData().setPosition(pose);
+                }
+                if (missile.getRefData().getBaseNode())
+                {
+                    const auto visible = local * renderedFrame;
+                    mRendering->moveObject(missile, visible.getTrans());
+                    mRendering->rotateObject(missile, visible.getRotate());
+                }
+                return false;
+            });
+        }
         if (authoritativeChanged)
             if (const auto* object = mPhysics->getObject(updated))
                 updateNavigatorObject(*object);

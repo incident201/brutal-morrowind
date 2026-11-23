@@ -385,6 +385,7 @@ namespace MWWorld
         newPtr.getCellRef().unsetRefNum(); // This RefNum is only valid within the original cell of the reference
         newPtr.getCellRef().setCount(count);
         newPtr.getRefData().setLuaScripts(nullptr);
+        newPtr.getRefData().getAnimationState().mShieldProjectiles.clear();
         MWBase::Environment::get().getWorldModel()->registerPtr(newPtr);
         return newPtr;
     }

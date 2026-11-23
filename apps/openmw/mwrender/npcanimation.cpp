@@ -2982,6 +2982,11 @@ namespace MWRender
         ReleasedEquipmentCapture capture(*saved, root->getNode(),
             !ammunition && mAmmunition ? mAmmunition->getNode().get() : nullptr, itemRoot, bones,
             mPtr.getRefData().getBaseNode(), item->getType() == ESM::Light::sRecordId);
+        // The dropped shield is restored from its own model. Projectiles stuck
+        // to the actor's shield are separate visual attachments.
+        if (left)
+            for (const auto& stuck : mStuckProjectiles)
+                capture.excludeAttachment(stuck.mNode.get());
         capture.snapshot();
         maxWorldVertexError = capture.maxWorldVertexError;
         if (!saved->valid())
@@ -2990,6 +2995,26 @@ namespace MWRender
             throw std::runtime_error("Equipped item continuity error " + std::to_string(maxWorldVertexError)
                 + " exceeds 0.001 world units");
         return saved;
+    }
+
+    std::vector<std::pair<ESM::RefId, osg::Matrixf>> NpcAnimation::captureShieldProjectiles(
+        const osg::Matrixf* releasedRoot) const
+    {
+        std::vector<std::pair<ESM::RefId, osg::Matrixf>> projectiles;
+        const auto* shield = mObjectParts[ESM::PRT_Shield].get();
+        if (!shield || mStuckProjectiles.empty())
+            return projectiles;
+        const auto node = shield->getNode();
+        osg::Matrixd toReleased;
+        if (releasedRoot)
+            toReleased = osg::computeLocalToWorld(releasedEquipmentPath(node, mPtr.getRefData().getBaseNode()))
+                * osg::Matrixd::inverse(osg::Matrixd(*releasedRoot));
+        for (const auto& stuck : mStuckProjectiles)
+        {
+            if (!stuck.mItem.empty() && stuck.mParent.get() == node.get())
+                projectiles.emplace_back(stuck.mItem, stuck.mNode->getMatrix() * toReleased);
+        }
+        return projectiles;
     }
 
     bool NpcAnimation::getReleasedEquipmentOwnerIsLeft(int slot) const

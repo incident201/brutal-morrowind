@@ -36,6 +36,7 @@
 #include <components/esm3/loadmgef.hpp>
 #include <components/esm3/loadnpc.hpp>
 #include <components/esm3/loadrace.hpp>
+#include <components/esm3/loadweap.hpp>
 #include <components/esm3/releasedequipmentstate.hpp>
 #include <components/esm4/loadligh.hpp>
 
@@ -2442,6 +2443,7 @@ namespace MWRender
 
         osg::Group* parent = nullptr;
         osg::Matrixf parentToWorld;
+        std::string_view bone;
         if (within != nullptr)
         {
             parent = within->asGroup();
@@ -2475,18 +2477,20 @@ namespace MWRender
                     closest = distance;
                     parent = node.get();
                     parentToWorld = toWorld;
+                    bone = name;
                 }
             }
             if (parent == nullptr)
                 return false;
         }
 
-        addStuckProjectile(model, tipPosition, flight, item, *parent, parentToWorld);
+        addStuckProjectile(model, tipPosition, flight, item, *parent, parentToWorld, bone);
         return true;
     }
 
     void Animation::addStuckProjectile(VFS::Path::NormalizedView model, const osg::Vec3f& tipPosition,
-        const osg::Vec3f& flight, const ESM::RefId& item, osg::Group& parent, const osg::Matrixf& parentToWorld)
+        const osg::Vec3f& flight, const ESM::RefId& item, osg::Group& parent, const osg::Matrixf& parentToWorld,
+        std::string_view bone)
     {
         osg::ref_ptr<osg::Node> projectile = mResourceSystem->getSceneManager()->getInstance(model);
         // Missile models point along +Y; the tip is the far end.
@@ -2502,27 +2506,78 @@ namespace MWRender
             up.x(), up.y(), up.z(), 0.f, 0.f, 0.f, 0.f, 1.f);
         const osg::Matrixf projectileToWorld = rotation * osg::Matrixf::translate(tipPosition - flight * tip);
 
-        osg::ref_ptr<osg::MatrixTransform> attached
-            = new osg::MatrixTransform(projectileToWorld * osg::Matrixf::inverse(parentToWorld));
-        // Shown, but not part of the body the next missile is traced against.
-        attached->setNodeMask(Mask_Effect);
-        attached->setName("Brutal Stuck Projectile");
-        attached->addChild(projectile);
-        parent.addChild(attached);
-        mStuckProjectiles.push_back({ &parent, attached, item });
+        const osg::Matrixf local = projectileToWorld * osg::Matrixf::inverse(parentToWorld);
+        mountProjectile(*projectile, parent, local, item, bone);
+        if (bone.empty())
+            return;
 
-        // A body carries a bounded number; the oldest spent ones go first.
-        constexpr std::size_t maxStuckProjectiles = 12;
-        while (mStuckProjectiles.size() > maxStuckProjectiles)
+        // Bound the rendered body marks. All recoverable missiles remain in inventory.
+        const auto isBody = [](const StuckProjectile& stuck) { return !stuck.mBone.empty(); };
+        if (std::cmp_greater(std::ranges::count_if(mStuckProjectiles, isBody), ESM::AnimationState::MaxStuckProjectiles))
         {
             auto oldest = std::find_if(mStuckProjectiles.begin(), mStuckProjectiles.end(),
-                [](const StuckProjectile& stuck) { return stuck.mItem.empty(); });
+                [&](const StuckProjectile& stuck) { return isBody(stuck) && stuck.mItem.empty(); });
             if (oldest == mStuckProjectiles.end())
-                oldest = mStuckProjectiles.begin();
+                oldest = std::find_if(mStuckProjectiles.begin(), mStuckProjectiles.end(), isBody);
             if (osg::ref_ptr<osg::Group> group; oldest->mParent.lock(group))
                 group->removeChild(oldest->mNode);
             mStuckProjectiles.erase(oldest);
         }
+        saveBodyProjectiles();
+    }
+
+    void Animation::saveBodyProjectiles() const
+    {
+        auto& saved = mPtr.getRefData().getAnimationState().mBodyProjectiles;
+        saved.clear();
+        for (const auto& stuck : mStuckProjectiles)
+        {
+            if (stuck.mBone.empty() || stuck.mItem.empty())
+                continue;
+            auto& entry = saved.emplace_back();
+            entry.mBone = stuck.mBone;
+            entry.mItem = stuck.mItem;
+            const osg::Matrixf matrix(stuck.mNode->getMatrix());
+            std::copy_n(matrix.ptr(), entry.mTransform.size(), entry.mTransform.begin());
+        }
+    }
+
+    void Animation::restoreBodyProjectiles()
+    {
+        const auto& saved = mPtr.getRefData().getAnimationState().mBodyProjectiles;
+        if (saved.empty() || !mPtr.getClass().isActor())
+            return;
+        const auto& nodes = getNodeMap();
+        const auto& weapons = MWBase::Environment::get().getESMStore()->get<ESM::Weapon>();
+        for (const auto& entry : saved)
+        {
+            const auto bone = nodes.find(entry.mBone);
+            const auto* record = weapons.search(entry.mItem);
+            if (bone == nodes.end() || !record || record->mModel.empty())
+                continue;
+            try
+            {
+                const auto model = Misc::ResourceHelpers::correctMeshPath(VFS::Path::Normalized(record->mModel));
+                const auto projectile = mResourceSystem->getSceneManager()->getInstance(model);
+                mountProjectile(*projectile, *bone->second, osg::Matrixf(entry.mTransform.data()), entry.mItem, entry.mBone);
+            }
+            catch (const std::exception& error)
+            {
+                Log(Debug::Warning) << "Could not restore embedded projectile " << entry.mItem << ": " << error.what();
+            }
+        }
+    }
+
+    void Animation::mountProjectile(osg::Node& projectile, osg::Group& parent, const osg::Matrixf& transform,
+        const ESM::RefId& item, std::string_view bone)
+    {
+        osg::ref_ptr<osg::MatrixTransform> attached = new osg::MatrixTransform(transform);
+        // A missile is visible without becoming a hit surface for another missile.
+        attached->setNodeMask(Mask_Effect);
+        attached->setName("Brutal Stuck Projectile");
+        attached->addChild(&projectile);
+        parent.addChild(attached);
+        mStuckProjectiles.push_back({ &parent, std::move(attached), item, std::string(bone) });
     }
 
     float Animation::mapToOriginalGroupTime(std::string_view group, float time, bool relative) const
@@ -2629,14 +2684,14 @@ namespace MWRender
     {
         // Gone with the part it was stuck in (an unequipped shield), or taken from the body.
         std::map<ESM::RefId, int> shown;
-        const bool container = !mPtr.isEmpty() && mPtr.getClass().isActor();
+        bool bodyChanged = false;
         for (auto it = mStuckProjectiles.rbegin(); it != mStuckProjectiles.rend();)
         {
             osg::ref_ptr<osg::Group> group;
             bool keep = it->mParent.lock(group) && group->containsNode(it->mNode);
-            if (keep && !it->mItem.empty())
+            if (keep && !it->mBone.empty() && !it->mItem.empty())
             {
-                const int carried = container ? mPtr.getClass().getContainerStore(mPtr).count(it->mItem) : 0;
+                const int carried = mPtr.getClass().getContainerStore(mPtr).count(it->mItem);
                 keep = ++shown[it->mItem] <= carried;
             }
             if (keep)
@@ -2646,8 +2701,11 @@ namespace MWRender
             }
             if (group)
                 group->removeChild(it->mNode);
+            bodyChanged |= !it->mBone.empty();
             it = std::make_reverse_iterator(mStuckProjectiles.erase(std::next(it).base()));
         }
+        if (bodyChanged)
+            saveBodyProjectiles();
     }
 
     osg::Vec3f Animation::runAnimation(float duration)
@@ -2888,6 +2946,7 @@ namespace MWRender
         // A rebuilt skeleton must not retain snapshots of detached nodes.
         // World resumes ownership if the actor still has an active ragdoll.
         endRagdollPose();
+        removeStuckProjectiles();
         osg::ref_ptr<osg::StateSet> previousStateset;
         if (mObjectRoot)
         {
@@ -3001,6 +3060,7 @@ namespace MWRender
         mObjectRoot->addCullCallback(mLightListCallback);
         if (mTransparencyUpdater)
             mObjectRoot->addCullCallback(mTransparencyUpdater);
+        restoreBodyProjectiles();
     }
 
     osg::Group* Animation::getObjectRoot()

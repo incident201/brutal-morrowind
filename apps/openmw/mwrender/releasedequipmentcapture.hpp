@@ -10,11 +10,13 @@
 #include <osg/Matrixd>
 #include <osg/NodeVisitor>
 #include <osgParticle/ParticleSystem>
+#include <algorithm>
 #include <cmath>
 #include <functional>
 #include <map>
 #include <optional>
 #include <stdexcept>
+#include <vector>
 
 namespace MWRender
 {
@@ -63,7 +65,7 @@ namespace MWRender
         osg::Vec3d mOrigin;
         osg::Matrixd mRoot, mInverse;
         osg::Node* mPartRoot;
-        osg::Node* mExcluded;
+        std::vector<const osg::Node*> mExcluded;
         osg::Node* mActorRoot;
         bool mIgnoreParticles;
         std::map<std::string, uint32_t> mOrdinals;
@@ -77,7 +79,7 @@ namespace MWRender
             osg::Node* actorRoot = nullptr, bool ignoreParticles = false)
             : osg::NodeVisitor(TRAVERSE_ALL_CHILDREN), mOutput(output), mBones(bones),
               mOrigin(itemRoot.getTrans()), mRoot(itemRoot),
-              mPartRoot(root), mExcluded(excluded), mActorRoot(actorRoot), mIgnoreParticles(ignoreParticles)
+              mPartRoot(root), mActorRoot(actorRoot), mIgnoreParticles(ignoreParticles)
         {
             // Keep the exact small attachment offset before doing float skinning
             // or serializing the residual. Inverting a float exterior translation
@@ -85,10 +87,13 @@ namespace MWRender
             mRoot.setTrans(osg::Vec3d());
             if (!mInverse.invert(mRoot))
                 throw std::runtime_error("Singular released item root");
-            // Respect hidden geometry. An attached arrow is excluded separately:
-            // its real inventory count belongs to the ammunition slot.
+            // Loaded ammunition belongs to its own equipment slot.
+            if (excluded)
+                excludeAttachment(excluded);
             setTraversalMask(~0u);
         }
+
+        void excludeAttachment(const osg::Node* node) { mExcluded.push_back(node); }
 
         void snapshot()
         {
@@ -105,7 +110,8 @@ namespace MWRender
         void apply(osg::Drawable& drawable) override
         {
             const auto& path = getNodePath();
-            if (mExcluded && std::find(path.begin(), path.end(), mExcluded) != path.end())
+            if (std::any_of(mExcluded.begin(), mExcluded.end(),
+                    [&](const osg::Node* node) { return std::find(path.begin(), path.end(), node) != path.end(); }))
                 return;
             if (mIgnoreParticles && dynamic_cast<const osgParticle::ParticleSystem*>(&drawable))
                 return;

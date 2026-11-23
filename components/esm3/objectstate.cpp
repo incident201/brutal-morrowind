@@ -234,6 +234,7 @@ namespace ESM
         }
         mFlags = 0;
         mHasCustomState = true;
+        mAnimationState = {};
         mReleasedEquipment.reset();
     }
 

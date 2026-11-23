@@ -208,8 +208,9 @@ namespace MWRender
         struct StuckProjectile
         {
             osg::observer_ptr<osg::Group> mParent;
-            osg::ref_ptr<osg::Node> mNode;
+            osg::ref_ptr<osg::MatrixTransform> mNode;
             ESM::RefId mItem;
+            std::string mBone;
         };
         std::vector<StuckProjectile> mStuckProjectiles;
         // Phase-matched (playing, original) key times per group and playing source.
@@ -224,9 +225,14 @@ namespace MWRender
         float mStuckProjectileCheck = 0.f;
         /// Remove stuck missiles whose items are no longer carried.
         void syncStuckProjectiles();
+        void saveBodyProjectiles() const;
+        void restoreBodyProjectiles();
+        void mountProjectile(osg::Node& projectile, osg::Group& parent, const osg::Matrixf& transform,
+            const ESM::RefId& item, std::string_view bone);
         /// Whether a missile flying into the body may stick in what this path leads to (not a held weapon).
         void addStuckProjectile(VFS::Path::NormalizedView model, const osg::Vec3f& tipPosition,
-            const osg::Vec3f& flight, const ESM::RefId& item, osg::Group& parent, const osg::Matrixf& parentToWorld);
+            const osg::Vec3f& flight, const ESM::RefId& item, osg::Group& parent, const osg::Matrixf& parentToWorld,
+            std::string_view bone = {});
 
         osg::ref_ptr<osg::Group> mObjectRoot;
         SceneUtil::Skeleton* mSkeleton;

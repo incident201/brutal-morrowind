@@ -714,7 +714,8 @@ namespace MWWorld
                 case MWMechanics::ProjectileOutcome::Shield:
                 {
                     auto* npc = dynamic_cast<MWRender::NpcAnimation*>(animation);
-                    if (npc != nullptr && npc->attachStuckProjectileToShield(model, hitPosition, flight, path))
+                    if (npc != nullptr && npc->attachStuckProjectileToShield(
+                            model, hitPosition, flight, path, enchanted ? ESM::RefId() : id))
                     {
                         playMissileSound(hitPosition, "Brutal Arrow Wood");
                         report("shield", "wood", {}, hitPosition);

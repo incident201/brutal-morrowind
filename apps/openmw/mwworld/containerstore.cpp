@@ -434,6 +434,7 @@ MWWorld::ContainerStoreIterator MWWorld::ContainerStore::add(
     item.getRefData().setBaseNode(
         nullptr); // Especially important, otherwise scripts on the item could think that it's actually in a cell
     item.getRefData().setReleasedEquipment(nullptr);
+    item.getRefData().getAnimationState().mShieldProjectiles.clear();
     ESM::Position pos;
     pos.rot[0] = 0;
     pos.rot[1] = 0;
@@ -480,6 +481,23 @@ MWWorld::ContainerStoreIterator MWWorld::ContainerStore::add(
     if (mListener && typeid(*this) == typeid(ContainerStore))
         mListener->itemAdded(item, count);
     MWBase::Environment::get().getWindowManager()->inventoryUpdated(contPtr);
+
+    // Taking a dropped shield also takes any missiles still in it. A missile
+    // plucked out earlier has already been removed from the world.
+    if (itemPtr.isInCell() && itemPtr.getContainerStore() == nullptr)
+    {
+        auto& environment = MWBase::Environment::get();
+        for (const auto& link : itemPtr.getRefData().getAnimationState().mShieldProjectiles)
+        {
+            Ptr projectile = environment.getWorldModel()->getPtr(link.mReference);
+            if (!projectile.isEmpty() && projectile.isInCell() && projectile.getType() == ESM::Weapon::sRecordId
+                && !projectile.mRef->isDeleted())
+            {
+                add(projectile, projectile.getCellRef().getCount(), false);
+                environment.getWorld()->deleteObject(projectile);
+            }
+        }
+    }
 
     return it;
 }

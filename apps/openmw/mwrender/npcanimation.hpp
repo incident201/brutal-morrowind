@@ -439,7 +439,7 @@ namespace MWRender
         /// The scene node of an equipped part (for example ESM::PRT_Shield), if it is shown.
         osg::Node* getPartNode(ESM::PartReferenceType part) const;
         bool attachStuckProjectileToShield(VFS::Path::NormalizedView model, const osg::Vec3f& hitPosition,
-            const osg::Vec3f& flight, const std::pair<osg::Vec3f, osg::Vec3f>& path);
+            const osg::Vec3f& flight, const std::pair<osg::Vec3f, osg::Vec3f>& path, const ESM::RefId& item);
         bool addBloodDecal(const osg::Vec3f& position, const osg::Vec3f& outward,
             std::string_view kind, bool power, int hitPart = -1);
         std::string getBloodDecalData() const;
@@ -522,6 +522,8 @@ namespace MWRender
         WeaponGripGeometry getWeaponGripGeometryForAudit() const;
         std::shared_ptr<const ESM::ReleasedEquipmentState> captureReleasedEquipment(int slot,
             const osg::Matrixf& itemRoot, float mass, float& maxWorldVertexError) const;
+        std::vector<std::pair<ESM::RefId, osg::Matrixf>> captureShieldProjectiles(
+            const osg::Matrixf* releasedRoot = nullptr) const;
         bool getReleasedEquipmentOwnerIsLeft(int slot) const;
         RagdollExtremityVertices getRagdollExtremityVertices(
             UnsupportedRagdollExtremityBones* unsupportedBones = nullptr) const override;
