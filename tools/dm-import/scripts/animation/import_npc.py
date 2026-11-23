@@ -286,7 +286,8 @@ class GuardImporter(Importer):
             else:
                 ctrl=nif.NiKeyframeController(data=nif.NiKeyframeData(),start_time=0.,stop_time=float(max(row[0] for row in rows)),flags=12)
                 stream.root.extra_datas.append(nif.NiStringExtraData(string_data=name));stream.root.controllers.append(ctrl)
-            armed=group.endswith('1h') or group in ('weapononehand','brutal_hit','shield','brutal_weapon_guard') or group.startswith(('hit','brutal_clinch'))
+            armed=group.endswith('1h') or group in ('weapononehand','brutal_hit','shield','brutal_weapon_guard',
+                                                    'brutal_npc_bow_kick') or group.startswith(('hit','brutal_clinch'))
             q=q if armed else matrix_quat(self.nodes[name].rotation)
             keys=[[rows[0][0],*q],[rows[-1][0],*q]]
             if grip_at is not None and name.startswith('Bip01 R'):
@@ -493,9 +494,15 @@ def main():
     # (@Parry_Broken) is the attacker's recoil after a timed player parry. ACT_DIE_BACKSTABBED
     # (@die_backstabbed) is the victim's synchronized dual-dagger stealth backstab reaction.
     for group,clip in [('brutal_standup_front','@StandUp_front'),('brutal_standup_back','@StandUp_back'),
-                       ('brutal_parrybroken','@Parry_Broken'),('brutal_backstabbed','@die_backstabbed')]:
+                       ('brutal_parrybroken','@Parry_Broken'),('brutal_backstabbed','@die_backstabbed'),
+                       ('brutal_npc_disarmed','@hit_disarmed')]:
         t,p=i.segment(i.clip('guard',clip))
         i.write(out,group,[(0,t,p)],[(0,'start'),(float(t[-1]),'stop')])
+    name='@bow_kick'
+    t,p=i.segment(i.clip('guard',name));duration=float(t[-1])
+    impact=[float(e.cycle)*duration for e in i.sequences[name][0].events if e.event==2102]
+    if len(impact)!=1:raise ValueError('@bow_kick: expected one impact event')
+    i.write(out,'brutal_npc_bow_kick',[(0,t,p)],[(0,'start'),(impact[0],'hit'),(duration,'stop')])
     # ACT_GRAB_WEAPON: a disarmed guard crouches and takes a weapon from the ground in its right
     # hand. The clip's NPC_Grab_Weapon sound marks the hand's lowest point (0.60 of 1.50 s); the
     # engine moves the world item into the hand at 'pickup contact'.

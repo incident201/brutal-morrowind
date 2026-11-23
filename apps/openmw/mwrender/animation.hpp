@@ -216,6 +216,7 @@ namespace MWRender
         struct GroupTimeMap
         {
             std::vector<std::pair<float, float>> mTable;
+            std::vector<std::pair<float, float>> mFastBowTable;
             float mPlayingStart = 0.f;
             float mOriginalStart = 0.f;
         };

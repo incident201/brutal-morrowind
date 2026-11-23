@@ -2555,22 +2555,28 @@ namespace MWRender
                         map.mOriginalStart = std::min(map.mOriginalStart, at);
                     }
                 map.mPlayingStart = std::numeric_limits<float>::max();
+                const std::string fastPrefix = prefix + "shoot fast ";
                 for (const auto& [at, label] : playing->getTextKeys())
                     if (label.starts_with(prefix))
                     {
                         map.mPlayingStart = std::min(map.mPlayingStart, at);
-                        if (const auto match = originalTimes.find(label); match != originalTimes.end())
-                            map.mTable.emplace_back(at, match->second);
+                        const bool fastBow = label.starts_with(fastPrefix);
+                        const std::string equivalent = fastBow ? prefix + "shoot " + label.substr(fastPrefix.size())
+                                                               : label;
+                        if (const auto match = originalTimes.find(equivalent); match != originalTimes.end())
+                            (fastBow ? map.mFastBowTable : map.mTable).emplace_back(at, match->second);
                     }
                 std::sort(map.mTable.begin(), map.mTable.end());
+                std::sort(map.mFastBowTable.begin(), map.mFastBowTable.end());
             }
             found = mGroupTimeMaps.emplace(key, std::move(map)).first;
         }
         const GroupTimeMap& map = found->second;
-        const auto& table = map.mTable;
+        const float at = relative ? time + map.mPlayingStart : time;
+        const auto& table = !map.mFastBowTable.empty() && at >= map.mFastBowTable.front().first
+            ? map.mFastBowTable : map.mTable;
         if (table.empty())
             return time;
-        const float at = relative ? time + map.mPlayingStart : time;
         float mapped = table.back().second;
         if (at <= table.front().first)
             mapped = table.front().second;

@@ -331,6 +331,7 @@ namespace MWBase
         virtual std::vector<osg::Vec3f> getNpcRagdollState(const MWWorld::Ptr& ptr) const = 0;
         virtual std::map<std::string, double> getNpcRagdollEnhancementState(const MWWorld::Ptr& ptr) const = 0;
         virtual void releaseNpcRagdollEquipment(const MWWorld::Ptr& ptr, bool afterKnockdown = false) = 0;
+        virtual bool disarmNpcWeapon(const MWWorld::Ptr& ptr, const osg::Vec3f& velocity) = 0;
         /// Enabled weapons and armor lying in the active cells within \a radius of \a center.
         virtual void getLooseEquipmentInRange(
             const osg::Vec3f& center, float radius, std::vector<MWWorld::Ptr>& out) = 0;

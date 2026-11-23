@@ -1686,16 +1686,25 @@ namespace MWWorld
 
     void World::releaseNpcRagdollEquipment(const Ptr& ptr, bool afterKnockdown)
     {
-        if (!Settings::game().mBrutalEquipmentPhysics) return;
-        if (!ptr.getClass().isNpc())
-            return;
+        releaseNpcEquipment(ptr, afterKnockdown, nullptr);
+    }
+
+    bool World::disarmNpcWeapon(const Ptr& ptr, const osg::Vec3f& velocity)
+    {
+        return releaseNpcEquipment(ptr, false, &velocity);
+    }
+
+    bool World::releaseNpcEquipment(const Ptr& ptr, bool afterKnockdown, const osg::Vec3f* disarmVelocity)
+    {
+        if (!Settings::game().mBrutalEquipmentPhysics || !ptr.getClass().isNpc())
+            return false;
         const bool player = ptr == getPlayerPtr();
         const bool dead = ptr.getClass().getCreatureStats(ptr).isDead();
-        if (player && !dead)
-            return;
+        if (disarmVelocity ? (player || dead) : (player && !dead))
+            return false;
         const auto* animation = dynamic_cast<const MWRender::NpcAnimation*>(getAnimation(ptr));
-        if (!animation || !animation->isRagdollPose())
-            return;
+        if (!animation || animation->isRagdollPose() == (disarmVelocity != nullptr))
+            return false;
         auto& inventory = ptr.getClass().getInventoryStore(ptr);
         const float dropChance = Settings::game().mBrutalRagdollWeaponDrop.get();
         struct Candidate
@@ -1716,10 +1725,14 @@ namespace MWWorld
         for (const int slot : { InventoryStore::Slot_CarriedRight, InventoryStore::Slot_CarriedLeft,
                  InventoryStore::Slot_Ammunition })
         {
+            if (disarmVelocity && slot != InventoryStore::Slot_CarriedRight)
+                break;
             const auto equipped = inventory.getSlot(slot);
             if (equipped == inventory.end())
                 continue;
             const Ptr item = *equipped;
+            if (disarmVelocity && item.getType() != ESM::Weapon::sRecordId)
+                continue;
             if (std::any_of(candidates.begin(), candidates.end(), [&](const auto& candidate) { return candidate.item == item; }))
                 continue;
             const bool inLeftHand = slot == InventoryStore::Slot_CarriedLeft && animation->getCarriedLeftShown();
@@ -1730,6 +1743,8 @@ namespace MWWorld
             if (item.getType() == ESM::Weapon::sRecordId)
             {
                 const auto* type = MWMechanics::getWeaponType(item.get<ESM::Weapon>()->mBase->mData.mType);
+                if (disarmVelocity && type->mWeaponClass != ESM::WeaponType::Melee)
+                    continue;
                 heldWeapon = type->mWeaponClass != ESM::WeaponType::Ammo;
                 if (!heldWeapon && slot != InventoryStore::Slot_Ammunition)
                     continue; // An ammo reference in a hand is ineligible.
@@ -1738,7 +1753,8 @@ namespace MWWorld
                 continue;
             const bool guaranteed = dead && (heldWeapon || (inLeftHand && shield) || carriedLight);
             // Loaded NPC ammunition rolls once when the body first falls.
-            if (!guaranteed && (player || afterKnockdown || Misc::Rng::rollProbability(getPrng()) >= dropChance))
+            if (!disarmVelocity && !guaranteed
+                && (player || afterKnockdown || Misc::Rng::rollProbability(getPrng()) >= dropChance))
                 continue;
             try
             {
@@ -1751,8 +1767,21 @@ namespace MWWorld
                     ? 1 : item.getCellRef().getCount();
                 candidate.sourceObjectId = item.getCellRef().getRefNum();
                 osg::Matrixf frame;
-                if (mPhysics->getRagdollEquipmentFrame(ptr, animation->getReleasedEquipmentOwnerIsLeft(slot),
-                        frame, candidate.linear, candidate.angular))
+                const bool leftHand = animation->getReleasedEquipmentOwnerIsLeft(slot);
+                bool hasFrame = false;
+                if (disarmVelocity)
+                {
+                    if (const auto hand = animation->getBoneWorldMatrix(leftHand ? "Bip01 L Hand" : "Bip01 R Hand"))
+                    {
+                        frame = *hand;
+                        candidate.linear = *disarmVelocity;
+                        candidate.angular.set(3.f, 5.f, 2.f);
+                        hasFrame = true;
+                    }
+                }
+                else
+                    hasFrame = mPhysics->getRagdollEquipmentFrame(ptr, leftHand, frame, candidate.linear, candidate.angular);
+                if (hasFrame)
                 {
                     const auto angles = Misc::toEulerAnglesZYX(frame);
                     const auto origin = frame.getTrans();
@@ -1785,10 +1814,11 @@ namespace MWWorld
             }
             catch (const std::exception& error)
             {
-                Log(Debug::Warning) << "Ragdoll equipment release rejected for " << item.getCellRef().getRefId()
+                Log(Debug::Warning) << "Equipment release rejected for " << item.getCellRef().getRefId()
                     << ": " << error.what();
             }
         }
+        bool released = false;
         for (const auto& candidate : candidates)
         {
             Ptr dropped;
@@ -1934,10 +1964,12 @@ namespace MWWorld
                         mWorldModel.registerPtr(candidate.item);
                     }
                 }
-                Log(Debug::Warning) << "Ragdoll equipment release failed for " << candidate.item.getCellRef().getRefId()
+                Log(Debug::Warning) << "Equipment release failed for " << candidate.item.getCellRef().getRefId()
                     << ": " << error.what();
             }
+            released = released || committed;
         }
+        return released;
     }
 
     std::vector<RagdollDroppedItem> World::getNpcRagdollDroppedItems(const Ptr& ptr) const

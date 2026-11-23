@@ -240,7 +240,7 @@ namespace MWMechanics
             return best;
         }
 
-        void stopBrutalPickupMovement(const MWWorld::Ptr& actor)
+        void stopMovementForBrutalAction(const MWWorld::Ptr& actor)
         {
             auto& movement = actor.getClass().getMovementSettings(actor);
             movement.mPosition[0] = movement.mPosition[1] = movement.mPosition[2] = 0.f;
@@ -342,6 +342,17 @@ namespace MWMechanics
         if (!actor.getClass().isMobile(actor))
         {
             storage.mFleeState = AiCombatStorage::FleeState_Idle;
+            return false;
+        }
+
+        if (characterController.isBrutalBowKicking()
+            || (!storage.isFleeing() && characterController.startBrutalBowKick(target)))
+        {
+            clearDefence();
+            storage.stopAttack();
+            actorStats.setAttackingOrSpell(false);
+            stopMovementForBrutalAction(actor);
+            storage.mActionCooldown -= duration;
             return false;
         }
 
@@ -529,7 +540,7 @@ namespace MWMechanics
         {
             if (characterController.isBrutalPickingUp())
             {
-                stopBrutalPickupMovement(actor);
+                stopMovementForBrutalAction(actor);
                 stats.setAttackingOrSpell(false);
                 return true;
             }
@@ -571,7 +582,7 @@ namespace MWMechanics
         {
             if (item.isEmpty())
                 return false;
-            stopBrutalPickupMovement(actor);
+            stopMovementForBrutalAction(actor);
             return true;
         }
         const double now = MWBase::Environment::get().getWorld()->getTimeManager()->getSimulationTime();
@@ -641,7 +652,7 @@ namespace MWMechanics
             if (!stalled)
                 return true;
         }
-        stopBrutalPickupMovement(actor);
+        stopMovementForBrutalAction(actor);
         storage.mBrutalPickupStall = 0.f;
         stats.mBrutalPickupPhase = 1;
         const bool facing = zTurn(actor, std::atan2(toItem.x(), toItem.y()), osg::DegreesToRadians(15.f));

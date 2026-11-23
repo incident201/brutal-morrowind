@@ -574,7 +574,7 @@ namespace MWClass
     }
 
     bool Npc::evaluateHit(const MWWorld::Ptr& ptr, MWWorld::Ptr& victim, osg::Vec3f& hitPosition, int* contactPart,
-        std::string_view swing) const
+        std::string_view swing, std::vector<MWMechanics::MeleeFollowThrough>* followThrough) const
     {
         victim = MWWorld::Ptr();
         hitPosition = osg::Vec3f();
@@ -590,7 +590,7 @@ namespace MWClass
         MWBase::World* world = MWBase::Environment::get().getWorld();
 
         const float dist = MWMechanics::getMeleeWeaponReach(ptr, weapon);
-        const std::pair<MWWorld::Ptr, osg::Vec3f> result = MWMechanics::getHitContact(ptr, dist, contactPart, swing);
+        const auto result = MWMechanics::getHitContact(ptr, dist, contactPart, swing, followThrough);
         if (result.first.isEmpty()) // Didn't hit anything
             return true;
         if (Settings::game().mBrutalMeleeGeometry && MWMechanics::isNpcMeleeOccluded(ptr, result.first, result.second))
@@ -605,21 +605,31 @@ namespace MWClass
         if (!weapon.isEmpty())
             weapskill = weapon.getClass().getEquipmentSkill(weapon);
 
-        float hitchance = MWMechanics::getHitChance(ptr, victim, static_cast<int>(getSkill(ptr, weapskill)));
-
-        // Keep the vanilla RNG draw even when opting out of random melee misses.
-        const bool rolledSuccess = Misc::Rng::roll0to99(world->getPrng()) < hitchance;
-        return Settings::game().mMeleeContactAlwaysHits || rolledSuccess;
+        const int skill = static_cast<int>(getSkill(ptr, weapskill));
+        const auto rollHit = [&](const MWWorld::Ptr& target) {
+            const float chance = MWMechanics::getHitChance(ptr, target, skill);
+            // Keep the vanilla RNG draw even when opting out of random melee misses.
+            const bool rolledSuccess = Misc::Rng::roll0to99(world->getPrng()) < chance;
+            return Settings::game().mMeleeContactAlwaysHits || rolledSuccess;
+        };
+        const bool successful = rollHit(victim);
+        if (followThrough)
+            for (auto& contact : *followThrough)
+                contact.mSuccessful = rollHit(contact.mTarget);
+        return successful;
     }
 
     void Npc::hit(const MWWorld::Ptr& ptr, float attackStrength, int type, const MWWorld::Ptr& victim,
-        const osg::Vec3f& hitPosition, bool success, int contactPart, bool groundFinisher) const
+        const osg::Vec3f& hitPosition, bool success, int contactPart, bool groundFinisher,
+        const MWWorld::Ptr* followThroughWeapon) const
     {
         MWWorld::InventoryStore& inv = getInventoryStore(ptr);
         MWWorld::ContainerStoreIterator weaponslot = inv.getSlot(getCreatureStats(ptr).mBrutalOffhandStrike
                 ? MWWorld::InventoryStore::Slot_CarriedLeft : MWWorld::InventoryStore::Slot_CarriedRight);
         MWWorld::Ptr weapon;
-        if (weaponslot != inv.end() && weaponslot->getType() == ESM::Weapon::sRecordId)
+        if (followThroughWeapon)
+            weapon = *followThroughWeapon;
+        else if (weaponslot != inv.end() && weaponslot->getType() == ESM::Weapon::sRecordId)
             weapon = *weaponslot;
 
         // One receipt per native melee hit frame, including empty/range/occlusion failures.
@@ -630,8 +640,10 @@ namespace MWClass
         auto& armed = getCreatureStats(ptr).mPowerStrike;
         // The charge belongs to the right hand; the left dagger's strike neither carries nor clears it.
         const bool offhand = getCreatureStats(ptr).mBrutalOffhandStrike;
-        if (!offhand && !armed.token.empty() && (armed.weapon != weapon || getCreatureStats(ptr).isDead())) armed = {};
-        if (!groundFinisher && !offhand && !getCreatureStats(ptr).mBrutalFastStrike && !armed.token.empty()
+        if (!followThroughWeapon && !offhand && !armed.token.empty()
+            && (armed.weapon != weapon || getCreatureStats(ptr).isDead()))
+            armed = {};
+        if (!followThroughWeapon && !groundFinisher && !offhand && !getCreatureStats(ptr).mBrutalFastStrike && !armed.token.empty()
             && attackStrength >= armed.minimumStrength)
         {
             brutalPowered = true;
@@ -644,7 +656,8 @@ namespace MWClass
             MWBase::Environment::get().getLuaManager()->meleeResolved(ptr, victim, weapon, brutalAttackId,
                 brutalToken, brutalPowered, brutalSuccessful, brutalBlocked, damage, attackStrength, hitPosition);
         } };
-        MWMechanics::applyFatigueLoss(ptr, weapon, attackStrength);
+        if (!followThroughWeapon)
+            MWMechanics::applyFatigueLoss(ptr, weapon, attackStrength);
 
         if (victim.isEmpty()) // Didn't hit anything
             return;
@@ -668,7 +681,7 @@ namespace MWClass
         if (MWMechanics::isNpcMeleeOccluded(ptr, victim, hitPosition))
             return;
 
-        if (ptr == MWMechanics::getPlayer())
+        if (ptr == MWMechanics::getPlayer() && !followThroughWeapon)
             MWBase::Environment::get().getWindowManager()->setEnemy(victim);
 
         if (!success)
@@ -676,7 +689,8 @@ namespace MWClass
             MWBase::Environment::get().getLuaManager()->onHit(ptr, victim, weapon, MWWorld::Ptr(), type, attackStrength,
                 damage, false, hitPosition, false, MWMechanics::DamageSourceType::Melee,
                 brutalAttackId, brutalPowered, false, contactPart);
-            MWMechanics::reduceWeaponCondition(damage, false, weapon, ptr);
+            if (!followThroughWeapon)
+                MWMechanics::reduceWeaponCondition(damage, false, weapon, ptr);
             MWMechanics::resistNormalWeapon(victim, ptr, weapon, damage);
             return;
         }
@@ -697,7 +711,10 @@ namespace MWClass
             }
             MWMechanics::adjustWeaponDamage(damage, weapon, ptr);
             damage *= brutalMultiplier * getCreatureStats(ptr).mBrutalComboMultiplier;
-            MWMechanics::reduceWeaponCondition(damage, true, weapon, ptr);
+            if (followThroughWeapon)
+                damage *= .5f;
+            else
+                MWMechanics::reduceWeaponCondition(damage, true, weapon, ptr);
             MWMechanics::resistNormalWeapon(victim, ptr, weapon, damage);
             MWMechanics::applyWerewolfDamageMult(victim, weapon, damage);
             healthdmg = true;
@@ -730,7 +747,8 @@ namespace MWClass
             ESM::RefId weapskill = ESM::Skill::HandToHand;
             if (!weapon.isEmpty())
                 weapskill = weapon.getClass().getEquipmentSkill(weapon);
-            skillUsageSucceeded(ptr, weapskill, ESM::Skill::Weapon_SuccessfulHit);
+            if (!followThroughWeapon)
+                skillUsageSucceeded(ptr, weapskill, ESM::Skill::Weapon_SuccessfulHit);
 
             const MWMechanics::AiSequence& seq = victim.getClass().getCreatureStats(victim).getAiSequence();
 
@@ -752,7 +770,8 @@ namespace MWClass
             damage *= store.find("fCombatKODamageMult")->mValue.getFloat();
 
         // Apply "On hit" enchanted weapons
-        MWMechanics::applyOnStrikeEnchantment(ptr, victim, weapon, hitPosition);
+        if (!followThroughWeapon)
+            MWMechanics::applyOnStrikeEnchantment(ptr, victim, weapon, hitPosition);
 
         MWMechanics::applyElementalShields(ptr, victim);
 

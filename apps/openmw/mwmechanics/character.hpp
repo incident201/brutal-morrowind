@@ -126,6 +126,7 @@ namespace MWMechanics
     };
 
     struct WeaponInfo;
+    struct MeleeFollowThrough;
 
     class CharacterController : public MWRender::Animation::TextKeyListener
     {
@@ -161,6 +162,9 @@ namespace MWMechanics
         // ACT_GRAB_WEAPON: the world item this NPC takes into its hand at "pickup contact".
         MWWorld::Ptr mBrutalPickupItem;
         std::string mBrutalPickupGroup; // the crouch from the ground or the reach to a table
+        MWWorld::SafePtr mBrutalBowKickTarget;
+        MWWorld::Ptr mBrutalBowKickWeapon;
+        double mBrutalBowKickReadyAt = 0.;
         float mBrutalStepPhase{ 0.f }; // player footstep clock, a fraction of the leg cycle
         int mBrutalStepGait{ 0 }; // BrutalFootsteps::Gait of the last player step
         bool mMovementAnimationHasMovement{ false };
@@ -280,6 +284,9 @@ namespace MWMechanics
 
         int mWeaponType{ ESM::Weapon::None };
         std::string mCurrentWeapon;
+        double mBrutalBowRepeatUntil = -1.;
+        bool mBrutalBowRepeatQueued = false;
+        bool mBrutalBowFastDraw = false;
 
         float mAttackStrength{ -1.f };
         bool mReadyToHit{ false };
@@ -371,7 +378,8 @@ namespace MWMechanics
         std::string_view getDesiredAttackType() const;
 
         void prepareHit();
-        void resolveMeleeHit();
+        void resolveMeleeHit(std::vector<MeleeFollowThrough>* followThrough = nullptr);
+        void applyMeleeImpact(int attackType);
         bool canPlayGroundFinisher() const;
         std::optional<osg::Vec3f> groundFinisherContact(const MWWorld::Ptr& target, bool lockedTarget) const;
         bool startGroundFinisher();
@@ -451,6 +459,8 @@ namespace MWMechanics
         bool startBrutalPickup(const MWWorld::Ptr& item);
         // The pickup clip is playing, including the rise after the item was taken.
         bool isBrutalPickingUp() const;
+        bool startBrutalBowKick(const MWWorld::Ptr& target);
+        bool isBrutalBowKicking() const;
         bool canSwordClinch() const;
         bool hasPhysicalDeath() const;
         void playSwordClinch(std::string_view group, float speed = 1.f);
@@ -458,6 +468,7 @@ namespace MWMechanics
         bool updateSwordClinch(float duration);
 
         void cancelAttackForKick();
+        void hitBrutalBowKick();
         void updateBrutalWounded();
         void updateBrutalPickup();
         bool takeBrutalPickup(const MWWorld::Ptr& item);

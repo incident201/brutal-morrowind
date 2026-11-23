@@ -882,9 +882,11 @@ namespace MWPhysics
     {
         const auto object = mObjects.find(item.mRef);
         const auto ragdoll = mRagdolls.find(actor.mRef);
-        if (object == mObjects.end() || ragdoll == mRagdolls.end())
+        if (object == mObjects.end() || (ragdoll == mRagdolls.end() && !getActor(actor)))
             throw std::runtime_error("Released equipment or owner body is missing");
-        mTaskScheduler->setReleasedObjectMotion(object->second, linear, angular, ragdoll->second->getEquipmentGripBodies());
+        const auto grips = ragdoll == mRagdolls.end() ? std::vector<btRigidBody*>{}
+                                                    : ragdoll->second->getEquipmentGripBodies();
+        mTaskScheduler->setReleasedObjectMotion(object->second, linear, angular, grips);
     }
 
     bool PhysicsSystem::getRagdollEquipmentFrame(const MWWorld::Ptr& actor, bool left,

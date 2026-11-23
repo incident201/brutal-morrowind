@@ -226,7 +226,7 @@ namespace MWClass
     }
 
     bool Creature::evaluateHit(const MWWorld::Ptr& ptr, MWWorld::Ptr& victim, osg::Vec3f& hitPosition, int* contactPart,
-        std::string_view swing) const
+        std::string_view swing, std::vector<MWMechanics::MeleeFollowThrough>*) const
     {
         victim = MWWorld::Ptr();
         hitPosition = osg::Vec3f();
@@ -262,7 +262,7 @@ namespace MWClass
     }
 
     void Creature::hit(const MWWorld::Ptr& ptr, float attackStrength, int type, const MWWorld::Ptr& victim,
-        const osg::Vec3f& hitPosition, bool success, int contactPart, bool) const
+        const osg::Vec3f& hitPosition, bool success, int contactPart, bool, const MWWorld::Ptr*) const
     {
         MWMechanics::CreatureStats& stats = getCreatureStats(ptr);
 

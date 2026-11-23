@@ -113,13 +113,14 @@ namespace MWWorld
         throw std::runtime_error("class does not have item health");
     }
 
-    bool Class::evaluateHit(const Ptr& ptr, Ptr& victim, osg::Vec3f& hitPosition, int* contactPart, std::string_view swing) const
+    bool Class::evaluateHit(const Ptr& ptr, Ptr& victim, osg::Vec3f& hitPosition, int* contactPart,
+        std::string_view swing, std::vector<MWMechanics::MeleeFollowThrough>*) const
     {
         throw std::runtime_error("class cannot hit");
     }
 
     void Class::hit(const Ptr& ptr, float attackStrength, int type, const Ptr& victim, const osg::Vec3f& hitPosition,
-        bool success, int contactPart, bool groundFinisher) const
+        bool success, int contactPart, bool groundFinisher, const Ptr*) const
     {
         throw std::runtime_error("class cannot hit");
     }

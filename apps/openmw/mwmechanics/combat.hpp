@@ -4,16 +4,11 @@
 #include <cstdint>
 #include <string_view>
 #include <utility>
+#include <vector>
 
-namespace osg
-{
-    class Vec3f;
-}
+#include <osg/Vec3f>
 
-namespace MWWorld
-{
-    class Ptr;
-}
+#include "../mwworld/ptr.hpp"
 
 namespace MWRender
 {
@@ -126,11 +121,19 @@ namespace MWMechanics
     bool hasReachableNpcGuardContact(const MWWorld::Ptr& actor, const MWWorld::Ptr& target, float reach,
         const osg::Vec3f& hitPosition, int contactPart);
 
+    struct MeleeFollowThrough
+    {
+        MWWorld::Ptr mTarget;
+        osg::Vec3f mPosition;
+        int mPart;
+        bool mSuccessful = false;
+    };
+
     // Directed surface contact for the player; AI retains its selected combat target.
     // A player melee swing ("slash", "chop", "thrust" or "any") sweeps a fan of rays
     // along its stroke; an empty swing keeps the single aimed ray.
     std::pair<MWWorld::Ptr, osg::Vec3f> getHitContact(const MWWorld::Ptr& actor, float reach, int* contactPart = nullptr,
-        std::string_view swing = {});
+        std::string_view swing = {}, std::vector<MeleeFollowThrough>* followThrough = nullptr);
 
     bool friendlyHit(const MWWorld::Ptr& attacker, const MWWorld::Ptr& target, bool complain);
 }

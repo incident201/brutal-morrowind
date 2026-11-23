@@ -233,6 +233,22 @@ namespace MWMechanics
                                           : stats.mBrutalGuardBreakingAttack;
         }
 
+        bool hasNpcGuardImpact(const MWWorld::Ptr& attacker, const MWWorld::Ptr& blocker,
+            const osg::Vec3f& hitPosition, int contactPart)
+        {
+            // A vanilla blood position alone cannot authenticate a guard contact.
+            if (!Settings::game().mBrutalMeleeGeometry && !isAdaptiveGuardSurface(blocker, contactPart))
+                return false;
+            const auto* animation = dynamic_cast<const MWRender::NpcAnimation*>(
+                MWBase::Environment::get().getWorld()->getAnimation(blocker));
+            if (!animation)
+                return false;
+            const auto origin = getMeleeAim(attacker).first;
+            const auto contact = animation->traceNpcGuardMeshForCombat(origin, hitPosition);
+            logNpcGuardContact(blocker, origin, hitPosition, contact);
+            return contact && std::isfinite(contact->gap) && contact->gap <= sNpcGuardContactMargin;
+        }
+
         bool parryMeleeAttack(const MWWorld::Ptr& attacker, const MWWorld::Ptr& blocker, float damage)
         {
             MWMechanics::CreatureStats& stats = blocker.getClass().getCreatureStats(blocker);
@@ -444,7 +460,8 @@ namespace MWMechanics
                 return false;
             // A wounded NPC's guard gives way: Dark Messiah's WoundedParryBreakChance (0.5) for a
             // sword parry and WoundedBlockBreakChance (0.8) for a shield block.
-            const bool woundedGuardBreak = npcGuard && isBrutalWoundedNpc(blocker)
+            const bool wounded = npcGuard && isBrutalWoundedNpc(blocker);
+            const bool woundedGuardBreak = wounded
                 && Misc::Rng::rollClosedProbability(MWBase::Environment::get().getWorld()->getPrng())
                     < (blockerStats.mBrutalParry ? .5f : .8f);
             // A timed player guard can deflect even when it cannot pay the
@@ -453,35 +470,36 @@ namespace MWMechanics
                 && (npcGuard || (!timedPlayerGuard && !canAbsorbChargedAttack(blockerStats)));
             if (chargeBreaksGuard || woundedGuardBreak)
             {
+                bool disarmed = false;
+                const auto world = MWBase::Environment::get().getWorld();
+                if (chargeBreaksGuard && attacker == getPlayer() && npcGuard && blockerStats.mBrutalParry
+                    && !carriesShield && Settings::game().mBrutalEquipmentPhysics
+                    && hasNpcGuardImpact(attacker, blocker, hitPosition, contactPart)
+                    && Misc::Rng::rollProbability(world->getPrng()) < (wounded ? .30f : .10f))
+                {
+                    osg::Vec3f away = blocker.getRefData().getPosition().asVec3()
+                        - attacker.getRefData().getPosition().asVec3();
+                    away.z() = 0.f;
+                    away.normalize();
+                    disarmed = world->disarmNpcWeapon(blocker, away * 155.f + osg::Vec3f(0, 0, 75.f));
+                    if (disarmed && world->isOnGround(blocker))
+                        world->addActorExternalVelocity(blocker, away * 90.f);
+                }
                 spendBrutalBlockStamina(attacker, blocker, true);
                 openBrutalGuard(blocker);
+                if (disarmed && MWBase::Environment::get().getMechanicsManager()->staggerActor(blocker,
+                        "brutal_npc_disarmed"))
+                    blockerStats.mBrutalParried = false;
                 if (Settings::game().mBrutalCombatSounds)
                     MWBase::Environment::get().getSoundManager()->playSound3D(blocker,
                         ESM::RefId::stringRefId("Brutal Sword Contact"), 1.f, 1.f);
-                return false; // The heavy blow opens the guard and reaches the body.
+                return disarmed;
             }
         }
         if (playerGuard && blockerStats.mBrutalParry)
             return parryMeleeAttack(attacker, blocker, damage);
-        if (npcGuard)
-        {
-            // Vanilla's random blood position is not a guard contact. With
-            // exact body targeting disabled, getHitContact still resolves the
-            // actual aimed guard surface before returning a blocked hit.
-            if (!Settings::game().mBrutalMeleeGeometry && !isAdaptiveGuardSurface(blocker, contactPart))
-                return false;
-            const auto* animation = dynamic_cast<const MWRender::NpcAnimation*>(
-                MWBase::Environment::get().getWorld()->getAnimation(blocker));
-            if (!animation)
-                return false;
-            const auto origin = getMeleeAim(attacker).first;
-            const auto contact = animation->traceNpcGuardMeshForCombat(origin, hitPosition);
-            logNpcGuardContact(blocker, origin, hitPosition, contact);
-            // Allow a small contact margin for the striking blade.
-            // A guard still being raised only blocks once its item gets there.
-            if (!contact || !std::isfinite(contact->gap) || contact->gap > sNpcGuardContactMargin)
-                return false;
-        }
+        if (npcGuard && !hasNpcGuardImpact(attacker, blocker, hitPosition, contactPart))
+            return false;
         if (npcGuard && blockerStats.mBrutalParry)
         {
             auto& inventory = blocker.getClass().getInventoryStore(blocker);
@@ -1563,7 +1581,8 @@ namespace MWMechanics
     }
 
     std::pair<MWWorld::Ptr, osg::Vec3f> getHitContact(
-        const MWWorld::Ptr& actor, float reach, int* contactPart, std::string_view swing)
+        const MWWorld::Ptr& actor, float reach, int* contactPart, std::string_view swing,
+        std::vector<MeleeFollowThrough>* followThrough)
     {
         if(contactPart)*contactPart=-1;
         if (!Settings::game().mBrutalMeleeGeometry)
@@ -1611,6 +1630,8 @@ namespace MWMechanics
                     }
                 if (candidates.empty() && !guardInRange)
                     return {};
+                if (candidates.size() < 2 && !guardInRange)
+                    followThrough = nullptr;
                 fan = getSwingFan(swing, shape, reverseSlash);
             }
             osg::Vec3f right = aimDirection ^ osg::Vec3f(0, 0, 1);
@@ -1663,6 +1684,7 @@ namespace MWMechanics
                 });
                 fan.erase(std::unique(fan.begin(), fan.end()), fan.end());
             }
+            std::pair<MWWorld::Ptr, osg::Vec3f> firstContact;
             for (const osg::Vec2f& offset : fan)
             {
                 const float yaw = osg::DegreesToRadians(offset.x()), pitch = osg::DegreesToRadians(offset.y());
@@ -1676,10 +1698,23 @@ namespace MWMechanics
                         || isAdaptiveGuardSurface(contact.mHitObject, contact.mHitPart))
                     && clearContact(contact.mHitPos,contact.mHitObject))
                 {
-                    if(contactPart)*contactPart=contact.mHitPart;
-                    return {contact.mHitObject,contact.mHitPos};
+                    if (firstContact.first.isEmpty())
+                    {
+                        if (contactPart)
+                            *contactPart = contact.mHitPart;
+                        firstContact = { contact.mHitObject, contact.mHitPos };
+                        if (!followThrough)
+                            return firstContact;
+                    }
+                    else if (contact.mHitObject != firstContact.first
+                        && std::none_of(followThrough->begin(), followThrough->end(), [&](const MeleeFollowThrough& hit) {
+                               return hit.mTarget == contact.mHitObject;
+                           }))
+                        followThrough->push_back({ contact.mHitObject, contact.mHitPos, contact.mHitPart });
                 }
             }
+            if (!firstContact.first.isEmpty())
+                return firstContact;
             // No ray touched a surface: accept a body whose skeleton lies inside the
             // swing area. The point nearest the stroke is the contact.
             MWWorld::Ptr best;

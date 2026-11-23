@@ -159,26 +159,33 @@ def main():
     add(*blend(poses[-1], ready, .15), source('anm_bow_idle', .15, model=BASIC))
     mark('equip stop')
 
-    # Shoot: take an arrow, nock it and pull to full draw.
-    start = offset
-    mark('shoot start')
-    times, poses = clip_poses(vm, draw_clip, 0., full, speed)
-    poses = ease_in(ready, times, poses, .2)
-    add(times, poses, source(draw_clip, draw_length, runtime_fade_in=.1))
-    mark('shoot attach', start + take / speed)
-    mark('shoot min attack', start + pull / speed)
-    # Settle from the event pose into the steady hold.
-    add(*blend(poses[-1], drawn, .12), source('anm_bowattack_idle', .12))
-    mark('shoot max attack')
-    add(*hold(drawn, 1. / FPS), source('anm_bowattack_idle', 1. / FPS))
-    mark('shoot min hit')
-    start = offset
-    times, poses = clip_poses(vm, shoot_clip, 0., shoot_length)
-    add(times, poses, source(shoot_clip, shoot_length))
-    mark('shoot release', start + release)
-    mark('shoot follow start')
-    add(*blend(shot_end, ready, .42), source(shoot_clip, .42))
-    mark('shoot follow stop')
+    def add_shot(phase, clip, duration, take_at, pull_at, full_at, nock_at=None):
+        start = offset
+        mark(phase + ' start')
+        times, poses = clip_poses(vm, clip, 0., full_at, speed)
+        if nock_at is None:
+            poses = ease_in(ready, times, poses, .2)
+        add(times, poses, source(clip, duration, runtime_fade_in=.1))
+        mark(phase + ' attach', start + take_at / speed)
+        mark(phase + ' min attack', start + pull_at / speed)
+        if nock_at is not None:
+            mark(phase + ' nock', start + nock_at / speed)
+        # Both draws reach the same hold and fire the same release.
+        settle = .12 if nock_at is None else .07
+        add(*blend(poses[-1], drawn, settle), source('anm_bowattack_idle', settle))
+        mark(phase + ' max attack')
+        add(*hold(drawn, 1. / FPS), source('anm_bowattack_idle', 1. / FPS))
+        mark(phase + ' min hit')
+        shot_start = offset
+        times, poses = clip_poses(vm, shoot_clip, 0., shoot_length)
+        add(times, poses, source(shoot_clip, shoot_length))
+        mark(phase + ' release', shot_start + release)
+        mark(phase + ' follow start')
+        mark(phase + ' chain', offset + .12)
+        add(*blend(shot_end, ready, .42), source(shoot_clip, .42))
+        mark(phase + ' follow stop')
+
+    add_shot('shoot', draw_clip, draw_length, take, pull, full)
 
     # Unequip: Dark Messiah's undraw.
     unequip_length = vm.duration(BASIC, 'anm_bow_undraw')
@@ -189,16 +196,26 @@ def main():
     add(times, poses, source('anm_bow_undraw', unequip_length, model=BASIC))
     mark('unequip stop')
 
+    fast_clip = 'anm_bowattack_fastreload'
+    fast_length = vm.duration(MODEL, fast_clip)
+    fast_take = vm.sequence_event_time(MODEL, fast_clip, 2112, .30)
+    fast_pull = vm.sequence_event_time(MODEL, fast_clip, 2113, .57)
+    fast_full = vm.sequence_event_time(MODEL, fast_clip, 2144, .93)
+    fast_nock = vm.sequence_event_time(MODEL, fast_clip, 2115, .50)
+    add_shot('shoot fast', fast_clip, fast_length, fast_take, fast_pull, fast_full, fast_nock)
+
     folder = args.arms / 'Animations/brutal_fp_bow'
     folder.mkdir(parents=True, exist_ok=True)
     marks.sort(key=lambda m: m[0])
     Viewmodel.write(vm, folder, 'bowandarrow', segments, marks)
     times = dict((label, t) for t, label in marks)
     add_sound_keys(vm, folder / 'bowandarrow.kf', [
-        (times['shoot start'] + .05, 'Brutal Bow Take Arrow'),
-        (times['shoot min attack'], 'Brutal Bow Draw'),
-        (times['shoot release'], 'BowShoot'),
-        (times['shoot release'], 'Brutal Bow Release'),
+        key
+        for phase in ('shoot', 'shoot fast')
+        for key in ((times[phase + ' start'] + .05, 'Brutal Bow Take Arrow'),
+                    (times[phase + ' min attack'], 'Brutal Bow Draw'),
+                    (times[phase + ' release'], 'BowShoot'),
+                    (times[phase + ' release'], 'Brutal Bow Release'))
     ])
     report = {'bowandarrow': {k: v for k, v in vm.groups[folder.name]['bowandarrow'].items() if k != 'segments'}}
 
@@ -228,6 +245,7 @@ def main():
         'derived_from_game_files': True,
         'draw_speed': speed,
         'events': {'take': take, 'pull': pull, 'full': full, 'release': release},
+        'fast_events': {'take': fast_take, 'nock': fast_nock, 'pull': fast_pull, 'full': fast_full},
         'groups': report,
     }, indent=2) + '\n')
 

@@ -67,6 +67,7 @@
 #include "aicombataction.hpp"
 #include "combat.hpp"
 #include "creaturestats.hpp"
+#include "meleeocclusion.hpp"
 #include "movement.hpp"
 #include "npcstats.hpp"
 #include "security.hpp"
@@ -81,6 +82,7 @@ namespace
     const std::string sBackstabCancel = "brutal_backstab_cancel";
     const std::string sBackstabOut = "brutal_backstab_out";
     const std::string sBackstabVictim = "brutal_backstabbed";
+    constexpr std::string_view sBowKick = "brutal_npc_bow_kick";
 
     constexpr int sBackstabGround = MWPhysics::CollisionType_World | MWPhysics::CollisionType_Door
         | MWPhysics::CollisionType_HeightMap;
@@ -537,6 +539,8 @@ namespace MWMechanics
         mBrutalFastQueued = false;
         mBrutalFastIndex = 0;
         resetBrutalFastContinuation();
+        mBrutalBowRepeatUntil = -1.;
+        mBrutalBowRepeatQueued = mBrutalBowFastDraw = false;
         mReadyToHit = false;
         mBrutalOffhandType = -1;
         if (mPtr.getClass().isActor())
@@ -1349,6 +1353,12 @@ namespace MWMechanics
         }
 
         std::string_view action = evt.substr(groupname.size() + 2);
+        if (groupname == sBowKick)
+        {
+            if (action == "hit")
+                hitBrutalBowKick();
+            return;
+        }
         if (groupname == sGroundFinisher)
         {
             if (mGroundFinisher && action == "swing")
@@ -1446,9 +1456,8 @@ namespace MWMechanics
             // and processing multiple hit keys for a single attack
             if (mReadyToHit)
             {
-                resolveMeleeHit();
                 ++mBrutalAcceptedStrikes;
-                charClass.hit(mPtr, mAttackStrength, attackType, mAttackVictim, mAttackHitPos, mAttackSuccess,mAttackContactPart);
+                applyMeleeImpact(attackType);
                 mBrutalWallBodyHit = !mAttackVictim.isEmpty();
                 mReadyToHit = false;
                 mBrutalOffhandType = hasBrutalOffhandDagger() || brutalStaffSecondStrike() ? attackType : -1;
@@ -1471,10 +1480,8 @@ namespace MWMechanics
                 const float strength = mAttackStrength;
                 stats.mBrutalOffhandStrike = hasBrutalOffhandDagger();
                 mAttackStrength = mBrutalOffhandStrength;
-                resolveMeleeHit();
                 ++mBrutalAcceptedStrikes;
-                charClass.hit(mPtr, mAttackStrength, mBrutalOffhandType, mAttackVictim, mAttackHitPos, mAttackSuccess,
-                    mAttackContactPart);
+                applyMeleeImpact(mBrutalOffhandType);
                 stats.mBrutalOffhandStrike = false;
                 mAttackVictim = victim;
                 mAttackHitPos = hitPos;
@@ -1524,14 +1531,25 @@ namespace MWMechanics
                 mReadyToHit=false;
             }
         }
-        else if (action == "shoot attach")
+        else if (action == "shoot attach" || action == "shoot fast attach")
             mAnimation->attachArrow();
-        else if (action == "shoot release")
+        else if (action == "shoot release" || action == "shoot fast release")
         {
             // See notes for melee release above
             if (mReadyToHit)
             {
+                MWWorld::ConstPtr ammo;
+                if (mPtr == getPlayer() && mWeaponType == ESM::Weapon::MarksmanBow && brutalDmFirstPerson())
+                {
+                    const auto& inv = charClass.getInventoryStore(mPtr);
+                    const auto slot = inv.getSlot(MWWorld::InventoryStore::Slot_Ammunition);
+                    if (slot != inv.end())
+                        ammo = *slot;
+                }
+                const int count = ammo.isEmpty() ? 0 : ammo.getCellRef().getCount();
                 mAnimation->releaseArrow(mAttackStrength);
+                if (count > 0 && ammo.getCellRef().getCount() < count)
+                    mBrutalBowRepeatUntil = brutalSimulationTime() + 1.15;
                 mReadyToHit = false;
             }
         }
@@ -1608,6 +1626,10 @@ namespace MWMechanics
 
     std::string CharacterController::getAttackAnimationType() const
     {
+        if (mAttackType == "shoot" && mBrutalBowFastDraw
+            && mAnimation->activeSourceHasTextKey(mCurrentWeapon + ": shoot start",
+                mCurrentWeapon + ": shoot fast start"))
+            return "shoot fast";
         // Source direction affects playback and impact direction; it never changes
         // the logical slash used by contact resolution, damage or adrenaline rules.
         if (mBrutalNeutralAttack && mPtr == getPlayer())
@@ -1669,7 +1691,7 @@ namespace MWMechanics
         mReadyToHit = true;
     }
 
-    void CharacterController::resolveMeleeHit()
+    void CharacterController::resolveMeleeHit(std::vector<MeleeFollowThrough>* followThrough)
     {
         // Classic target/accuracy selection belongs to the windup's original prepareHit.
         // Authored multi-hit/fast events have no pending vanilla preparation and resolve here.
@@ -1683,10 +1705,32 @@ namespace MWMechanics
         mAttackContactPart=-1;
         const std::string_view swing = mAttackType == "slash" || mAttackType == "chop" || mAttackType == "thrust"
             ? std::string_view(mAttackType) : std::string_view("any");
-        mAttackSuccess=mPtr.getClass().evaluateHit(mPtr,mAttackVictim,mAttackHitPos,&mAttackContactPart,swing);
+        mAttackSuccess = mPtr.getClass().evaluateHit(mPtr, mAttackVictim, mAttackHitPos, &mAttackContactPart, swing,
+            followThrough);
         if (!Settings::game().mBrutalMeleeGeometry)
             refreshMeleeGuardContact(mPtr, mAttackVictim, mAttackHitPos, mAttackContactPart);
         if(!mAttackSuccess)mAttackStrength=0.f;
+    }
+
+    void CharacterController::applyMeleeImpact(int attackType)
+    {
+        bool sweep = false;
+        if (mPtr == getPlayer() && !mWeapon.isEmpty() && brutalDmFirstPerson() && Settings::game().mBrutalMeleeGeometry)
+        {
+            const bool sidewaysSpear = mWeaponType == ESM::Weapon::SpearTwoWide && mAttackType == "slash"
+                && (mBrutalFast == BrutalFast::Attack ? mBrutalFastClip.starts_with("faststrafe")
+                                                     : brutalActiveKey("brutal spear grip"));
+            sweep = mWeaponType == ESM::Weapon::BluntTwoWide || sidewaysSpear;
+        }
+        const MWWorld::Ptr weapon = mWeapon;
+        const float strength = mAttackStrength;
+        std::vector<MeleeFollowThrough> contacts;
+        resolveMeleeHit(sweep ? &contacts : nullptr);
+        const auto& cls = mPtr.getClass();
+        cls.hit(mPtr, mAttackStrength, attackType, mAttackVictim, mAttackHitPos, mAttackSuccess, mAttackContactPart);
+        for (const auto& contact : contacts)
+            cls.hit(mPtr, strength, attackType, contact.mTarget, contact.mPosition, contact.mSuccessful,
+                contact.mPart, false, &weapon);
     }
 
     bool CharacterController::brutalStaffSecondStrike() const
@@ -2461,6 +2505,7 @@ namespace MWMechanics
         // playing attack/parry layer. A guard may cancel a windup without
         // resetting the age of the still-held attack button.
         const bool use = getAttackingOrSpell();
+        const bool freshPress = use && !mBrutalUseButton;
         mBrutalUseHeld = use && mBrutalUseButton
             ? mBrutalUseHeld + MWBase::Environment::get().getFrameDuration() : 0.f;
         mBrutalUseButton = use;
@@ -2489,7 +2534,11 @@ namespace MWMechanics
             return false;
         // If the current animation is scripted, we can't do anything here.
         if (isScriptedAnimPlaying())
+        {
+            mBrutalBowRepeatUntil = -1.;
+            mBrutalBowRepeatQueued = false;
             return false;
+        }
 
         if ((sliding || mPtr.getClass().getCreatureStats(mPtr).mBrutalSlideAttack) && !getAttackingOrSpell())
             mBrutalComboRelease = false;
@@ -2798,7 +2847,20 @@ namespace MWMechanics
         float complete = 0.f;
         bool animPlaying = false;
         ESM::WeaponType::Class weapclass = getWeaponType(mWeaponType)->mWeaponClass;
-        if (getAttackingOrSpell())
+        const bool canRepeatBow = mPtr == getPlayer() && mWeaponType == ESM::Weapon::MarksmanBow
+            && weaptype == mWeaponType && ammunition && brutalDmFirstPerson();
+        const double bowTime = canRepeatBow ? brutalSimulationTime() : 0.;
+        if (!canRepeatBow || weaponChanged || (mBrutalBowRepeatUntil >= 0. && bowTime > mBrutalBowRepeatUntil))
+        {
+            mBrutalBowRepeatUntil = -1.;
+            mBrutalBowRepeatQueued = false;
+        }
+        const bool repeatBow = canRepeatBow && mBrutalBowRepeatUntil >= bowTime;
+        if (canRepeatBow && freshPress && (mUpperBodyState == UpperBodyState::AttackRelease
+                                             || mUpperBodyState == UpperBodyState::AttackEnd))
+            mBrutalBowRepeatQueued = true;
+        const bool bufferedBow = repeatBow && mBrutalBowRepeatQueued;
+        if (getAttackingOrSpell() || bufferedBow)
         {
             mResetIdleOnAttackEnd = true;
             if (mUpperBodyState == UpperBodyState::WeaponEquipped && !mBrutalGuardPress
@@ -2813,6 +2875,9 @@ namespace MWMechanics
                 mBrutalChargedHold = mBrutalGuardCharge = false;
                 stats.mBrutalSlashRight = false;
                 stats.mBrutalSlideAttack = false;
+                mBrutalBowFastDraw = repeatBow;
+                mBrutalBowRepeatUntil = -1.;
+                mBrutalBowRepeatQueued = false;
 
                 // Randomize attacks for non-bipedal creatures
                 if (!cls.isBipedal(mPtr)
@@ -3039,7 +3104,8 @@ namespace MWMechanics
                     mAttackHitPos = osg::Vec3f();
                     mAttackContactPart = -1;
 
-                    playBlendedAnimation(mCurrentWeapon, priorityWeapon, attackMask, false, weapSpeed,
+                    const float drawSpeed = mBrutalBowFastDraw && startKey == "shoot start" ? weapSpeed * 1.6f : weapSpeed;
+                    playBlendedAnimation(mCurrentWeapon, priorityWeapon, attackMask, false, drawSpeed,
                         startKey, stopKey, 0.0f, 0);
                 }
             }
@@ -3216,10 +3282,10 @@ namespace MWMechanics
         if (mBrutalFast != BrutalFast::None)
             updateBrutalFast(animPlaying, complete);
 
-        // A staff's regrip and second strike play out unless the player attacks again from the
-        // authored chain point on: the follow section ends there and the next swing starts at once.
+        // The staff's regrip and the bow's recovery can hand off at their chain marker.
         if (animPlaying && mUpperBodyState == UpperBodyState::AttackEnd && mPtr == getPlayer()
-            && mBrutalFast == BrutalFast::None && mAttackStrength >= 0.f && stats.getAttackingOrSpell())
+            && mBrutalFast == BrutalFast::None && mAttackStrength >= 0.f
+            && (stats.getAttackingOrSpell() || bufferedBow))
         {
             const float chain = mAnimation->getTextKeyTime(mCurrentWeapon + ": " + getAttackAnimationType() + " chain");
             if (chain >= 0.f && mAnimation->getCurrentTime(mCurrentWeapon) >= chain)
@@ -3250,6 +3316,9 @@ namespace MWMechanics
                 // See the weapon->weapon mid-attack skip logic above
                 if (mUpperBodyState == UpperBodyState::AttackEnd)
                 {
+                    mBrutalBowFastDraw = false;
+                    if (!repeatBow)
+                        mBrutalBowRepeatQueued = false;
                     stats.mBrutalSlashRight = false;
                     stats.mBrutalSlideAttack = false;
                     if (weapclass == ESM::WeaponType::Thrown && weaptype == ESM::Weapon::HandToHand)
@@ -3288,8 +3357,9 @@ namespace MWMechanics
             if (mUpperBodyState == UpperBodyState::AttackWindUp && !isRandomAttackAnimation(mCurrentWeapon))
             {
                 float currentTime = mAnimation->getCurrentTime(mCurrentWeapon);
-                float minAttackTime = mAnimation->getTextKeyTime(mCurrentWeapon + ": " + mAttackType + " min attack");
-                float startTime = mAnimation->getTextKeyTime(mCurrentWeapon + ": " + mAttackType + " start");
+                const std::string attack = getAttackAnimationType();
+                float minAttackTime = mAnimation->getTextKeyTime(mCurrentWeapon + ": " + attack + " min attack");
+                float startTime = mAnimation->getTextKeyTime(mCurrentWeapon + ": " + attack + " start");
                 if (startTime <= currentTime && currentTime < minAttackTime)
                     mAnimation->setPitchFactor((currentTime - startTime) / (minAttackTime - startTime));
             }
@@ -4541,6 +4611,99 @@ namespace MWMechanics
             && mAnimation && mAnimation->isPlaying(mBrutalPickupGroup);
     }
 
+    namespace
+    {
+        std::optional<osg::Vec3f> bowKickDirection(const MWWorld::Ptr& attacker, const MWWorld::Ptr& target,
+            float reach)
+        {
+            const auto world = MWBase::Environment::get().getWorld();
+            if (target.isEmpty() || !target.getRefData().isEnabled() || !target.getRefData().getBaseNode()
+                || target.getClass().getCreatureStats(target).isDead()
+                || !target.getClass().getCreatureStats(target).mBrutalClinchOpponent.isEmpty()
+                || !isInMeleeReach(attacker, target, reach) || !world->isOnGround(attacker)
+                || world->isSwimming(attacker) || world->isFlying(attacker))
+                return std::nullopt;
+            const auto& pos = attacker.getRefData().getPosition();
+            osg::Vec3f away = target.getRefData().getPosition().asVec3() - pos.asVec3();
+            away.z() = 0.f;
+            const osg::Vec3f forward(std::sin(pos.rot[2]), std::cos(pos.rot[2]), 0.f);
+            if (away.normalize() < .001f || forward * away < .5f || !world->getLOS(attacker, target)
+                || isNpcMeleeOccluded(attacker, target, getMeleeTorsoPosition(target)))
+                return std::nullopt;
+            // Eye-level visibility can miss low cover between the kicking leg and its target.
+            const auto hip = [&](const MWWorld::Ptr& actor) {
+                return actor.getRefData().getPosition().asVec3()
+                    + osg::Vec3f(0, 0, world->getHalfExtents(actor).z() * .85f);
+            };
+            if (world->getRayCasting()->castRay(hip(attacker), hip(target), { attacker, target }, {},
+                    sBackstabObstruction).mHit)
+                return std::nullopt;
+            return away;
+        }
+    }
+
+    bool CharacterController::isBrutalBowKicking() const
+    {
+        return mAnimation && mCurrentHit == sBowKick && mAnimation->isPlaying(sBowKick);
+    }
+
+    bool CharacterController::startBrutalBowKick(const MWWorld::Ptr& target)
+    {
+        if (!Settings::game().mDarkMessiahNpcCombat || !mPtr.getClass().isNpc() || mPtr == getPlayer()
+            || !mAnimation || !mAnimation->hasAnimation(sBowKick) || mHitState != CharState_None
+            || mUpperBodyState < UpperBodyState::WeaponEquipped || brutalSimulationTime() < mBrutalBowKickReadyAt)
+            return false;
+        const auto weaponClass = getWeaponType(mWeaponType)->mWeaponClass;
+        if ((weaponClass != ESM::WeaponType::Ranged && weaponClass != ESM::WeaponType::Thrown)
+            || mWeapon.isEmpty())
+            return false;
+        const auto& inventory = mPtr.getClass().getInventoryStore(mPtr);
+        const auto slot = inventory.getSlot(MWWorld::InventoryStore::Slot_CarriedRight);
+        if (slot == inventory.end() || *slot != mWeapon)
+            return false;
+        auto& stats = mPtr.getClass().getCreatureStats(mPtr);
+        if (stats.isParalyzed() || stats.getKnockedDown() || stats.getHitRecovery()
+            || stats.getDrawState() != DrawState::Weapon)
+            return false;
+        auto fatigue = stats.getFatigue();
+        const float cost = std::max(1.f, fatigue.getBase() * .15f);
+        if (fatigue.getCurrent() < cost || !bowKickDirection(mPtr, target, 28.f) || !stagger(sBowKick))
+            return false;
+        if (mWeaponType == ESM::Weapon::MarksmanBow)
+            mAnimation->detachArrow();
+        fatigue.setCurrent(fatigue.getCurrent() - cost);
+        stats.setFatigue(fatigue);
+        mBrutalBowKickTarget = MWWorld::SafePtr(target);
+        mBrutalBowKickWeapon = mWeapon;
+        mBrutalBowKickReadyAt = brutalSimulationTime() + 5.;
+        return true;
+    }
+
+    void CharacterController::hitBrutalBowKick()
+    {
+        const auto& stats = mPtr.getClass().getCreatureStats(mPtr);
+        const MWWorld::Ptr target = std::exchange(mBrutalBowKickTarget, {}).ptrOrEmpty();
+        const MWWorld::Ptr weapon = std::exchange(mBrutalBowKickWeapon, {});
+        if (target.isEmpty() || weapon.isEmpty() || !isBrutalBowKicking() || stats.isDead()
+            || stats.isParalyzed() || stats.getKnockedDown() || stats.getDrawState() != DrawState::Weapon)
+            return;
+        const auto& inventory = mPtr.getClass().getInventoryStore(mPtr);
+        const auto slot = inventory.getSlot(MWWorld::InventoryStore::Slot_CarriedRight);
+        if (slot == inventory.end() || *slot != weapon)
+            return;
+        const auto away = bowKickDirection(mPtr, target, 46.f);
+        if (!away)
+            return;
+        auto& env = MWBase::Environment::get();
+        if (target == getPlayer() && env.getWorld()->getGodModeState())
+            return;
+        env.getWorld()->addActorExternalVelocity(target, *away * 250.f);
+        if (Settings::game().mBrutalCombatSounds)
+            env.getSoundManager()->playSound3D(target, ESM::RefId::stringRefId("Brutal Kick Hit"), 1.f, 1.f);
+        env.getLuaManager()->onHit(mPtr, target, {}, {}, -1, 1.f, 5.f, true,
+            getMeleeTorsoPosition(target), true, DamageSourceType::Melee);
+    }
+
     bool CharacterController::startBrutalPickup(const MWWorld::Ptr& item)
     {
         if (item.isEmpty() || !canBrutalPickup())
@@ -5392,12 +5555,10 @@ namespace MWMechanics
         // Two daggers take turns: each click is one complete native hit with that dagger's own
         // target, damage, wear, enchantment and effects. One dagger always strikes with itself.
         stats.mBrutalOffhandStrike = action.ends_with(" left") && hasBrutalOffhandDagger();
-        resolveMeleeHit();
         stats.mBrutalComboMultiplier = .7f / 1.5f; // first_basic.qct HitPow against the charged swing.
         stats.mBrutalFastStrike = true;
         ++mBrutalAcceptedStrikes;
-        cls.hit(mPtr, mAttackStrength, thrust ? ESM::Weapon::AT_Thrust : chop ? ESM::Weapon::AT_Chop : ESM::Weapon::AT_Slash,
-            mAttackVictim, mAttackHitPos, mAttackSuccess, mAttackContactPart);
+        applyMeleeImpact(thrust ? ESM::Weapon::AT_Thrust : chop ? ESM::Weapon::AT_Chop : ESM::Weapon::AT_Slash);
         mBrutalWallBodyHit = !mAttackVictim.isEmpty();
         stats.mBrutalFastStrike = false;
         stats.mBrutalComboMultiplier = 1.f;
@@ -5432,14 +5593,12 @@ namespace MWMechanics
         stats.mBrutalSlashRight = false;
         stats.mBrutalSlideAttack = false;
         mAttackStrength = 1.f;
-        resolveMeleeHit();
         stats.mBrutalComboMultiplier = ratio;
         const auto& inv = cls.getInventoryStore(mPtr);
         const auto shield = inv.getSlot(MWWorld::InventoryStore::Slot_CarriedLeft);
         stats.mBrutalShieldRush = !falling && shield != inv.end() && shield->getType() == ESM::Armor::sRecordId
             && updateCarriedLeftVisible(mWeaponType);
-        cls.hit(mPtr, mAttackStrength, falling ? ESM::Weapon::AT_Chop : ESM::Weapon::AT_Slash, mAttackVictim,
-            mAttackHitPos, mAttackSuccess, mAttackContactPart);
+        applyMeleeImpact(falling ? ESM::Weapon::AT_Chop : ESM::Weapon::AT_Slash);
         stats.mBrutalShieldRush = false;
         stats.mBrutalComboMultiplier = 1.f;
         const MWWorld::Ptr victim = mAttackVictim;

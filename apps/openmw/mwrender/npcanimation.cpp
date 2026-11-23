@@ -4504,8 +4504,10 @@ namespace MWRender
             return;
         // Turn the arrow onto the rest as the source animation starts pulling the string.
         osg::Vec3f held = osg::Matrixf::transform3x3(mArrowMount->mHold, *right);
-        const float pull = getTextKeyTime("bowandarrow: shoot min attack");
         const float time = getCurrentTime("bowandarrow");
+        const float fastStart = getTextKeyTime("bowandarrow: shoot fast start");
+        const float pull = getTextKeyTime(fastStart >= 0.f && time >= fastStart
+                ? "bowandarrow: shoot fast nock" : "bowandarrow: shoot min attack");
         if (pull >= 0.f && time >= 0.f && time < pull && held.normalize() > 1e-3f)
         {
             constexpr float nockTime = .15f;

@@ -90,6 +90,7 @@ namespace MWWorld
     class World final : public MWBase::World
     {
     private:
+        bool releaseNpcEquipment(const Ptr& ptr, bool afterKnockdown, const osg::Vec3f* disarmVelocity);
         Resource::ResourceSystem* mResourceSystem;
 
         ESM::ReadersCache mReaders;
@@ -427,6 +428,7 @@ namespace MWWorld
         std::vector<osg::Vec3f> getNpcRagdollState(const Ptr& ptr) const override;
         std::map<std::string, double> getNpcRagdollEnhancementState(const Ptr& ptr) const override;
         void releaseNpcRagdollEquipment(const Ptr& ptr, bool afterKnockdown) override;
+        bool disarmNpcWeapon(const Ptr& ptr, const osg::Vec3f& velocity) override;
         void getLooseEquipmentInRange(const osg::Vec3f& center, float radius, std::vector<Ptr>& out) override;
         std::vector<RagdollDroppedItem> getNpcRagdollDroppedItems(const Ptr& ptr) const override;
         std::vector<osg::Vec3f> getReleasedEquipmentState(const Ptr& ptr) const override;
