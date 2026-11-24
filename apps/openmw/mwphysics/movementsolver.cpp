@@ -655,8 +655,8 @@ namespace MWPhysics
         collisionWorld->convexSweepTest(static_cast<const btConvexShape*>(shape), btTransform(btrot, btFrom),
             btTransform(btrot, btTo), resultCallback);
 
-        projectile.mPosition
-            = Misc::Convert::toOsg(projectile.mProjectile->isActive() ? btTo : resultCallback.m_hitPointWorld);
+        resultCallback.applyHit();
+        projectile.mPosition = Misc::Convert::toOsg(resultCallback.hasHit() ? resultCallback.m_hitPointWorld : btTo);
     }
 
     btVector3 addMarginToDelta(btVector3 delta)

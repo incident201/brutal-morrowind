@@ -67,7 +67,8 @@ namespace MWWorld
         /// missiles, where the missile ends up (stuck in a body, a shield or a soft surface, or glancing off).
         void landProjectile(const MWWorld::Ptr& caster, const MWWorld::Ptr& target, const MWWorld::Ptr& bow,
             const MWWorld::Ptr& projectile, const osg::Vec3f& hitPosition, const osg::Vec3f& hitNormal,
-            const osg::Vec3f& velocity, float attackStrength, bool hitWater, std::uint64_t finisherId = 0);
+            const osg::Vec3f& velocity, float attackStrength, bool hitWater, std::uint64_t finisherId = 0,
+            bool finisherHit = false);
 
         void update(float dt);
 
@@ -130,7 +131,6 @@ namespace MWWorld
             struct Finisher
             {
                 MWWorld::SafePtr mTarget;
-                std::uint64_t mAttackId;
                 float mSpeed;
                 float mTimeLeft;
                 bool mSlowMotionRequested = false;
@@ -141,6 +141,7 @@ namespace MWWorld
 
             osg::Vec3f mVelocity;
             float mAttackStrength;
+            std::uint64_t mFinisherAttackId = 0;
             std::optional<Finisher> mFinisher;
         };
 

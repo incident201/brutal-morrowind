@@ -15,35 +15,24 @@
 #include "limbsevering.hpp"
 #include "npcanimation.hpp"
 #include "releasedequipmentcapture.hpp"
-#include "renderprewarm.hpp"
 #include "vismask.hpp"
 #include <algorithm>
 #include <bit>
 #include <chrono>
 #include <components/debug/debuglog.hpp>
 #include <components/esm3/loadarmo.hpp>
-#include <components/resource/imagemanager.hpp>
-#include <components/resource/resourcesystem.hpp>
-#include <components/resource/scenemanager.hpp>
 #include <components/sceneutil/decalprojector.hpp>
-#include <components/sceneutil/depth.hpp>
 #include <components/sceneutil/positionattitudetransform.hpp>
 #include <components/sceneutil/skeleton.hpp>
-#include <components/sceneutil/texturetype.hpp>
 #include <components/settings/values.hpp>
 #include <components/vfs/manager.hpp>
 #include <cstring>
 #include <limits>
 #include <map>
-#include <osg/BlendFunc>
-#include <osg/ColorMask>
+#include <set>
 #include <osg/FrameStamp>
-#include <osg/PolygonOffset>
-#include <osg/TexMat>
-#include <osg/Texture2D>
 #include <osg/TriangleIndexFunctor>
 #include <osgUtil/CullVisitor>
-#include <osgUtil/IncrementalCompileOperation>
 
 namespace MWRender
 {
@@ -51,7 +40,6 @@ namespace MWRender
     {
         using Anchors = std::vector<SceneUtil::SurfaceDecals::Anchor>;
         constexpr std::size_t MaxWounds = 24, MaxActorVertices = 8192, MaxSaveBytes = 400000;
-        const char* const Styles[]{ "slash", "small", "big", "tiny" };
 
         // Ordinary Geometry is often shared between actors. Replace only this
         // actor's parent edge, keeping source arrays/materials immutable.
@@ -100,16 +88,6 @@ namespace MWRender
             std::vector<SceneUtil::DecalProjector::Triangle> triangles;
             std::uint64_t fingerprint = 0;
 
-            SceneUtil::SurfaceDecals* marks() const
-            {
-                if (auto* rig = dynamic_cast<SceneUtil::RigGeometry*>(drawable.get()))
-                    return rig->getSurfaceDecals();
-                if (auto* morph = dynamic_cast<SceneUtil::MorphGeometry*>(drawable.get()))
-                    return morph->getSurfaceDecals();
-                if (auto* plain = dynamic_cast<BloodMarkedGeometry*>(drawable.get()))
-                    return plain->decals;
-                return nullptr;
-            }
             SceneUtil::SurfaceDecals* attach()
             {
                 if (auto* rig = dynamic_cast<SceneUtil::RigGeometry*>(drawable.get()))
@@ -136,6 +114,31 @@ namespace MWRender
                 source = replacement;
                 path.back() = replacement;
                 return replacement->decals;
+            }
+        };
+
+        struct BloodPatch
+        {
+            osg::observer_ptr<SceneUtil::SurfaceDecals> decals;
+            SceneUtil::SurfaceDecals::PatchId id = 0;
+
+            bool attach(Surface& surface, const Anchors& anchors, osg::StateSet* state)
+            {
+                if (auto* marks = surface.attach())
+                {
+                    id = marks->addPatch(anchors, state, Mask_Effect);
+                    if (id)
+                        decals = marks;
+                }
+                return id != 0;
+            }
+
+            void remove()
+            {
+                if (auto* marks = decals.get())
+                    marks->removePatch(id);
+                decals = nullptr;
+                id = 0;
             }
         };
 
@@ -525,13 +528,11 @@ namespace MWRender
             std::string model;
             std::uint64_t fingerprint = 0;
             Anchors anchors;
+            BloodPatch patch;
         };
         std::vector<Record> records;
         std::array<osg::ref_ptr<osg::StateSet>, 4> states;
-        std::unique_ptr<ClippedRenderPrewarm> warm;
-        bool prepared = false;
         std::uint64_t added = 0, rejected = 0, evicted = 0;
-        std::size_t attached = 0, vertices = 0;
         double lastDistance = 0, lastMilliseconds = 0;
     };
 
@@ -541,68 +542,22 @@ namespace MWRender
             || mBodyAwareness)
             return;
         if (!mBloodDecals)
-            mBloodDecals = std::make_shared<BloodDecals>();
-        auto& blood = *mBloodDecals;
-        if (blood.warm && blood.warm->update())
-            blood.warm.reset();
-        if (blood.prepared)
-            return;
-        blood.prepared = true;
-        osg::ref_ptr<osg::Group> warm = new osg::Group;
-        for (unsigned i = 0; i < 4; ++i)
-        {
-            const VFS::Path::Normalized path(std::string("textures/brutal_dm/model_blood_") + Styles[i] + ".png");
-            if (!mResourceSystem->getVFS()->exists(path))
-                continue;
-            osg::ref_ptr<osg::Texture2D> texture
-                = new osg::Texture2D(mResourceSystem->getImageManager()->getImage(path));
-            texture->setWrap(osg::Texture::WRAP_S, osg::Texture::CLAMP_TO_EDGE);
-            texture->setWrap(osg::Texture::WRAP_T, osg::Texture::CLAMP_TO_EDGE);
-            mResourceSystem->getSceneManager()->applyFilterSettings(texture);
-            osg::ref_ptr<osg::Geometry> geometry
-                = osg::createTexturedQuadGeometry(osg::Vec3f(), osg::Vec3f(1, 0, 0), osg::Vec3f(0, 0, 1));
-            auto* state = geometry->getOrCreateStateSet();
-            const auto flags = osg::StateAttribute::ON | osg::StateAttribute::OVERRIDE | osg::StateAttribute::PROTECTED;
-            state->setTextureAttributeAndModes(0, texture, flags);
-            state->setTextureAttribute(0, new SceneUtil::TextureType("diffuseMap"), flags);
-            state->setTextureAttribute(0, new osg::TexMat, flags);
-            state->setAttributeAndModes(new osg::BlendFunc(GL_DST_COLOR, GL_SRC_COLOR, GL_ZERO, GL_ONE), flags);
-            state->setAttributeAndModes(new SceneUtil::AutoDepth(osg::Depth::LEQUAL, 0, 1, false), flags);
-            const float offset = SceneUtil::AutoDepth::isReversed() ? 1.f : -1.f;
-            state->setAttributeAndModes(new osg::PolygonOffset(offset, offset), flags);
-            state->setMode(GL_CULL_FACE,
-                osg::StateAttribute::OFF | osg::StateAttribute::OVERRIDE | osg::StateAttribute::PROTECTED);
-            state->setAttribute(new osg::ColorMask(true, true, true, false), flags);
-            state->setRenderBinDetails(1, "RenderBin", osg::StateSet::OVERRIDE_RENDERBIN_DETAILS);
-            // The program is shared with drying weapon and floor blood; a wound
-            // must not inherit their last uniform values.
-            state->addUniform(new osg::Uniform("bloodFade", 0.f), flags);
-            state->addUniform(new osg::Uniform("bloodDry", 0.f), flags);
-            state->addUniform(new osg::Uniform("bloodFeather", false), flags);
-            mResourceSystem->getSceneManager()->setUpNormalsRTForStateSet(state, false);
-            mResourceSystem->getSceneManager()->recreateShaders(geometry, "blooddecal");
-            // Override the source's program as well as its material state.
-            state = geometry->getStateSet();
-            if (auto* program = state->getAttribute(osg::StateAttribute::PROGRAM))
-                state->setAttributeAndModes(program, flags);
-            blood.states[i] = state;
-            warm->addChild(geometry);
-        }
-        if (warm->getNumChildren())
-        {
-            if (auto* compile = mResourceSystem->getSceneManager()->getIncrementalCompileOperation())
-                compile->add(warm);
-            blood.warm = ClippedRenderPrewarm::attach(warm, mObjectRoot);
-        }
+            if (auto* store = BrutalBlood::get())
+            {
+                mBloodDecals = std::make_shared<BloodDecals>();
+                mBloodDecals->states = store->woundStates();
+            }
     }
 
     void NpcAnimation::rebuildBloodDecals()
     {
-        if (!mBloodDecals)
+        if (!mBloodDecals || mBloodDecals->records.empty())
             return;
         auto& blood = *mBloodDecals;
-        blood.attached = 0;
-        blood.vertices = 0;
+        for (auto& record : blood.records)
+            record.patch.remove();
+        if (!Settings::game().mNpcBloodDecals)
+            return;
         std::vector<Surface> surfaces;
         for (int part = 0; part < ESM::PRT_Count; ++part)
             if (part != ESM::PRT_Weapon && part != ESM::PRT_Shield && mObjectParts[part])
@@ -612,21 +567,12 @@ namespace MWRender
                     visitor.setNodeMaskOverride(~0u);
                 visitor.collect(mObjectParts[part]->getNode(), mPtr.getRefData().getBaseNode());
             }
-        for (auto& s : surfaces)
-            if (auto* marks = s.marks())
-                marks->clear();
-        if (!Settings::game().mNpcBloodDecals) return;
-        for (const auto& record : blood.records)
+        for (auto& record : blood.records)
             for (auto& s : surfaces)
                 if (record.part == s.part && record.ordinal == s.ordinal && record.model == s.model
-                    && record.fingerprint == s.fingerprint)
-                    if (auto* marks = s.attach())
-                        if (marks->addPatch(record.anchors, blood.states[record.style], Mask_Effect))
-                        {
-                            ++blood.attached;
-                            blood.vertices += record.anchors.size();
-                            break;
-                        }
+                    && record.fingerprint == s.fingerprint
+                    && record.patch.attach(s, record.anchors, blood.states[record.style]))
+                    break;
     }
 
     bool NpcAnimation::addBloodDecal(
@@ -679,7 +625,12 @@ namespace MWRender
                 return false;
             }
             BloodDecals::Record record{ selected->part, selected->ordinal, style, selected->model,
-                selected->fingerprint, std::move(best.vertices) };
+                selected->fingerprint, std::move(best.vertices), {} };
+            if (!record.patch.attach(*selected, record.anchors, blood.states[style]))
+            {
+                ++blood.rejected;
+                return false;
+            }
             std::size_t total = 0;
             for (const auto& r : blood.records)
                 total += r.anchors.size();
@@ -687,13 +638,13 @@ namespace MWRender
                 && (blood.records.size() >= MaxWounds || total + record.anchors.size() > MaxActorVertices))
             {
                 total -= blood.records.front().anchors.size();
+                blood.records.front().patch.remove();
                 blood.records.erase(blood.records.begin());
                 ++blood.evicted;
             }
             blood.records.push_back(std::move(record));
             ++blood.added;
             blood.lastDistance = best.distance;
-            rebuildBloodDecals();
             blood.lastMilliseconds
                 = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
             return true;
@@ -788,6 +739,8 @@ namespace MWRender
                 if (in.p != data.size())
                     return false;
             }
+            for (auto& record : mBloodDecals->records)
+                record.patch.remove();
             mBloodDecals->records = std::move(records);
             rebuildBloodDecals();
             if (mDecapitation)
@@ -816,6 +769,16 @@ namespace MWRender
             return { { "enabled", Settings::game().mNpcBloodDecals ? 1. : 0. }, { "available", 0 }, { "records", 0 },
                 { "attached", 0 } };
         const auto& b = *mBloodDecals;
+        std::set<const SceneUtil::SurfaceDecals*> surfaces;
+        std::size_t attached = 0, vertices = 0, evaluations = 0;
+        for (const auto& record : b.records)
+            if (const auto* marks = record.patch.decals.get())
+            {
+                ++attached;
+                vertices += record.anchors.size();
+                if (surfaces.insert(marks).second)
+                    evaluations += marks->evaluationCount();
+            }
         std::size_t frozenHead = 0, frozenNeck = 0;
         if (mDecapitation)
             for (unsigned side = 0; side < 2; ++side)
@@ -826,8 +789,9 @@ namespace MWRender
                         ++(side ? frozenHead : frozenNeck);
             }
         return { { "enabled", Settings::game().mNpcBloodDecals ? 1. : 0. }, { "available", b.states[0] ? 1. : 0. },
-            { "records", double(b.records.size()) }, { "attached", double(b.attached) },
-            { "vertices", double(b.vertices) }, { "added", double(b.added) }, { "rejected", double(b.rejected) },
+            { "records", double(b.records.size()) }, { "attached", double(attached) },
+            { "vertices", double(vertices) }, { "evaluations", double(evaluations) },
+            { "added", double(b.added) }, { "rejected", double(b.rejected) },
             { "evicted", double(b.evicted) }, { "lastDistance", b.lastDistance },
             { "lastMilliseconds", b.lastMilliseconds }, { "limit", double(MaxWounds) },
             { "frozenHead", double(frozenHead) }, { "frozenNeck", double(frozenNeck) },
@@ -1055,12 +1019,6 @@ namespace MWRender
             return frame;
         }
 
-        struct WeaponLooks
-        {
-            std::vector<const osg::StateSet*> states;
-            bool operator==(const WeaponLooks&) const = default;
-        };
-
         struct WipeSurface
         {
             std::string model;
@@ -1074,6 +1032,7 @@ namespace MWRender
         {
             BrutalBlood::WeaponMark mark;
             std::vector<float> distances;
+            float minimum = 0.f, maximum = 0.f;
         };
 
         struct SwordWipe
@@ -1100,8 +1059,8 @@ namespace MWRender
                         if (surface.model != mark.model || surface.ordinal != mark.ordinal
                             || surface.fingerprint != mark.fingerprint)
                             continue;
-                        sample.distances.reserve(mark.anchors.size());
-                        for (const auto& anchor : mark.anchors)
+                        sample.distances.reserve(mark.anchors->size());
+                        for (const auto& anchor : *mark.anchors)
                         {
                             if (std::ranges::any_of(anchor.indices,
                                     [&](unsigned index) { return index >= surface.vertices.size(); }))
@@ -1113,6 +1072,12 @@ namespace MWRender
                             for (unsigned i = 0; i < 3; ++i)
                                 y += surface.vertices[anchor.indices[i]].y() * anchor.weights[i];
                             sample.distances.push_back(y);
+                        }
+                        if (!sample.distances.empty())
+                        {
+                            const auto [minimum, maximum] = std::ranges::minmax(sample.distances);
+                            sample.minimum = minimum;
+                            sample.maximum = maximum;
                         }
                         break;
                     }
@@ -1151,7 +1116,7 @@ namespace MWRender
         Anchors clipWipedMark(const WipeMark& original, float cleanTo, bool trimEdges = true)
         {
             Anchors result;
-            const auto& anchors = original.mark.anchors;
+            const auto& anchors = *original.mark.anchors;
             for (std::size_t base = 0; base < anchors.size(); base += 3)
             {
                 std::array<SceneUtil::SurfaceDecals::Anchor, 4> polygon;
@@ -1191,66 +1156,124 @@ namespace MWRender
 
     struct NpcAnimation::WeaponBloodView
     {
+        struct Mark
+        {
+            std::shared_ptr<const Anchors> anchors;
+            BloodPatch patch;
+            osg::StateSet* material = nullptr;
+        };
         struct Hand
         {
             ESM::RefNum key;
-            unsigned revision = ~0u;
-            const osg::Node* part = nullptr;
-            WeaponLooks looks;
+            unsigned revision = 0;
+            osg::observer_ptr<osg::Node> part;
+            std::vector<Mark> marks;
+            double appearanceTime = 0.;
             std::size_t attached = 0;
             float nextDrip = 0;
+
+            void clear()
+            {
+                for (auto& mark : marks)
+                    mark.patch.remove();
+                marks.clear();
+                attached = 0;
+            }
         };
         std::array<Hand, 2> hands;
         std::optional<SwordWipe> wipe;
-        std::uint64_t drips = 0, rebuilds = 0, rejected = 0;
+        std::uint64_t drips = 0, rebuilds = 0, rejected = 0, materialUpdates = 0;
         double lastLength = 0, lastThickness = 0, lastWidth = 0;
         std::size_t lastSides = 0, lastMarks = 0;
 
         void sync(Hand& view, BrutalBlood& store, const BrutalBlood::ItemBlood* blood, ESM::RefNum key,
             int partIndex, osg::Node* part, const std::string& model, osg::Node* actor)
         {
-            WeaponLooks looks;
-            const double now = store.now();
-            if (blood)
+            if (!part || !blood || blood->marks.empty())
+            {
+                if (!view.marks.empty())
+                {
+                    view.clear();
+                    ++rebuilds;
+                }
+                return;
+            }
+
+            const bool sameWeapon = view.part.get() == part && view.key == key;
+            const bool changed = !sameWeapon || view.marks.empty() || view.revision != blood->revision;
+            const double appearanceTime = store.now() + blood->wash;
+            if (!changed && view.appearanceTime == appearanceTime)
+                return;
+            const auto material = [&](const BrutalBlood::WeaponMark& mark) {
+                const double age = appearanceTime - mark.hour;
+                return store.weaponState(mark.style, BrutalBlood::markFade(age), BrutalBlood::markDry(age));
+            };
+
+            if (changed)
+            {
+                if (!sameWeapon)
+                    view.clear();
+                else
+                    std::erase_if(view.marks, [&](Mark& visual) {
+                        if (std::ranges::find(blood->marks, visual.anchors, &BrutalBlood::WeaponMark::anchors)
+                            != blood->marks.end())
+                            return false;
+                        visual.patch.remove();
+                        return true;
+                    });
+
+                std::optional<std::vector<Surface>> surfaces;
+                std::vector<Mark> ordered;
+                ordered.reserve(blood->marks.size());
                 for (const auto& mark : blood->marks)
                 {
-                    const double age = now - mark.hour + blood->wash;
-                    looks.states.push_back(
-                        store.weaponState(mark.style, BrutalBlood::markFade(age), BrutalBlood::markDry(age)));
-                }
-            const unsigned revision = blood ? blood->revision : ~0u - 1;
-            if (part == view.part && key == view.key && revision == view.revision && looks == view.looks)
-                return;
-
-            std::vector<Surface> surfaces;
-            SurfacesVisitor visitor(surfaces, partIndex, model);
-            visitor.collect(part, actor);
-            for (auto& surface : surfaces)
-                if (auto* marks = surface.marks())
-                    marks->clear();
-            view.attached = 0;
-            if (blood)
-                for (std::size_t i = 0; i < blood->marks.size(); ++i)
-                {
-                    const auto& mark = blood->marks[i];
-                    if (!looks.states[i])
+                    // Unchanged smears keep their local mesh, including during a partial wipe.
+                    const auto existing = std::ranges::find(view.marks, mark.anchors, &Mark::anchors);
+                    if (existing != view.marks.end())
+                    {
+                        ordered.push_back(std::move(*existing));
                         continue;
-                    for (auto& surface : surfaces)
+                    }
+                    auto& visual = ordered.emplace_back(Mark{ mark.anchors, {}, material(mark) });
+                    if (!visual.material)
+                        continue;
+                    if (!surfaces)
+                    {
+                        SurfacesVisitor visitor(surfaces.emplace(), partIndex, model);
+                        visitor.collect(part, actor);
+                    }
+                    for (auto& surface : *surfaces)
                         if (surface.ordinal == mark.ordinal && surface.model == mark.model
                             && surface.fingerprint == mark.fingerprint)
                         {
-                            if (auto* marks = surface.attach())
-                                if (marks->addPatch(mark.anchors,
-                                        const_cast<osg::StateSet*>(looks.states[i]), Mask_Effect))
-                                    ++view.attached;
+                            visual.patch.attach(surface, *mark.anchors, visual.material);
                             break;
                         }
                 }
-            view.part = part;
-            view.key = key;
-            view.revision = revision;
-            view.looks = std::move(looks);
-            ++rebuilds;
+                view.marks = std::move(ordered);
+                view.part = part;
+                view.key = key;
+                view.revision = blood->revision;
+                ++rebuilds;
+            }
+
+            view.attached = 0;
+            for (std::size_t i = 0; i < view.marks.size(); ++i)
+            {
+                auto& visual = view.marks[i];
+                auto* decals = visual.patch.decals.get();
+                if (!decals)
+                    continue;
+                auto* state = material(blood->marks[i]);
+                if (state != visual.material)
+                {
+                    decals->setPatchState(visual.patch.id, state);
+                    visual.material = state;
+                    ++materialUpdates;
+                }
+                view.attached += visual.material != nullptr;
+            }
+            view.appearanceTime = appearanceTime;
         }
     };
 
@@ -1462,7 +1485,7 @@ namespace MWRender
                         continue;
                     const auto& surface = surfaces[i];
                     marks.push_back({ style, surface.model, surface.ordinal, surface.fingerprint,
-                        std::move(anchors[i]), hour });
+                        std::make_shared<const Anchors>(std::move(anchors[i])), hour });
                 }
             }
             view.lastMarks = marks.size();
@@ -1606,10 +1629,7 @@ namespace MWRender
         if (cleanTo <= wipe.cleanedTo)
             return;
         const bool changed = std::ranges::any_of(wipe.original, [&](const WipeMark& mark) {
-            if (mark.distances.empty())
-                return false;
-            const auto [minimum, maximum] = std::ranges::minmax(mark.distances);
-            return minimum < cleanTo && maximum >= wipe.cleanedTo;
+            return !mark.distances.empty() && mark.minimum < cleanTo && mark.maximum >= wipe.cleanedTo;
         });
         wipe.cleanedTo = cleanTo;
         if (!changed)
@@ -1618,11 +1638,17 @@ namespace MWRender
         remaining.reserve(wipe.original.size());
         for (const auto& original : wipe.original)
         {
-            auto mark = original.mark;
-            if (!original.distances.empty())
-                mark.anchors = clipWipedMark(original, cleanTo);
-            if (!mark.anchors.empty())
-                remaining.push_back(std::move(mark));
+            if (original.distances.empty() || cleanTo <= original.minimum)
+                remaining.push_back(original.mark);
+            else if (cleanTo < original.maximum)
+            {
+                auto anchors = clipWipedMark(original, cleanTo);
+                if (!anchors.empty())
+                {
+                    auto& mark = remaining.emplace_back(original.mark);
+                    mark.anchors = std::make_shared<const Anchors>(std::move(anchors));
+                }
+            }
         }
         // Write the clipped anchors to the item itself. If movement, combat or
         // saving interrupts the animation, the uncleaned side remains intact.
@@ -1678,6 +1704,7 @@ namespace MWRender
             auto& view = mWeaponBloodView->hands[left];
             if (!part)
             {
+                view.clear();
                 view = WeaponBloodView::Hand{};
                 continue;
             }
@@ -1717,6 +1744,14 @@ namespace MWRender
             result["attached"] = double(view.hands[0].attached);
             result["attachedLeft"] = double(view.hands[1].attached);
             result["rebuilds"] = double(view.rebuilds);
+            result["materialUpdates"] = double(view.materialUpdates);
+            std::set<const SceneUtil::SurfaceDecals*> surfaces;
+            std::size_t evaluations = 0;
+            for (const auto& hand : view.hands)
+                for (const auto& mark : hand.marks)
+                    if (const auto* decals = mark.patch.decals.get(); decals && surfaces.insert(decals).second)
+                        evaluations += decals->evaluationCount();
+            result["evaluations"] = double(evaluations);
             result["drips"] = double(view.drips);
             result["rejected"] = double(view.rejected);
             result["length"] = view.lastLength;
@@ -1738,10 +1773,11 @@ namespace MWRender
                     for (const auto& mark : blood->marks)
                     {
                         newest = std::max(newest, mark.hour);
-                        for (std::size_t i = 0; i < mark.anchors.size(); i += 3)
+                        const auto& anchors = *mark.anchors;
+                        for (std::size_t i = 0; i < anchors.size(); i += 3)
                         {
-                            const auto a = mark.anchors[i + 1].uv - mark.anchors[i].uv;
-                            const auto b = mark.anchors[i + 2].uv - mark.anchors[i].uv;
+                            const auto a = anchors[i + 1].uv - anchors[i].uv;
+                            const auto b = anchors[i + 2].uv - anchors[i].uv;
                             area += .5 * std::abs(a.x() * b.y() - a.y() * b.x());
                         }
                     }

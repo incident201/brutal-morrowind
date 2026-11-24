@@ -158,6 +158,8 @@ namespace MWPhysics
             MWWorld::Ptr ptr;
             btTransform authoritative, rendered;
             bool authoritativeChanged;
+            bool missile;
+            bool settled;
         };
         std::vector<DynamicObjectTransform> readDynamicObjectTransforms();
         void disableDynamicObjects(bool props, bool equipment);
@@ -271,6 +273,12 @@ namespace MWPhysics
         std::vector<std::weak_ptr<Object>> mDynamicObjects;
         // Separate registry: loose items must not alter ragdoll substep policy.
         std::unordered_map<const btRigidBody*, DynamicTransformHistory> mDynamicTransforms;
+        struct MissileRest
+        {
+            btTransform pose;
+            float duration = 0.f;
+        };
+        std::unordered_map<const btRigidBody*, MissileRest> mSettlingMissiles;
         void resetDynamicObjectHistory(const Object& object);
         struct HeldState
         {

@@ -118,6 +118,7 @@ namespace MWRender
             {
                 owner->fitSwordClinchPose(*visitor);
                 owner->fitBackstabPose(*visitor);
+                owner->fitGroundFinisherPose(*visitor);
                 owner->fitSwordWipePose();
                 owner->fitNockedArrow();
             }
@@ -987,7 +988,7 @@ namespace MWRender
     public:
         bool skipTransform(osg::Transform& transform)
         {
-            if (mContainsPagedRefs)
+            if (mContainsPagedRefs && !mIgnoreMissileItems)
                 return false;
 
             osg::UserDataContainer* userDataContainer = transform.getUserDataContainer();
@@ -998,7 +999,8 @@ namespace MWRender
             {
                 if (PtrHolder* p = dynamic_cast<PtrHolder*>(userDataContainer->getUserObject(i)))
                 {
-                    if (std::find(mIgnoreList.begin(), mIgnoreList.end(), p->mPtr) != mIgnoreList.end())
+                    if ((mIgnoreMissileItems && MWMechanics::isMissileItem(p->mPtr))
+                        || (!mContainsPagedRefs && std::ranges::find(mIgnoreList, p->mPtr) != mIgnoreList.end()))
                     {
                         return true;
                     }
@@ -1019,21 +1021,24 @@ namespace MWRender
 
         void setIgnoreList(std::span<const MWWorld::Ptr> ignoreList) { mIgnoreList = ignoreList; }
         void setContainsPagedRefs(bool contains) { mContainsPagedRefs = contains; }
+        void setIgnoreMissileItems(bool ignore) { mIgnoreMissileItems = ignore; }
 
     private:
         std::span<const MWWorld::Ptr> mIgnoreList;
         bool mContainsPagedRefs = false;
+        bool mIgnoreMissileItems = false;
     };
 
     osg::ref_ptr<osgUtil::IntersectionVisitor> RenderingManager::getIntersectionVisitor(
         osgUtil::Intersector* intersector, bool ignorePlayer, bool ignoreActors,
-        std::span<const MWWorld::Ptr> ignoreList)
+        std::span<const MWWorld::Ptr> ignoreList, bool ignoreMissileItems)
     {
         if (!mIntersectionVisitor)
             mIntersectionVisitor = new IntersectionVisitorWithIgnoreList;
 
         mIntersectionVisitor->setIgnoreList(ignoreList);
         mIntersectionVisitor->setContainsPagedRefs(false);
+        mIntersectionVisitor->setIgnoreMissileItems(ignoreMissileItems);
 
         MWWorld::Scene* worldScene = MWBase::Environment::get().getWorldScene();
         for (const auto& ptr : ignoreList)
@@ -1235,7 +1240,7 @@ namespace MWRender
         osg::ref_ptr<osgUtil::LineSegmentIntersector> intersector(
             new osgUtil::LineSegmentIntersector(osgUtil::LineSegmentIntersector::MODEL, origin, dest));
         intersector->setIntersectionLimit(osgUtil::LineSegmentIntersector::LIMIT_NEAREST);
-        mRootNode->accept(*getIntersectionVisitor(intersector, true, true));
+        mRootNode->accept(*getIntersectionVisitor(intersector, true, true, {}, true));
 
         SurfaceResult result;
         if (!intersector->containsIntersections())

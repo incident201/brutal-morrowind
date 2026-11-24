@@ -268,6 +268,8 @@ namespace MWRender
 
         std::vector<std::pair<osg::observer_ptr<osg::MatrixTransform>, osg::Matrixf>> mClinchSourcePose;
         std::vector<std::pair<osg::observer_ptr<osg::MatrixTransform>, osg::Matrixf>> mBackstabSourcePose;
+        std::vector<std::pair<osg::observer_ptr<osg::MatrixTransform>, osg::Matrixf>> mGroundFinisherSourcePose;
+        std::optional<osg::Vec3f> mGroundFinisherPoint;
         std::pair<osg::observer_ptr<osg::MatrixTransform>, osg::Matrixf> mSwordWipeSourcePose;
         ESM::RefNum mSwordWipeItem;
         std::optional<std::pair<osg::Vec3f, osg::Vec3f>> mBackstabBlade;
@@ -454,7 +456,7 @@ namespace MWRender
         int getPartForNodePath(const osg::NodePath& path) const override;
         /// The scene node of an equipped part (for example ESM::PRT_Shield), if it is shown.
         osg::Node* getPartNode(ESM::PartReferenceType part) const;
-        bool attachStuckProjectileToShield(VFS::Path::NormalizedView model, const osg::Vec3f& hitPosition,
+        ProjectileAttachment attachStuckProjectileToShield(VFS::Path::NormalizedView model, const osg::Vec3f& hitPosition,
             const osg::Vec3f& flight, const std::pair<osg::Vec3f, osg::Vec3f>& path, const ESM::RefId& item);
         bool addBloodDecal(const osg::Vec3f& position, const osg::Vec3f& outward,
             std::string_view kind, bool power, int hitPart = -1);
@@ -487,6 +489,9 @@ namespace MWRender
         void restoreTransientPose() override;
         void fitSwordClinchPose(osg::NodeVisitor& visitor);
         void fitBackstabPose(osg::NodeVisitor& visitor);
+        void setGroundFinisherPoint(std::optional<osg::Vec3f> point) { mGroundFinisherPoint = point; }
+        bool hasGroundFinisherContact() const;
+        void fitGroundFinisherPose(osg::NodeVisitor& visitor);
         void setSwordWipeItem(ESM::RefNum item) { mSwordWipeItem = item; }
         void fitSwordWipePose();
         /// With the Dark Messiah bow, keep a nocked arrow between the right fingers and the bow's arrow rest.

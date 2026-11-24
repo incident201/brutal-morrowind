@@ -28,6 +28,7 @@
 #include <components/settings/values.hpp>
 
 #include "../mwmechanics/actorutil.hpp"
+#include "../mwmechanics/combat.hpp"
 #include "../mwmechanics/creaturestats.hpp"
 
 #include "../mwrender/bulletdebugdraw.hpp"
@@ -798,6 +799,10 @@ namespace MWPhysics
             mDynamicTransforms.emplace(body, DynamicTransformHistory(body->getWorldTransform()));
         }
         object->applyDynamicImpulse(impulse, mass);
+        const auto& item = object->getPtr();
+        if (MWMechanics::isMissileItem(item) && !item.getRefData().getReleasedEquipment())
+            if (const auto* body = btRigidBody::upcast(object->getCollisionObject()))
+                mSettlingMissiles.insert_or_assign(body, MissileRest{ body->getWorldTransform() });
     }
 
     namespace
@@ -1329,6 +1334,7 @@ namespace MWPhysics
         {
             mActorIgnoreTimers.erase(body);
             mImpactSoundCooldowns.erase(body);
+            mSettlingMissiles.erase(body);
         }
         for (auto& [rb, entry] : mActorIgnoreTimers)
             if (entry.owner == collisionObject)
@@ -2329,7 +2335,11 @@ namespace MWPhysics
                 const auto history = mDynamicTransforms.find(body);
                 if (history != mDynamicTransforms.end())
                 {
-                    DynamicObjectTransform snapshot{ object->getPtr(), {}, {}, false };
+                    const auto missile = mSettlingMissiles.find(body);
+                    const bool isMissile = missile != mSettlingMissiles.end();
+                    const bool settled = isMissile && !body->isStaticOrKinematicObject()
+                        && (body->getActivationState() == ISLAND_SLEEPING || missile->second.duration >= .45f);
+                    DynamicObjectTransform snapshot{ object->getPtr(), {}, {}, false, isMissile, settled };
                     if (object->takeDynamicTransforms(history->second.rendered(mRagdollInterpolation),
                             snapshot.authoritative, snapshot.rendered, snapshot.authoritativeChanged))
                         result.push_back(std::move(snapshot));
@@ -2597,6 +2607,18 @@ namespace MWPhysics
                 history.current = body->getWorldTransform();
             for (auto& [body, history] : mDynamicTransforms)
                 history.advance(body->getWorldTransform());
+            for (auto& [body, rest] : mSettlingMissiles)
+            {
+                // Small props in a contact island can stay awake. Require a
+                // bounded pose over several completed physics steps, without
+                // counting a kinematic item the player is holding.
+                const auto& pose = body->getWorldTransform();
+                if (body->isStaticOrKinematicObject() || (pose.getOrigin() - rest.pose.getOrigin()).length2() > .64f
+                    || std::abs(pose.getRotation().dot(rest.pose.getRotation())) < .99965f)
+                    rest = { pose };
+                else
+                    rest.duration += mPhysicsDt;
+            }
             mRagdollInterpolation = std::clamp(mTimeAccum / mPhysicsDt + float(mRemainingSteps), 0.f, 1.f);
         }
         mNextJob.store(0, std::memory_order_release);

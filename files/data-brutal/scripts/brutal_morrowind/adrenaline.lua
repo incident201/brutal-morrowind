@@ -149,11 +149,11 @@ end
 local function damaged(e)
     if not settings.get('adrenalineEnabled') then return end
     if types.Actor.isDead(self) or not e.successful or not e.targetWasAlive
-        or e.sourceType~='melee' or not e.target or not e.target:isValid()
-        or not types.Actor.objectIsInstance(e.target) or not melee(e.weapon)
+        or not e.target or not e.target:isValid() or not types.Actor.objectIsInstance(e.target)
         or type(e.healthDamage)~='number' or e.healthDamage<=0 then return end
+    if e.sourceType~='ranged' and (e.sourceType~='melee' or not melee(e.weapon)) then return end
     if e.powered then return end
-    -- Native attack ids distinguish real swings and prevent duplicate delivery.
+    -- Native attack IDs deduplicate hits and tie guided shots to their launch receipt.
     if not e.attackId or e.attackId==0 or seen[e.attackId] then return end
     seen[e.attackId]=true;seenOrder[#seenOrder+1]=e.attackId
     if #seenOrder>128 then seen[table.remove(seenOrder,1)]=nil end

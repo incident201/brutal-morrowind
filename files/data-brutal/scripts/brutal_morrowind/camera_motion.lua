@@ -228,7 +228,7 @@ local function actionSample()
     if backstabTime then
         local daggerSet=sets.brutal_fp_dagger or {}
         local parts=daggerSet[BACKSTAB_OUT]
-        if parts then return groupSample(BACKSTAB_OUT,parts,backstabTime),true end
+        if parts then return groupSample(BACKSTAB_OUT,parts,backstabTime),'backstab' end
     end
     local groundTime=animation.getCurrentTime(self,GROUND_FINISHER)
     local set,base=sets[folder(groundTime~=nil)] or {},sets.brutal_fp or {}
@@ -236,7 +236,7 @@ local function actionSample()
         -- The finisher starts from an armed hold. Sample its own active phase
         -- even while a charged attack is blending out underneath it.
         local parts=set[GROUND_FINISHER] or base[GROUND_FINISHER]
-        if parts then return groupSample(GROUND_FINISHER,parts,groundTime),true end
+        if parts then return groupSample(GROUND_FINISHER,parts,groundTime),'ground' end
     end
     for _,groups in ipairs({set,base}) do
         for group,parts in pairs(groups) do
@@ -251,7 +251,7 @@ local function actionSample()
 end
 
 local current={0,0,0,0,0,0}
-local actionWeight,lastAction,groundAction=0,ZERO,false
+local actionWeight,lastAction,focusedAction=0,ZERO,false
 local pulseState=nil
 return {
     interfaceName='BrutalCameraMotion',
@@ -275,16 +275,26 @@ return {
             if dt<=0 then return end
             dt=math.min(dt,.1)
             local out=settings.get('cameraMotionMovement') and movementSample(dt) or {0,0,0,0,0,0}
-            local action,ground=actionSample()
+            local action,focus=actionSample()
             -- Actions replace the movement clip, with DM's .2 s transitions either way.
-            if action then lastAction=action;groundAction=ground;actionWeight=math.min(1,actionWeight+dt/FADE)
+            if action then lastAction=action;focusedAction=focus;actionWeight=math.min(1,actionWeight+dt/FADE)
             else actionWeight=math.max(0,actionWeight-dt/FADE) end
             if actionWeight>0 then out=mix(out,lastAction,actionWeight) end
-            if actionWeight>0 and groundAction then
-                -- The authored layer adds a steep dip to an already lowered aim.
-                -- Stop the combined view at the vertical instead of turning over.
+            if actionWeight>0 and focusedAction then
                 local pitch=camera.getPitch()+camera.getExtraPitch()
                 local limit=math.pi/2-.001
+                if focusedAction=='ground' then
+                    -- Leave room in frame for the hand and the blade as they drop toward the body.
+                    out[1],out[2]=out[1]*.3,out[2]*.4
+                    out[4],out[5],out[6]=out[4]*.3,out[5]*.3,out[6]*.3
+                    local clock=animation.getCurrentTime(self,GROUND_FINISHER)
+                    if clock then
+                        local stop=animation.getTextKeyTime(self,GROUND_FINISHER..': stop')
+                        local blend=math.max(0,math.min(1,math.min(clock,stop-clock)/.26))
+                        local weight=blend*blend*(3-2*blend)
+                        out[4],out[5],out[6]=out[4]-7*weight,out[5]-5*weight,out[6]+6*weight
+                    end
+                end
                 out[1]=math.max(math.min(out[1],math.max(0,limit-pitch)),math.min(0,-limit-pitch))
             end
             if pulseState then
@@ -304,6 +314,6 @@ return {
             camera.setExtraRoll(camera.getExtraRoll()+out[3])
             camera.setFirstPersonOffset(camera.getFirstPersonOffset()+util.vector3(out[4],out[5],out[6]))
         end,
-        onLoad=function() weights,phases,landing,airborne,actionWeight,groundAction,pulseState={},{},nil,0,0,false,nil end,
+        onLoad=function() weights,phases,landing,airborne,actionWeight,focusedAction,pulseState={},{},nil,0,0,false,nil end,
     },
 }

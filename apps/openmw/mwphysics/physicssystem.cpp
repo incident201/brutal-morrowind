@@ -668,15 +668,15 @@ namespace MWPhysics
     }
 
     int PhysicsSystem::addProjectile(
-        const MWWorld::Ptr& caster, const osg::Vec3f& position, VFS::Path::NormalizedView mesh, bool computeRadius)
+        const MWWorld::Ptr& caster, const osg::Vec3f& position, VFS::Path::NormalizedView mesh, bool magic)
     {
         osg::ref_ptr<Resource::BulletShapeInstance> shapeInstance = mShapeManager->getInstance(mesh);
         assert(shapeInstance);
-        float radius = computeRadius ? shapeInstance->mCollisionBox.mExtents.length() / 2.f : 1.f;
+        float radius = magic ? shapeInstance->mCollisionBox.mExtents.length() / 2.f : 1.f;
 
         mProjectileId++;
 
-        auto projectile = std::make_shared<Projectile>(caster, position, radius, mTaskScheduler.get(), this);
+        auto projectile = std::make_shared<Projectile>(caster, position, radius, magic, mTaskScheduler.get(), this);
         mProjectiles.emplace(mProjectileId, std::move(projectile));
 
         return mProjectileId;
@@ -910,15 +910,22 @@ namespace MWPhysics
         // one scheduler lock; cell moves below may replace/remove references.
         const auto updates = mTaskScheduler->readDynamicObjectTransforms();
         auto world = MWBase::Environment::get().getWorld();
+        const bool propsDisabled = !(Settings::game().mBrutalDynamicProps || Settings::game().mBrutalObjectGrab);
         for (const auto& update : updates)
-            if (update.ptr.isInCell() && update.ptr.getRefData().getBaseNode())
-                world->syncDynamicObject(update.ptr, Misc::Convert::toOsg(update.authoritative.getOrigin()),
-                    Misc::Convert::toOsg(update.authoritative.getRotation()),
-                    Misc::Convert::toOsg(update.rendered.getOrigin()),
-                    Misc::Convert::toOsg(update.rendered.getRotation()), update.authoritativeChanged);
-        mTaskScheduler->disableDynamicObjects(
-            !(Settings::game().mBrutalDynamicProps || Settings::game().mBrutalObjectGrab),
-            !Settings::game().mBrutalEquipmentPhysics);
+        {
+            if (!update.ptr.isInCell() || !update.ptr.getRefData().getBaseNode())
+                continue;
+            // A bounced missile only needs a body during its fall. Let the final
+            // transform become a regular inventory item's pickable world pose.
+            const bool retire = update.missile && (update.settled || propsDisabled);
+            if (retire)
+                remove(update.ptr);
+            const auto& rendered = retire ? update.authoritative : update.rendered;
+            world->syncDynamicObject(update.ptr, Misc::Convert::toOsg(update.authoritative.getOrigin()),
+                Misc::Convert::toOsg(update.authoritative.getRotation()), Misc::Convert::toOsg(rendered.getOrigin()),
+                Misc::Convert::toOsg(rendered.getRotation()), update.authoritativeChanged);
+        }
+        mTaskScheduler->disableDynamicObjects(propsDisabled, !Settings::game().mBrutalEquipmentPhysics);
     }
 
     void PhysicsSystem::createNpcRagdoll(const MWWorld::Ptr& ptr,

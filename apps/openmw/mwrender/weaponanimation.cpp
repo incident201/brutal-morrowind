@@ -13,6 +13,7 @@
 #include "../mwworld/esmstore.hpp"
 #include "../mwworld/inventorystore.hpp"
 
+#include "../mwmechanics/actorutil.hpp"
 #include "../mwmechanics/combat.hpp"
 #include "../mwmechanics/weapontype.hpp"
 
@@ -157,7 +158,9 @@ namespace MWRender
                 return;
             osg::Vec3f launchPos = osg::computeLocalToWorld(nodepaths[0]).getTrans();
 
-            const float speed = MWMechanics::getProjectileLaunchSpeed(false, attackStrength);
+            const bool playerBow = actor == MWMechanics::getPlayer()
+                && weapon->get<ESM::Weapon>()->mBase->mData.mType == ESM::Weapon::MarksmanBow;
+            const float speed = MWMechanics::getProjectileLaunchSpeed(false, attackStrength, playerBow);
 
             MWWorld::Ptr weaponPtr = *weapon;
             MWWorld::Ptr ammoPtr = *ammo;

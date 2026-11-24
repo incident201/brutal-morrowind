@@ -36,7 +36,7 @@ end
 local limbSelections, legRoll = 0, nil
 local bisectionEligible, bisectionSelections = 0, 0
 local decapEligible, decapSelections, decapRoll, decapAttackId = 0, 0, nil, nil
-local pendingDecapitation = {}
+local pendingHits = {}
 -- Dark Messiah life_tohurt: a blow removing this share of maximum health staggers
 -- the whole body. Every smaller damaging hit keeps the native small flinch.
 local HEAVY_HIT_FRACTION = 0.1
@@ -150,6 +150,21 @@ interface.adjustDamageForDifficulty = function(attack)
     end
 end
 
+local function reportDamagingHit(attack, aliveBefore, healthDamage)
+    local attacker = attack.attacker
+    if not attacker or not attacker:isValid() then return end
+    local fast = attack.brutalFast or false
+    if attack.sourceType == 'ranged' then
+        fast = (attack.strength or 0) < 0.999
+    end
+    attacker:sendEvent('BrutalDamagingHit', {
+        target = self, weapon = attack.weapon, sourceType = attack.sourceType,
+        successful = attack.successful, healthDamage = healthDamage,
+        targetWasAlive = aliveBefore, powered = attack.brutalPowered or false,
+        attackId = attack.brutalAttackId, fast = fast,
+    })
+end
+
 interface.onHit = function(attack)
     local aliveBefore = not types.Actor.isDead(self)
     -- Physical contact can leave a mark even if resistance absorbs all damage.
@@ -162,11 +177,12 @@ interface.onHit = function(attack)
     local hitArmor = selectedArmor
     currentAttack, selectedArmor = outerAttack, outerArmor
     local healthDamage = (attack.damage or {}).health or 0
-    if attack.sourceType == 'melee' and settings.get('finisherEnabled') and settings.get('adrenalineEnabled')
-        and attack.brutalAttackId and attack.brutalPowered then
-        -- Combat queues native damage. Confirm the outcome of THIS damage action,
-        -- rather than sampling death before it runs or attributing a later death.
-        pendingDecapitation[attack.brutalAttackId] = {attack = attack, age = 0}
+    local ranged = attack.sourceType == 'ranged'
+    local poweredMelee = attack.sourceType == 'melee' and attack.brutalPowered and settings.get('finisherEnabled')
+    if (ranged or poweredMelee) and settings.get('adrenalineEnabled')
+        and attack.brutalAttackId and attack.brutalAttackId ~= 0 then
+        -- Combat queues damage. Wait for the receipt from the action that actually applied it.
+        pendingHits[attack.brutalAttackId] = {attack = attack, age = 0}
     end
     if aliveBefore and attack.successful and attack.sourceType == 'ranged' and attack.brutalBlocked then
         -- An arrow, bolt or thrown weapon met the held guard.
@@ -201,13 +217,8 @@ interface.onHit = function(attack)
     if attack.brutalPerfectBlock and aliveBefore and types.Player.objectIsInstance(self) then
         self:sendEvent('BrutalPerfectShieldBlock', {attackId = attack.brutalAttackId, attacker = attack.attacker})
     end
-    if attack.attacker and attack.attacker:isValid() then
-        attack.attacker:sendEvent('BrutalDamagingHit', {
-            target = self, weapon = attack.weapon, sourceType = attack.sourceType,
-            successful = attack.successful, healthDamage = healthDamage,
-            targetWasAlive = aliveBefore, powered = attack.brutalPowered or false,
-            attackId = attack.brutalAttackId, fast = attack.brutalFast or false,
-        })
+    if not ranged then
+        reportDamagingHit(attack, aliveBefore, healthDamage)
     end
 end
 interface.brutalFeedbackStats = function()
@@ -233,11 +244,15 @@ return {
                 and damage >= HEAVY_HIT_FRACTION * types.Actor.stats.dynamic.health(self).base then
                 if stagger(self) then heavyStaggers = heavyStaggers + 1 end
             end
-            local entry = pendingDecapitation[data.attackId]
+            local entry = pendingHits[data.attackId]
             if not entry then return end
-            pendingDecapitation[data.attackId] = nil
-            if (data.actualHealthDamage or 0) <= 0 then return end
+            pendingHits[data.attackId] = nil
+            if damage <= 0 then return end
             local attack = entry.attack
+            if attack.sourceType == 'ranged' then
+                reportDamagingHit(attack, data.aliveBefore, damage)
+                return
+            end
             -- Notify from this native damage action, never from a delayed sample
             -- that could accidentally attribute a later death to this attack.
             if data.aliveBefore and data.deadAfter and attack.brutalPowered
@@ -301,9 +316,9 @@ return {
                 core.sendGlobalEvent('BrutalRestoreBloodDecals', {actor=self, data=bloodDecalData})
                 bloodRestoreWait = 1
             end
-            for id, entry in pairs(pendingDecapitation) do
+            for id, entry in pairs(pendingHits) do
                 entry.age = entry.age + dt
-                if entry.age > 2 then pendingDecapitation[id] = nil end
+                if entry.age > 2 then pendingHits[id] = nil end
             end
             if torsoSelected and not types.Actor.isDead(self) then
                 torsoSelected, restoreBisection, torsoDone = false, false, false
@@ -369,7 +384,7 @@ return {
                 limbsMask=limbsDone and limbMask or 0, limbPoseData=limbPose}
         end,
         onLoad = function(data)
-            pendingDecapitation = {}
+            pendingHits = {}
             bloodDecalData = data and type(data.bloodDecals) == 'string' and data.bloodDecals or ''
             restoreBloodDecals, bloodRestoreWait = bloodDecalData ~= '', 0
             available, requestAvailability = false, true

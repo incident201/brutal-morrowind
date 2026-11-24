@@ -818,6 +818,14 @@ namespace MWMechanics
         return Settings::game().mBrutalEnabled && Settings::game().mBrutalPhysicalProjectiles;
     }
 
+    bool isMissileItem(const MWWorld::Ptr& item)
+    {
+        if (item.isEmpty() || item.getType() != ESM::Weapon::sRecordId)
+            return false;
+        const auto weaponClass = getWeaponType(item.get<ESM::Weapon>()->mBase->mData.mType)->mWeaponClass;
+        return weaponClass == ESM::WeaponType::Ammo || weaponClass == ESM::WeaponType::Thrown;
+    }
+
     std::uint64_t nextCombatAttackId()
     {
         static std::uint64_t id = 0;
@@ -830,15 +838,23 @@ namespace MWMechanics
             || getWeaponType(weaponType)->mWeaponClass == ESM::WeaponType::Thrown;
     }
 
-    float getProjectileLaunchSpeed(bool thrown, float attackStrength)
+    static float bowDrawPower(float draw)
+    {
+        // A snap shot is useful up close, with most of the extra power coming near full draw.
+        return std::lerp(.45f, 1.f, draw * draw);
+    }
+
+    float getProjectileLaunchSpeed(bool thrown, float attackStrength, bool playerBow)
     {
         const auto& gmst = MWBase::Environment::get().getESMStore()->get<ESM::GameSetting>();
         const float minimum
             = gmst.find(thrown ? "fThrownWeaponMinSpeed" : "fProjectileMinSpeed")->mValue.getFloat();
         const float maximum
             = gmst.find(thrown ? "fThrownWeaponMaxSpeed" : "fProjectileMaxSpeed")->mValue.getFloat();
-        float speed = minimum + (maximum - minimum) * attackStrength;
-        if (!thrown && physicalProjectiles())
+        const bool physical = physicalProjectiles();
+        float speed = playerBow && physical ? maximum * bowDrawPower(attackStrength)
+                                           : std::lerp(minimum, maximum, attackStrength);
+        if (!thrown && physical)
             speed *= Settings::game().mBrutalProjectileSpeed;
         return speed;
     }
@@ -851,7 +867,7 @@ namespace MWMechanics
 
     ProjectileOutcome projectileHit(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, MWWorld::Ptr weapon,
         const MWWorld::Ptr& projectile, const osg::Vec3f& hitPosition, float attackStrength,
-        const std::pair<osg::Vec3f, osg::Vec3f>* flight, std::uint64_t finisherId,
+        const std::pair<osg::Vec3f, osg::Vec3f>* flight, std::uint64_t attackId, bool finisherHit,
         const MWRender::ProjectileContact* contact)
     {
         MWBase::World* world = MWBase::Environment::get().getWorld();
@@ -879,16 +895,22 @@ namespace MWMechanics
                 return ProjectileOutcome::Missed;
             }
 
+            const bool playerBow = physicalProjectiles() && attacker == getPlayer()
+                && projectile.get<ESM::Weapon>()->mBase->mData.mType == ESM::Weapon::Arrow;
+            const float strength = playerBow ? 1.f : attackStrength;
             {
                 const auto& attack = weapon.get<ESM::Weapon>()->mBase->mData.mChop;
-                damage = attack[0] + ((attack[1] - attack[0]) * attackStrength); // Bow/crossbow damage
+                damage = attack[0] + (attack[1] - attack[0]) * strength; // Bow/crossbow damage
             }
             {
                 // Arrow/bolt damage
                 // NB in case of thrown weapons, we are applying the damage twice since projectile == weapon
                 const auto& attack = projectile.get<ESM::Weapon>()->mBase->mData.mChop;
-                damage += attack[0] + ((attack[1] - attack[0]) * attackStrength);
+                damage += attack[0] + (attack[1] - attack[0]) * strength;
             }
+            // A short draw also hurts less with weapon records that have flat damage ranges.
+            if (playerBow)
+                damage *= bowDrawPower(attackStrength);
             adjustWeaponDamage(damage, weapon, attacker);
 
             if (const ProjectileOutcome blocked = blockProjectile(attacker, victim, projectile, damage, flight);
@@ -953,9 +975,9 @@ namespace MWMechanics
                     victim.getClass().getContainerStore(victim).add(projectile, 1);
             }
 
-            const int part = contact && contact->mPart >= 0 ? contact->mPart : finisherId != 0 ? ESM::PRT_Head : -1;
+            const int part = contact && contact->mPart >= 0 ? contact->mPart : finisherHit ? ESM::PRT_Head : -1;
             MWBase::Environment::get().getLuaManager()->onHit(attacker, victim, weapon, projectile, 0, attackStrength,
-                damage, true, impactPosition, true, MWMechanics::DamageSourceType::Ranged, finisherId, finisherId != 0,
+                damage, true, impactPosition, true, MWMechanics::DamageSourceType::Ranged, attackId, finisherHit,
                 false, part, false, contact ? &contact->mNormal : nullptr);
             return ProjectileOutcome::Body;
         }

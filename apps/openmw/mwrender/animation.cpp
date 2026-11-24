@@ -1057,6 +1057,7 @@ namespace MWRender
         bool mImportedDaggerArms = false;
         bool mImportedPairedArms = false;
         bool mImportedBow = false;
+        bool mNpcCombatWalk = false;
         // Dark Messiah's wounded NPC set: the same group names, used only while the actor is wounded.
         bool mBrutalWounded = false;
         std::map<std::weak_ptr<float>, float, std::owner_less<std::weak_ptr<float>>> mDaggerClockStarts;
@@ -1346,6 +1347,8 @@ namespace MWRender
         const bool importedNpc = mPtr.getClass().isNpc()
             && mPtr != MWBase::Environment::get().getWorld()->getPlayerPtr()
             && (kfname.starts_with("animations/brutal_npc/") || kfname.starts_with("animations/brutal_npc_wounded/"));
+        const auto filename = std::string_view(kfname).substr(kfname.find_last_of('/') + 1);
+        animsrc->mNpcCombatWalk = importedNpc && filename.starts_with("walk");
         animsrc->mBrutalWounded = kfname.starts_with("animations/brutal_npc_wounded/");
         // Weapon families opt only their first-person arm tracks into local
         // source fade rules. Never turn on global smoothing for their camera,
@@ -1429,7 +1432,17 @@ namespace MWRender
 
     bool Animation::sourceInUse(const AnimSource& source) const
     {
-        return !source.mBrutalWounded || mBrutalWounded;
+        return (!source.mNpcCombatWalk || mNpcCombatWalking) && (!source.mBrutalWounded || mBrutalWounded);
+    }
+
+    bool Animation::setNpcCombatWalking(bool inCombat)
+    {
+        if (std::exchange(mNpcCombatWalking, inCombat) == inCombat)
+            return false;
+        if (!std::ranges::any_of(mAnimSources, [](const auto& source) { return source->mNpcCombatWalk; }))
+            return false;
+        mAnimVelocities.clear();
+        return true;
     }
 
     bool Animation::setBrutalWounded(bool wounded)
@@ -2431,12 +2444,12 @@ namespace MWRender
         return surface;
     }
 
-    bool Animation::attachStuckProjectile(VFS::Path::NormalizedView model, const ProjectileContact& contact,
+    ProjectileAttachment Animation::attachStuckProjectile(VFS::Path::NormalizedView model, const ProjectileContact& contact,
         const osg::Vec3f& direction, const ESM::RefId& item, osg::Node* within)
     {
         osg::Vec3f flight = direction;
         if (flight.normalize() < 1e-4f)
-            return false;
+            return ProjectileAttachment::NoSurface;
         // Deeper in flesh than in a shield board.
         const float embed = within != nullptr ? 3.f : 6.f;
         const osg::Vec3f tipPosition = contact.mPosition + flight * embed;
@@ -2449,7 +2462,7 @@ namespace MWRender
             parent = within->asGroup();
             const osg::NodePathList paths = within->getParentalNodePaths();
             if (parent == nullptr || paths.empty())
-                return false;
+                return ProjectileAttachment::NoSurface;
             parentToWorld = osg::computeLocalToWorld(paths.front());
         }
         else
@@ -2481,22 +2494,54 @@ namespace MWRender
                 }
             }
             if (parent == nullptr)
-                return false;
+                return ProjectileAttachment::NoSurface;
         }
 
-        addStuckProjectile(model, tipPosition, flight, item, *parent, parentToWorld, bone);
-        return true;
+        return addStuckProjectile(model, tipPosition, flight, item, *parent, parentToWorld, bone);
     }
 
-    void Animation::addStuckProjectile(VFS::Path::NormalizedView model, const osg::Vec3f& tipPosition,
+    static float projectileModelTip(osg::Node& projectile)
+    {
+        // Missile models point along +Y; the tip is the far end.
+        osg::ComputeBoundsVisitor bounds;
+        projectile.accept(bounds);
+        return bounds.getBoundingBox().valid() ? bounds.getBoundingBox().yMax() : 0.f;
+    }
+
+    ProjectileAttachment Animation::addStuckProjectile(
+        VFS::Path::NormalizedView model, const osg::Vec3f& tipPosition,
         const osg::Vec3f& flight, const ESM::RefId& item, osg::Group& parent, const osg::Matrixf& parentToWorld,
         std::string_view bone)
     {
+        constexpr float nearbyRadius = 10.f;
+        constexpr std::size_t maxNearby = 3;
+        std::size_t sameSurface = 0;
+        std::size_t nearby = 0;
+        for (const auto& stuck : mStuckProjectiles)
+        {
+            if (bone.empty() ? stuck.mParent.get() != &parent : stuck.mBone.empty())
+                continue;
+            osg::ref_ptr<osg::Group> anchor;
+            if (!stuck.mParent.lock(anchor) || !anchor->containsNode(stuck.mNode))
+                continue;
+            if (++sameSurface >= ESM::AnimationState::MaxStuckProjectiles)
+                return ProjectileAttachment::Crowded;
+
+            osg::Matrixf anchorToWorld = parentToWorld;
+            if (anchor != &parent)
+            {
+                const auto paths = anchor->getParentalNodePaths();
+                if (paths.empty())
+                    continue;
+                anchorToWorld = osg::computeLocalToWorld(paths.front());
+            }
+            const auto offset = stuck.mTipInParent * anchorToWorld - tipPosition;
+            if (offset.length2() < nearbyRadius * nearbyRadius && ++nearby >= maxNearby)
+                return ProjectileAttachment::Crowded;
+        }
+
         osg::ref_ptr<osg::Node> projectile = mResourceSystem->getSceneManager()->getInstance(model);
-        // Missile models point along +Y; the tip is the far end.
-        osg::ComputeBoundsVisitor bounds;
-        projectile->accept(bounds);
-        const float tip = bounds.getBoundingBox().valid() ? bounds.getBoundingBox().yMax() : 0.f;
+        const float tip = projectileModelTip(*projectile);
 
         osg::Vec3f right = flight ^ osg::Z_AXIS;
         if (right.normalize() < 1e-4f)
@@ -2507,23 +2552,10 @@ namespace MWRender
         const osg::Matrixf projectileToWorld = rotation * osg::Matrixf::translate(tipPosition - flight * tip);
 
         const osg::Matrixf local = projectileToWorld * osg::Matrixf::inverse(parentToWorld);
-        mountProjectile(*projectile, parent, local, item, bone);
-        if (bone.empty())
-            return;
-
-        // Bound the rendered body marks. All recoverable missiles remain in inventory.
-        const auto isBody = [](const StuckProjectile& stuck) { return !stuck.mBone.empty(); };
-        if (std::cmp_greater(std::ranges::count_if(mStuckProjectiles, isBody), ESM::AnimationState::MaxStuckProjectiles))
-        {
-            auto oldest = std::find_if(mStuckProjectiles.begin(), mStuckProjectiles.end(),
-                [&](const StuckProjectile& stuck) { return isBody(stuck) && stuck.mItem.empty(); });
-            if (oldest == mStuckProjectiles.end())
-                oldest = std::find_if(mStuckProjectiles.begin(), mStuckProjectiles.end(), isBody);
-            if (osg::ref_ptr<osg::Group> group; oldest->mParent.lock(group))
-                group->removeChild(oldest->mNode);
-            mStuckProjectiles.erase(oldest);
-        }
-        saveBodyProjectiles();
+        mountProjectile(*projectile, parent, local, item, bone, tip);
+        if (!bone.empty())
+            saveBodyProjectiles();
+        return ProjectileAttachment::Attached;
     }
 
     void Animation::saveBodyProjectiles() const
@@ -2559,7 +2591,8 @@ namespace MWRender
             {
                 const auto model = Misc::ResourceHelpers::correctMeshPath(VFS::Path::Normalized(record->mModel));
                 const auto projectile = mResourceSystem->getSceneManager()->getInstance(model);
-                mountProjectile(*projectile, *bone->second, osg::Matrixf(entry.mTransform.data()), entry.mItem, entry.mBone);
+                mountProjectile(*projectile, *bone->second, osg::Matrixf(entry.mTransform.data()), entry.mItem,
+                    entry.mBone, projectileModelTip(*projectile));
             }
             catch (const std::exception& error)
             {
@@ -2569,7 +2602,7 @@ namespace MWRender
     }
 
     void Animation::mountProjectile(osg::Node& projectile, osg::Group& parent, const osg::Matrixf& transform,
-        const ESM::RefId& item, std::string_view bone)
+        const ESM::RefId& item, std::string_view bone, float modelTip)
     {
         osg::ref_ptr<osg::MatrixTransform> attached = new osg::MatrixTransform(transform);
         // A missile is visible without becoming a hit surface for another missile.
@@ -2577,7 +2610,8 @@ namespace MWRender
         attached->setName("Brutal Stuck Projectile");
         attached->addChild(&projectile);
         parent.addChild(attached);
-        mStuckProjectiles.push_back({ &parent, std::move(attached), item, std::string(bone) });
+        mStuckProjectiles.push_back(
+            { &parent, std::move(attached), item, std::string(bone), osg::Vec3f(0.f, modelTip, 0.f) * transform });
     }
 
     float Animation::mapToOriginalGroupTime(std::string_view group, float time, bool relative) const

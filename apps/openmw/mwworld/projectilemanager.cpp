@@ -484,8 +484,9 @@ namespace MWWorld
             osg::Vec3f direction = selected->mHead - pos;
             const float distance = direction.normalize();
             state.mVelocity = direction * guidedSpeed;
-            state.mFinisher = ProjectileState::Finisher{ MWWorld::SafePtr(selected->mActor),
-                MWMechanics::nextCombatAttackId(), guidedSpeed, distance / guidedSpeed + 1.f };
+            state.mFinisherAttackId = MWMechanics::nextCombatAttackId();
+            state.mFinisher
+                = ProjectileState::Finisher{ MWWorld::SafePtr(selected->mActor), guidedSpeed, distance / guidedSpeed + 1.f };
         }
 
         MWWorld::ManualRef ref(*MWBase::Environment::get().getESMStore(), projectile.getCellRef().getRefId());
@@ -505,7 +506,7 @@ namespace MWWorld
             stats.mLastConsumedPowerStrikeToken = std::move(stats.mPowerStrike.token);
             stats.mPowerStrike = {};
             MWBase::Environment::get().getLuaManager()->projectileFinisher(
-                actor, selected->mActor, state.mFinisher->mAttackId, "launched", stats.mLastConsumedPowerStrikeToken);
+                actor, selected->mActor, state.mFinisherAttackId, "launched", stats.mLastConsumedPowerStrikeToken);
         }
         mProjectiles.push_back(std::move(state));
         return true;
@@ -625,7 +626,7 @@ namespace MWWorld
     void ProjectileManager::landProjectile(const MWWorld::Ptr& caster, const MWWorld::Ptr& target,
         const MWWorld::Ptr& bow, const MWWorld::Ptr& projectile, const osg::Vec3f& hitPosition,
         const osg::Vec3f& hitNormal, const osg::Vec3f& velocity, float attackStrength, bool hitWater,
-        std::uint64_t finisherId)
+        std::uint64_t finisherId, bool finisherHit)
     {
         std::pair<osg::Vec3f, osg::Vec3f> path;
         const std::pair<osg::Vec3f, osg::Vec3f>* flightPath = nullptr;
@@ -647,10 +648,13 @@ namespace MWWorld
                     contact = animation->findProjectileContact(hitPosition, flight);
             }
         }
-        if (finisherId != 0 && target.getClass().isNpc() && (!contact || contact->mPart != ESM::PRT_Head))
-            finisherId = 0;
+        if (finisherHit && target.getClass().isNpc() && (!contact || contact->mPart != ESM::PRT_Head))
+            finisherHit = false;
+        // A guided shot keeps its launch receipt even if it reaches a different body part.
+        const std::uint64_t attackId = finisherId != 0 ? finisherId
+            : actorHit && caster != target && caster == MWMechanics::getPlayer() ? MWMechanics::nextCombatAttackId() : 0;
         const MWMechanics::ProjectileOutcome outcome = MWMechanics::projectileHit(caster, target, bow, projectile,
-            hitPosition, attackStrength, flightPath, finisherId, contact ? &*contact : nullptr);
+            hitPosition, attackStrength, flightPath, attackId, finisherHit, contact ? &*contact : nullptr);
         if (!physical)
             return;
 
@@ -672,6 +676,14 @@ namespace MWWorld
         // Thrown weapons (stars, darts, knives) do not snap.
         const auto* type = MWMechanics::getWeaponType(projectile.get<ESM::Weapon>()->mBase->mData.mType);
         const bool breakable = type->mWeaponClass == ESM::WeaponType::Ammo;
+        const auto brokeOnCrowdedSurface = [&](MWRender::ProjectileAttachment attachment,
+                                               const osg::Vec3f& where, std::string_view material) {
+            if (attachment != MWRender::ProjectileAttachment::Crowded || !breakable)
+                return false;
+            playMissileSound(where, "Brutal Arrow Break");
+            report("broken", material, {}, where);
+            return true;
+        };
         const auto glance = [&](const osg::Vec3f& where, const osg::Vec3f& normal, float bounce, bool canBreak,
                                 std::string_view sound, std::string_view material) {
             if (enchanted)
@@ -699,27 +711,39 @@ namespace MWWorld
                         return;
                     }
                     const ESM::RefId item = enchanted ? ESM::RefId() : id;
-                    if (contact && animation->attachStuckProjectile(model, *contact, flight, item))
+                    if (contact)
                     {
-                        if (!item.empty())
-                            target.getClass().getContainerStore(target).add(item, 1);
-                        playMissileSound(contact->mPosition, "Brutal Arrow Flesh");
-                        report("body", "flesh", {}, contact->mPosition);
+                        const auto attachment = animation->attachStuckProjectile(model, *contact, flight, item);
+                        if (attachment == MWRender::ProjectileAttachment::Attached)
+                        {
+                            if (!item.empty())
+                                target.getClass().getContainerStore(target).add(item, 1);
+                            playMissileSound(contact->mPosition, "Brutal Arrow Flesh");
+                            report("body", "flesh", {}, contact->mPosition);
+                            return;
+                        }
+                        if (brokeOnCrowdedSurface(attachment, contact->mPosition, "flesh"))
+                            return;
                     }
-                    else
-                        // Its line passes what is seen of the body: it grazed by and falls.
-                        glance(hitPosition, -flight, 0.1f, false, {}, "flesh");
+                    // A graze or a thrown weapon that cannot embed drops to the ground.
+                    glance(hitPosition, -flight, 0.1f, false, {}, "flesh");
                     return;
                 }
                 case MWMechanics::ProjectileOutcome::Shield:
                 {
                     auto* npc = dynamic_cast<MWRender::NpcAnimation*>(animation);
-                    if (npc != nullptr && npc->attachStuckProjectileToShield(
-                            model, hitPosition, flight, path, enchanted ? ESM::RefId() : id))
+                    if (npc != nullptr)
                     {
-                        playMissileSound(hitPosition, "Brutal Arrow Wood");
-                        report("shield", "wood", {}, hitPosition);
-                        return;
+                        const auto attachment = npc->attachStuckProjectileToShield(
+                            model, hitPosition, flight, path, enchanted ? ESM::RefId() : id);
+                        if (attachment == MWRender::ProjectileAttachment::Attached)
+                        {
+                            playMissileSound(hitPosition, "Brutal Arrow Wood");
+                            report("shield", "wood", {}, hitPosition);
+                            return;
+                        }
+                        if (brokeOnCrowdedSurface(attachment, hitPosition, "wood"))
+                            return;
                     }
                     glance(hitPosition, -flight, 0.15f, breakable, {}, "wood");
                     return;
@@ -935,7 +959,7 @@ namespace MWWorld
             {
                 finisher.mSlowMotionRequested = true;
                 MWBase::Environment::get().getLuaManager()->projectileFinisher(
-                    player, target, finisher.mAttackId, "approach");
+                    player, target, state.mFinisherAttackId, "approach");
             }
         }
         return true;
@@ -1011,18 +1035,17 @@ namespace MWWorld
             if (projectile->getHitWater())
                 mRendering->emitWaterRipple(hitPosition);
 
-            std::uint64_t finisherId = 0;
+            bool finisherHit = false;
             if (projectileState.mFinisher && !target.isEmpty() && !projectile->getHitWater()
                 && projectileState.mFinisher->mTarget.ptrOrEmpty() == target)
             {
                 const auto head = finisherHead(target);
                 const float headHeight = std::clamp(mPhysics->getHalfExtents(target).z() * .25f, 8.f, 32.f);
-                if (head && (target.getClass().isNpc() || std::abs(hitPosition.z() - head->z()) <= headHeight))
-                    finisherId = projectileState.mFinisher->mAttackId;
+                finisherHit = head && (target.getClass().isNpc() || std::abs(hitPosition.z() - head->z()) <= headHeight);
             }
             landProjectile(caster, target, bow, projectileRef.getPtr(), hitPosition,
                 Misc::Convert::toOsg(projectile->getHitNormal()), projectileState.mVelocity,
-                projectileState.mAttackStrength, projectile->getHitWater(), finisherId);
+                projectileState.mAttackStrength, projectile->getHitWater(), projectileState.mFinisherAttackId, finisherHit);
             projectileState.mToDelete = true;
         }
         const MWWorld::ESMStore& esmStore = *MWBase::Environment::get().getESMStore();

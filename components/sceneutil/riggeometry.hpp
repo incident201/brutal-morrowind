@@ -7,10 +7,12 @@
 #include <osg/Matrixf>
 #include <osg/Vec3d>
 
-#include <string_view>
+#include <array>
 #include <functional>
 #include <map>
+#include <memory>
 #include <optional>
+#include <string_view>
 
 namespace SceneUtil
 {
@@ -129,6 +131,15 @@ namespace SceneUtil
         osg::ref_ptr<osg::Geometry> mSourceGeometry;
         // Copy construction deliberately starts with no instance decals.
         osg::ref_ptr<SurfaceDecals> mSurfaceDecals;
+        struct DecalPose
+        {
+            std::vector<osg::Matrixf> bones;
+            osg::Matrixf transform;
+            std::array<unsigned int, 3> sourceVersions;
+
+            bool matches(const DecalPose& previous) const;
+        };
+        std::unique_ptr<std::array<std::optional<DecalPose>, 2>> mDecalPoses;
         osg::ref_ptr<const osg::Vec4Array> mSourceTangents;
         Skeleton* mSkeleton{ nullptr };
 

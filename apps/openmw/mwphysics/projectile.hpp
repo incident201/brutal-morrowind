@@ -26,7 +26,7 @@ namespace MWPhysics
     class Projectile final : public PtrHolder
     {
     public:
-        Projectile(const MWWorld::Ptr& caster, const osg::Vec3f& position, float radius,
+        Projectile(const MWWorld::Ptr& caster, const osg::Vec3f& position, float radius, bool magic,
             PhysicsTaskScheduler* scheduler, PhysicsSystem* physicssystem);
         ~Projectile() override;
 
@@ -35,6 +35,7 @@ namespace MWPhysics
         void updateCollisionObjectPosition();
 
         bool isActive() const { return mActive.load(std::memory_order_acquire); }
+        bool isMagic() const { return mMagic; }
 
         MWWorld::Ptr getTarget() const;
 
@@ -58,6 +59,7 @@ namespace MWPhysics
         std::unique_ptr<btCollisionShape> mShape;
         btConvexShape* mConvexShape;
 
+        const bool mMagic;
         bool mHitWater;
         std::atomic<bool> mActive;
         MWWorld::Ptr mCaster;

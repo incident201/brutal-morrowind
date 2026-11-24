@@ -58,6 +58,13 @@ namespace MWRender
         int mPart = -1;
     };
 
+    enum class ProjectileAttachment
+    {
+        NoSurface,
+        Attached,
+        Crowded,
+    };
+
     class ResetAccumRootCallback;
     class RotateController;
     class TransparencyUpdater;
@@ -211,6 +218,7 @@ namespace MWRender
             osg::ref_ptr<osg::MatrixTransform> mNode;
             ESM::RefId mItem;
             std::string mBone;
+            osg::Vec3f mTipInParent;
         };
         std::vector<StuckProjectile> mStuckProjectiles;
         // Phase-matched (playing, original) key times per group and playing source.
@@ -228,9 +236,8 @@ namespace MWRender
         void saveBodyProjectiles() const;
         void restoreBodyProjectiles();
         void mountProjectile(osg::Node& projectile, osg::Group& parent, const osg::Matrixf& transform,
-            const ESM::RefId& item, std::string_view bone);
-        /// Whether a missile flying into the body may stick in what this path leads to (not a held weapon).
-        void addStuckProjectile(VFS::Path::NormalizedView model, const osg::Vec3f& tipPosition,
+            const ESM::RefId& item, std::string_view bone, float modelTip);
+        ProjectileAttachment addStuckProjectile(VFS::Path::NormalizedView model, const osg::Vec3f& tipPosition,
             const osg::Vec3f& flight, const ESM::RefId& item, osg::Group& parent, const osg::Matrixf& parentToWorld,
             std::string_view bone = {});
 
@@ -298,6 +305,7 @@ namespace MWRender
 
         // Sources from animations/brutal_npc_wounded/ take part only while this is set.
         bool mBrutalWounded = false;
+        bool mNpcCombatWalking = false;
         bool sourceInUse(const AnimSource& source) const;
 
         osg::ref_ptr<SceneUtil::LightListCallback> mLightListCallback;
@@ -431,6 +439,7 @@ namespace MWRender
         // Dark Messiah's wounded NPC: prefer the wounded clips of the same groups. Ends the
         // playing states those clips redefine; true when that changes the clips in use.
         bool setBrutalWounded(bool wounded);
+        bool setNpcCombatWalking(bool inCombat);
         bool isBrutalWounded() const { return mBrutalWounded; }
 
         bool isLoopingAnimation(std::string_view group) const;
@@ -541,7 +550,7 @@ namespace MWRender
             const osg::Vec3f& hitPosition, const osg::Vec3f& direction, osg::Node* within = nullptr) const;
         /// Embed a missile at the visible contact, on the bone nearest the tip.
         /// The stuck missile disappears when its inventory item is taken.
-        bool attachStuckProjectile(VFS::Path::NormalizedView model, const ProjectileContact& contact,
+        ProjectileAttachment attachStuckProjectile(VFS::Path::NormalizedView model, const ProjectileContact& contact,
             const osg::Vec3f& direction, const ESM::RefId& item, osg::Node* within = nullptr);
         void removeStuckProjectiles();
         /// Time on the first (original) source's timeline of \a group for a time of the source now playing it,

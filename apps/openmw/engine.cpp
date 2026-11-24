@@ -234,10 +234,9 @@ void OMW::Engine::updatePlayerDeath(float duration, bool paused)
     else if (!mPlayerDeathElapsed || *mPlayerDeathElapsed >= fadeEnd)
         return;
 
-    // The backdrop keeps its own clock after the menu pauses the world.
     mPlayerDeathElapsed = mPlayerDeathElapsed ? std::min(*mPlayerDeathElapsed + duration, fadeEnd) : 0.f;
     const float elapsed = *mPlayerDeathElapsed;
-    if (running)
+    if (!paused)
         mWorld->getCamera()->setPlayerDeathTime(elapsed);
     const float progress = std::clamp((elapsed - fadeDelay) / fadeDuration, 0.f, 1.f);
     mWindowManager->setPlayerDeathFade(progress * progress * (3.f - 2.f * progress));

@@ -1232,14 +1232,15 @@ namespace MWRender
     class FirstPersonBodyCullCallback : public osg::NodeCallback
     {
         osg::observer_ptr<NpcAnimation> mOwner;
-        bool mHideInClinch;
+        bool mBodyAwareness;
     public:
-        FirstPersonBodyCullCallback(NpcAnimation* owner, bool hideInClinch)
-            : mOwner(owner), mHideInClinch(hideInClinch) {}
+        FirstPersonBodyCullCallback(NpcAnimation* owner, bool bodyAwareness)
+            : mOwner(owner), mBodyAwareness(bodyAwareness) {}
         void operator()(osg::Node* node, osg::NodeVisitor* visitor) override
         {
             osg::ref_ptr<NpcAnimation> owner;
-            if (mOwner.lock(owner) && ((mHideInClinch && owner->isBodyAwarenessHiddenForClinch())
+            if (mOwner.lock(owner) && ((mBodyAwareness
+                    && (owner->isBodyAwarenessHiddenForClinch() || owner->hasGroundFinisherContact()))
                     || (owner->hasPlayerShadowBody() && (visitor->getTraversalMask() & Mask_PlayerShadow))))
                 return;
             traverse(node, visitor);
@@ -1276,15 +1277,18 @@ namespace MWRender
             const bool perspective = cv->getProjectionMatrix()->getPerspective(fov, aspect, zNear, zFar);
             float targetFov = mFov;
             osg::ref_ptr<NpcAnimation> actor;
-            constexpr std::string_view execution = "brutal_backstab_out";
-            if (perspective && mActor.lock(actor) && actor->isPlaying(execution))
+            if (perspective && mActor.lock(actor))
             {
-                // Match the viewmodel projection to the victim at contact.
-                // Custom viewmodel FOVs ease in and out during reach and recovery.
-                const float time = actor->getCurrentTime(execution);
-                const float end = actor->getTextKeyTime("brutal_backstab_out: stop");
-                const float progress = std::clamp(std::min(time, end - time) / .22f, 0.f, 1.f);
-                targetFov = std::lerp(mFov, fov, progress * progress * (3.f - 2.f * progress));
+                constexpr std::string_view backstab = "brutal_backstab_out";
+                const std::string_view execution = actor->hasGroundFinisherContact() ? "brutal_ground_finisher" : backstab;
+                if (actor->isPlaying(execution))
+                {
+                    // Match the viewmodel projection to the actual contact, easing in and out of the player's FOV.
+                    const float time = actor->getCurrentTime(execution);
+                    const float end = actor->getTextKeyTime(std::string(execution) + ": stop");
+                    const float progress = std::clamp(std::min(time, end - time) / .22f, 0.f, 1.f);
+                    targetFov = std::lerp(mFov, fov, progress * progress * (3.f - 2.f * progress));
+                }
             }
             if (perspective && std::abs(fov - targetFov) > 0.001)
             {
@@ -1341,7 +1345,8 @@ namespace MWRender
 
     void NpcAnimation::setRenderBin()
     {
-        if (mViewMode == VM_FirstPerson && !useFullBodyFirstPerson() && !isPlaying("brutal_backstab_out"))
+        if (mViewMode == VM_FirstPerson && !useFullBodyFirstPerson() && !isPlaying("brutal_backstab_out")
+            && !hasGroundFinisherContact())
         {
             [[maybe_unused]] static const bool prototypeAdded = [&] {
                 osg::ref_ptr<osgUtil::RenderBin> depthClearBin(new osgUtil::RenderBin);
@@ -2676,7 +2681,6 @@ namespace MWRender
     osg::Vec3f NpcAnimation::runAnimation(float timepassed)
     {
         restoreTransientPose();
-        prewarmBloodDecals();
         updateCutBloodFlow(timepassed);
         updateWeaponBlood(timepassed);
         if(mDecapitationRenderPrewarm)
@@ -2698,7 +2702,7 @@ namespace MWRender
         {
             const auto* state = mObjectRoot->getStateSet();
             const bool overlay = state && state->useRenderBinDetails() && state->getBinName() == "DepthClear";
-            if (overlay == isPlaying("brutal_backstab_out"))
+            if (overlay == (isPlaying("brutal_backstab_out") || hasGroundFinisherContact()))
                 setRenderBin();
         }
         updateNpcGuardPose(timepassed);

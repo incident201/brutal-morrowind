@@ -15,6 +15,7 @@
 #include <deque>
 #include <functional>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -51,13 +52,15 @@ namespace MWRender
             Style_Count = Style_World + 6
         };
 
+        using WeaponAnchors = std::vector<SceneUtil::SurfaceDecals::Anchor>;
+
         struct WeaponMark
         {
             unsigned style = Style_Slash;
             std::string model;
             unsigned ordinal = 0;
             std::uint64_t fingerprint = 0;
-            std::vector<SceneUtil::SurfaceDecals::Anchor> anchors;
+            std::shared_ptr<const WeaponAnchors> anchors;
             double hour = 0; // game hours when the blood was left
         };
 
@@ -133,6 +136,7 @@ namespace MWRender
 
         // Immutable render states, shared by every mark of the same look.
         osg::StateSet* weaponState(unsigned style, float fade, float dry);
+        const std::array<osg::ref_ptr<osg::StateSet>, 4>& woundStates();
         bool hasStyle(unsigned style);
 
         double now() const;
@@ -203,7 +207,13 @@ namespace MWRender
         void buildSplat(const Splat& splat);
         void removeBuilt(std::uint32_t id);
         osg::StateSet* state(unsigned style, float fade, float dry, bool weapon = false);
-        osg::ref_ptr<osg::StateSet> createState(osg::Image* image, float fade, float dry, bool weapon);
+        enum class DecalSurface
+        {
+            World,
+            Weapon,
+            Wound
+        };
+        osg::ref_ptr<osg::StateSet> createState(osg::Image* image, float fade, float dry, DecalSurface surface);
 
         Resource::ResourceSystem* mResourceSystem;
         osg::ref_ptr<osg::Group> mParent;
@@ -211,6 +221,7 @@ namespace MWRender
         EffectManager* mEffects;
         SceneAccess mAccess;
         std::map<std::uint64_t, osg::ref_ptr<osg::StateSet>> mStates;
+        std::optional<std::array<osg::ref_ptr<osg::StateSet>, 4>> mWoundStates;
         std::array<int, Style_Count> mStyleAvailable{};
         std::map<ESM::RefNum, ItemBlood> mItems;
         std::deque<Splat> mSplats;

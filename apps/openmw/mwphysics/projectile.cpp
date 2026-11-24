@@ -12,9 +12,10 @@
 
 namespace MWPhysics
 {
-    Projectile::Projectile(const MWWorld::Ptr& caster, const osg::Vec3f& position, float radius,
+    Projectile::Projectile(const MWWorld::Ptr& caster, const osg::Vec3f& position, float radius, bool magic,
         PhysicsTaskScheduler* scheduler, PhysicsSystem* physicssystem)
         : PtrHolder(MWWorld::Ptr(), position)
+        , mMagic(magic)
         , mHitWater(false)
         , mActive(true)
         , mHitTarget(nullptr)

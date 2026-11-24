@@ -86,9 +86,9 @@ namespace
     constexpr std::string_view sBowKick = "brutal_npc_bow_kick";
     const std::string sSwordWipe = "brutal_sword_wipe";
 
-    constexpr int sBackstabGround = MWPhysics::CollisionType_World | MWPhysics::CollisionType_Door
+    constexpr int sFinisherGround = MWPhysics::CollisionType_World | MWPhysics::CollisionType_Door
         | MWPhysics::CollisionType_HeightMap;
-    constexpr int sBackstabObstruction = sBackstabGround | MWPhysics::CollisionType_Dynamic;
+    constexpr int sBackstabObstruction = sFinisherGround | MWPhysics::CollisionType_Dynamic;
 
     float backstabBlend(float fraction)
     {
@@ -128,7 +128,7 @@ namespace
         {
             const osg::Vec3f foot = to + side * (extent.x() * lateral);
             const auto ground = rays->castRay(foot + osg::Vec3f(0.f, 0.f, 12.f),
-                foot - osg::Vec3f(0.f, 0.f, 14.f), sBackstabGround);
+                foot - osg::Vec3f(0.f, 0.f, 14.f), sFinisherGround);
             if (!ground.mHit || ground.mHitNormal.z() < .7f)
                 return std::nullopt;
             if (lateral == 0.f)
@@ -853,6 +853,9 @@ namespace MWMechanics
 
     void CharacterController::refreshMovementAnims(CharacterState movement, bool force)
     {
+        if (mPtr.getClass().isNpc() && mPtr != getPlayer()
+            && mAnimation->setNpcCombatWalking(mPtr.getClass().getCreatureStats(mPtr).getAiSequence().isInCombat()))
+            force |= mCurrentMovement.starts_with("walk");
         if (movement == mMovementState && !force)
             return;
 
@@ -1779,7 +1782,8 @@ namespace MWMechanics
         const MWWorld::Ptr& target, bool lockedTarget) const
     {
         const auto world = MWBase::Environment::get().getWorld();
-        if (target.isEmpty() || !target.isInCell() || !target.getClass().isNpc() || target == mPtr)
+        if (target.isEmpty() || !target.isInCell() || !target.getRefData().isEnabled()
+            || !target.getClass().isNpc() || target == mPtr)
             return std::nullopt;
         const auto& stats = target.getClass().getCreatureStats(target);
         const auto& health = stats.getHealth();
@@ -1797,21 +1801,20 @@ namespace MWMechanics
         // The knocked-down flag also covers the upright parts of a fall and get-up.
         if (!groundedRagdoll && torso.z() - target.getRefData().getPosition().pos[2] > targetBounds.z() * .8f)
             return std::nullopt;
-        const auto [origin, aim] = getMeleeAim(mPtr);
-        const osg::Vec3f delta = torso - origin;
-        const float along = delta * aim;
+        const auto& playerPose = mPtr.getRefData().getPosition();
+        const auto playerBounds = world->getHalfExtents(mPtr, true);
+        const osg::Vec3f origin = getMeleeAim(mPtr).first;
         const float reach = getMeleeWeaponReach(mPtr, mWeapon);
-        const float feetHeight = mPtr.getRefData().getPosition().pos[2];
         const float radius = std::max(12.f, targetBounds.x());
         // Measure against the ragdoll's actual chest. Its standing actor bounds can be
         // several feet away when a kick moves the body.
-        const osg::Vec2f horizontal(torso.x() - origin.x(), torso.y() - origin.y());
-        // Once selected, the body may roll between the release and the impact key.
-        // Its chest must still be in front of the strike and unobstructed.
-        const float aimRadius = lockedTarget ? radius + 28.f : radius;
-        if (along <= 0.f || aim.z() >= 0.f || (delta - aim * along).length2() > aimRadius * aimRadius
-            || horizontal.length() > reach + world->getHalfExtents(mPtr).y()
-            || delta.z() > 0.f || torso.z() < feetHeight - radius)
+        const osg::Vec2f horizontal(torso.x() - playerPose.pos[0], torso.y() - playerPose.pos[1]);
+        const osg::Vec2f forward(std::sin(playerPose.rot[2]), std::cos(playerPose.rot[2]));
+        const float distance = std::min(reach + playerBounds.y(), playerBounds.z() * 1.65f)
+            + (lockedTarget ? playerBounds.y() : 0.f);
+        // Select by proximity and horizontal facing. A locked victim can roll toward either side during the windup.
+        if ((!lockedTarget && horizontal * forward < 0.f) || horizontal.length2() > distance * distance
+            || torso.z() > origin.z() || torso.z() < playerPose.pos[2] - radius)
             return std::nullopt;
 
         constexpr int mask = MWPhysics::CollisionType_World | MWPhysics::CollisionType_Door
@@ -1819,7 +1822,9 @@ namespace MWMechanics
         if (world->getRayCasting()->castRay(origin, torso, { mPtr, target }, {}, mask).mHit)
             return std::nullopt;
         MWPhysics::RayCastingResult surface;
-        if (world->castRenderingRay(surface, origin, torso, true, false, {}, true))
+        if (world->castRenderingRay(surface, origin, torso, true, false, {}, true) && surface.mHitObject != target)
+            return std::nullopt;
+        if (world->castRenderingRay(surface, torso + osg::Vec3f(0, 0, 44.f), torso, true, false, {}, true))
         {
             if (surface.mHitObject != target)
                 return std::nullopt;
@@ -1832,29 +1837,37 @@ namespace MWMechanics
     {
         if (!canPlayGroundFinisher() || !mAnimation->hasAnimation(sGroundFinisher))
             return false;
-        const osg::Vec3f origin = getMeleeAim(mPtr).first;
+        const auto& playerPose = mPtr.getRefData().getPosition();
+        const osg::Vec3f origin = playerPose.asVec3();
         const float searchRadius = getMeleeWeaponReach(mPtr, mWeapon) * 2.f
             + MWBase::Environment::get().getWorld()->getHalfExtents(mPtr, true).z() * 2.f;
         std::vector<MWWorld::Ptr> actors;
         MWBase::Environment::get().getMechanicsManager()->getActorsInRange(origin, searchRadius, actors);
         MWWorld::Ptr victim;
+        osg::Vec3f entry;
         float closest = std::numeric_limits<float>::max();
         for (const auto& actor : actors)
         {
             const auto contact = groundFinisherContact(actor, false);
             if (!contact)
                 continue;
-            const float distance = (*contact - origin).length2();
+            const float distance = osg::Vec2f(contact->x() - origin.x(), contact->y() - origin.y()).length2();
             if (distance < closest)
             {
                 closest = distance;
                 victim = actor;
+                entry = *contact;
             }
         }
         if (victim.isEmpty())
             return false;
 
-        mGroundFinisher.emplace(GroundFinisher{ MWWorld::SafePtr(victim), MWWorld::SafePtr(mWeapon) });
+        const float yaw = playerPose.rot[2];
+        const float pitch = playerPose.rot[0];
+        const bool sword = mWeaponType == ESM::Weapon::LongBladeOneHand || mWeaponType == ESM::Weapon::LongBladeTwoHand
+            || (mWeaponType == ESM::Weapon::ShortBladeOneHand && !hasBrutalOffhandDagger());
+        mGroundFinisher.emplace(GroundFinisher{ MWWorld::SafePtr(victim), MWWorld::SafePtr(mWeapon), entry,
+            entry - getMeleeTorsoPosition(victim), yaw, pitch, yaw, pitch, sword });
         mReadyToHit = false;
         mBrutalChargedHold = false;
         mBrutalFast = BrutalFast::None;
@@ -1871,21 +1884,56 @@ namespace MWMechanics
     {
         if (!mGroundFinisher)
             return false;
-        if (!canPlayGroundFinisher() || mGroundFinisher->mWeapon.ptrOrEmpty() != mWeapon)
+        if (!canPlayGroundFinisher() || mGroundFinisher->mWeapon.ptrOrEmpty() != mWeapon
+            || !mAnimation->isPlaying(sGroundFinisher))
         {
             cancelGroundFinisher();
             return false;
         }
-        if (mAnimation->isPlaying(sGroundFinisher))
-            return true;
-        mGroundFinisher.reset();
-        return false;
+        auto& finisher = *mGroundFinisher;
+        const auto& victim = finisher.mVictim.ptrOrEmpty();
+        const auto world = MWBase::Environment::get().getWorld();
+        const auto& playerPose = mPtr.getRefData().getPosition();
+        const float time = mAnimation->getCurrentTime(sGroundFinisher);
+        const float hit = mAnimation->getTextKeyTime(sGroundFinisher + ": hit");
+        const float returning = mAnimation->getTextKeyTime(sGroundFinisher + ": return start");
+        const float end = mAnimation->getTextKeyTime(sGroundFinisher + ": stop");
+        if (!victim.isEmpty() && victim.isInCell())
+        {
+            finisher.mContact = getMeleeTorsoPosition(victim) + finisher.mTorsoOffset;
+            const auto look = finisher.mContact - getMeleeAim(mPtr).first;
+            const auto facing = finisher.mContact - playerPose.asVec3();
+            const float blend = std::clamp(MWBase::Environment::get().getFrameDuration() / .12f, 0.f, 1.f);
+            if (std::hypot(facing.x(), facing.y()) > 8.f)
+            {
+                const float angle = std::atan2(facing.x(), facing.y()) - finisher.mInitialYaw;
+                const float yawOffset = std::clamp(std::remainder(angle, 2.f * osg::PIf), -1.6f, 1.6f);
+                finisher.mFocusYaw = std::lerp(finisher.mFocusYaw, finisher.mInitialYaw + yawOffset, blend);
+            }
+            const float pitch = std::clamp(std::atan2(-look.z(), std::hypot(look.x(), look.y())), .36f, 1.23f);
+            finisher.mFocusPitch = std::lerp(finisher.mFocusPitch, pitch, blend);
+        }
+        const float weight = backstabBlend(time / std::max(.1f, hit * .72f))
+            * (1.f - backstabBlend((time - returning) / std::max(.1f, end - returning)));
+        const float pitch = std::lerp(finisher.mInitialPitch, finisher.mFocusPitch, weight);
+        const float yaw = std::lerp(finisher.mInitialYaw, finisher.mFocusYaw, weight);
+        if (std::abs(playerPose.rot[0] - pitch) > .001f
+            || std::abs(std::remainder(playerPose.rot[2] - yaw, 2.f * osg::PIf)) > .001f)
+            world->rotateObject(mPtr, osg::Vec3f(pitch, 0.f, yaw));
+        if (finisher.mSword)
+            if (auto* npc = dynamic_cast<MWRender::NpcAnimation*>(mAnimation))
+                npc->setGroundFinisherPoint(finisher.mContact);
+        return true;
     }
 
     void CharacterController::cancelGroundFinisher()
     {
         if (mGroundFinisher && mAnimation)
+        {
+            if (auto* npc = dynamic_cast<MWRender::NpcAnimation*>(mAnimation))
+                npc->setGroundFinisherPoint(std::nullopt);
             mAnimation->disable(sGroundFinisher);
+        }
         mGroundFinisher.reset();
     }
 
@@ -1900,6 +1948,10 @@ namespace MWMechanics
         const auto contact = groundFinisherContact(victim, true);
         if (!contact)
             return;
+        mGroundFinisher->mContact = *contact;
+        if (mGroundFinisher->mSword)
+            if (auto* npc = dynamic_cast<MWRender::NpcAnimation*>(mAnimation))
+                npc->setGroundFinisherPoint(*contact);
         const auto& skill = mWeapon.getClass().getEquipmentSkill(mWeapon);
         const int attack = skill == ESM::Skill::ShortBlade || skill == ESM::Skill::LongBlade || skill == ESM::Skill::Spear
             ? ESM::Weapon::AT_Thrust : ESM::Weapon::AT_Chop;
@@ -3648,7 +3700,7 @@ namespace MWMechanics
             if (gait != MWPhysics::PlayerKinetics::Gait_Stance)
                 isrunning = gait != MWPhysics::PlayerKinetics::Gait_Walk && !flying;
             Movement& movementSettings = cls.getMovementSettings(mPtr);
-            if (isPlayer && mBackstab.mPhase == BrutalBackstabPhase::Executing)
+            if (isPlayer && (mGroundFinisher || mBackstab.mPhase == BrutalBackstabPhase::Executing))
             {
                 std::fill(std::begin(movementSettings.mPosition), std::end(movementSettings.mPosition), 0.f);
                 movementSettings.mSpeedFactor = 0.f;
@@ -4115,7 +4167,7 @@ namespace MWMechanics
 
             if (!mSkipAnim)
             {
-                if (isPlayer && mBackstab.mPhase == BrutalBackstabPhase::Executing)
+                if (isPlayer && (mGroundFinisher || mBackstab.mPhase == BrutalBackstabPhase::Executing))
                     rot = {};
                 if (!isKnockedDown() && !isKnockedOut())
                 {
@@ -4233,6 +4285,32 @@ namespace MWMechanics
                     };
                     // Normal actor locomotion resolves walls, other actors, and slopes.
                     movement.y() += (quick ? 18.f : 32.f) * (weight(strideTo) - weight(strideFrom)) / duration;
+                }
+            }
+            if (mGroundFinisher)
+            {
+                movement = {};
+                const float toImpact = mAnimation->getTextKeyTime("brutal_ground_finisher: hit")
+                    - mAnimation->getCurrentTime(sGroundFinisher);
+                if (mGroundFinisher->mSword && toImpact > .06f && !mGroundFinisher->mVictim.ptrOrEmpty().isEmpty())
+                {
+                    const auto& feet = mPtr.getRefData().getPosition();
+                    auto direction = mGroundFinisher->mContact - feet.asVec3();
+                    direction.z() = 0.f;
+                    const float stanceDistance = mWeaponType == ESM::Weapon::ShortBladeOneHand ? 24.f : 32.f;
+                    const float gap = direction.normalize() - stanceDistance;
+                    if (gap > 0.f)
+                    {
+                        // Take a short physical step while raising the sword. Keep the step on supported ground.
+                        const auto ahead = feet.asVec3() + direction * std::min(18.f, gap);
+                        const auto floor = world->getRayCasting()->castRay(ahead + osg::Z_AXIS * 14.f,
+                            ahead - osg::Z_AXIS * 20.f, sFinisherGround);
+                        if (floor.mHit && floor.mHitNormal.z() >= .65f)
+                        {
+                            const osg::Quat toLocal(feet.rot[2], osg::Z_AXIS);
+                            movement = (toLocal * direction) * std::min(210.f, gap * 9.f);
+                        }
+                    }
                 }
             }
             world->queueMovement(mPtr, movement);

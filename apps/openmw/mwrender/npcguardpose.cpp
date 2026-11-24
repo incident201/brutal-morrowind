@@ -185,17 +185,14 @@ namespace MWRender
         return {};
     }
 
-    bool NpcAnimation::attachStuckProjectileToShield(VFS::Path::NormalizedView model, const osg::Vec3f& hitPosition,
+    ProjectileAttachment NpcAnimation::attachStuckProjectileToShield(
+        VFS::Path::NormalizedView model, const osg::Vec3f& hitPosition,
         const osg::Vec3f& flight, const std::pair<osg::Vec3f, osg::Vec3f>& path, const ESM::RefId& item)
     {
         osg::Node* part = getPartNode(ESM::PRT_Shield);
         osg::Group* shield = part != nullptr ? part->asGroup() : nullptr;
         if (shield == nullptr)
-            return false;
-        if (std::cmp_greater_equal(std::ranges::count_if(mStuckProjectiles,
-                [shield](const StuckProjectile& stuck) { return stuck.mParent.get() == shield; }),
-                ESM::AnimationState::MaxStuckProjectiles))
-            return false;
+            return ProjectileAttachment::NoSurface;
         if (mNpcGuardPose && mNpcGuardPose->shield && !mNpcTwoHandGuardPose)
         {
             // The fitted pose used for the hit can be restored to the source
@@ -203,13 +200,10 @@ namespace MWRender
             osg::Matrixf itemToWorld;
             const auto contact = traceNpcGuardMeshSnapshot(path.first, path.second, true, &itemToWorld);
             if (contact && contact->gap <= MWMechanics::sNpcProjectileGuardContactMargin)
-            {
-                addStuckProjectile(model, contact->point + flight * 3.f, flight, item, *shield, itemToWorld);
-                return true;
-            }
+                return addStuckProjectile(model, contact->point + flight * 3.f, flight, item, *shield, itemToWorld);
         }
         const auto contact = findProjectileContact(hitPosition, flight, shield);
-        return contact && attachStuckProjectile(model, *contact, flight, item, shield);
+        return contact ? attachStuckProjectile(model, *contact, flight, item, shield) : ProjectileAttachment::NoSurface;
     }
 
     void NpcAnimation::setNpcGuardTarget(bool enabled, bool shield, const osg::Vec3f& worldPoint,

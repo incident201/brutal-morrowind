@@ -64,13 +64,14 @@ namespace MWMechanics
     /// when that path actually crosses the shield.
     ProjectileOutcome projectileHit(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, MWWorld::Ptr weapon,
         const MWWorld::Ptr& projectile, const osg::Vec3f& hitPosition, float attackStrength,
-        const std::pair<osg::Vec3f, osg::Vec3f>* flight = nullptr, std::uint64_t finisherId = 0,
+        const std::pair<osg::Vec3f, osg::Vec3f>* flight = nullptr, std::uint64_t attackId = 0, bool finisherHit = false,
         const MWRender::ProjectileContact* contact = nullptr);
 
     /// Brutal physical missiles: falling arcs, contact hits, sticking and glancing.
     bool physicalProjectiles();
+    bool isMissileItem(const MWWorld::Ptr& item);
     /// Launch speed of an arrow or bolt (thrown == false) or a thrown weapon at the given draw strength.
-    float getProjectileLaunchSpeed(bool thrown, float attackStrength);
+    float getProjectileLaunchSpeed(bool thrown, float attackStrength, bool playerBow = false);
     /// Downward acceleration of arrows, bolts and thrown weapons, in units per second squared.
     float getProjectileGravity();
 

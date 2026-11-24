@@ -442,7 +442,8 @@ namespace MWRender
         return mStyleAvailable[style] == 1;
     }
 
-    osg::ref_ptr<osg::StateSet> BrutalBlood::createState(osg::Image* image, float fade, float dry, bool weapon)
+    osg::ref_ptr<osg::StateSet> BrutalBlood::createState(
+        osg::Image* image, float fade, float dry, DecalSurface surface)
     {
         // Same look as the wounds on bodies: Dark Messiah's DecalModulate,
         // multiplying the already lit surface around a neutral grey.
@@ -456,17 +457,19 @@ namespace MWRender
         state->setTextureAttribute(0, new osg::TexMat, flags);
         state->setAttributeAndModes(new osg::BlendFunc(GL_DST_COLOR, GL_SRC_COLOR, GL_ZERO, GL_ONE), flags);
         state->setAttributeAndModes(new SceneUtil::AutoDepth(osg::Depth::LEQUAL, 0, 1, false), flags);
-        const float offset = SceneUtil::AutoDepth::isReversed() ? 1.f : -1.f;
-        state->setAttributeAndModes(new osg::PolygonOffset(offset * 2.f, offset * 2.f), flags);
+        const bool wound = surface == DecalSurface::Wound;
+        const float offset = (SceneUtil::AutoDepth::isReversed() ? 1.f : -1.f) * (wound ? 1.f : 2.f);
+        state->setAttributeAndModes(new osg::PolygonOffset(offset, offset), flags);
         state->setMode(
             GL_CULL_FACE, osg::StateAttribute::OFF | osg::StateAttribute::OVERRIDE | osg::StateAttribute::PROTECTED);
         state->setAttribute(new osg::ColorMask(true, true, true, false), flags);
         // Protected: inside the first-person depth-clearing bin this becomes a
         // nested bin drawn right after the held weapon.
-        state->setRenderBinDetails(1, "RenderBin", osg::StateSet::PROTECTED_RENDERBIN_DETAILS);
+        state->setRenderBinDetails(1, "RenderBin",
+            wound ? osg::StateSet::OVERRIDE_RENDERBIN_DETAILS : osg::StateSet::PROTECTED_RENDERBIN_DETAILS);
         state->addUniform(new osg::Uniform("bloodFade", fade), flags);
         state->addUniform(new osg::Uniform("bloodDry", dry), flags);
-        state->addUniform(new osg::Uniform("bloodFeather", weapon), flags);
+        state->addUniform(new osg::Uniform("bloodFeather", surface == DecalSurface::Weapon), flags);
         state->addUniform(new osg::Uniform("bloodScale", 1.f), flags);
         mResourceSystem->getSceneManager()->setUpNormalsRTForStateSet(state, false);
         mResourceSystem->getSceneManager()->recreateShaders(geometry, "blooddecal");
@@ -483,6 +486,22 @@ namespace MWRender
         return state(style, fade, dry, true);
     }
 
+    const std::array<osg::ref_ptr<osg::StateSet>, 4>& BrutalBlood::woundStates()
+    {
+        if (!mWoundStates)
+        {
+            constexpr std::array<std::string_view, 4> styles{ "slash", "small", "big", "tiny" };
+            auto& states = mWoundStates.emplace();
+            for (std::size_t i = 0; i < styles.size(); ++i)
+            {
+                const VFS::Path::Normalized path(std::string("textures/brutal_dm/model_blood_") + std::string(styles[i]) + ".png");
+                if (mResourceSystem->getVFS()->exists(path))
+                    states[i] = createState(mResourceSystem->getImageManager()->getImage(path), 0.f, 0.f, DecalSurface::Wound);
+            }
+        }
+        return *mWoundStates;
+    }
+
     osg::StateSet* BrutalBlood::state(unsigned style, float fade, float dry, bool weapon)
     {
         if (!hasStyle(style))
@@ -495,7 +514,8 @@ namespace MWRender
         if (!entry)
         {
             const auto image = mResourceSystem->getImageManager()->getImage(VFS::Path::Normalized(texturePath(style)));
-            entry = createState(image, float(f) / FadeLevels, float(d) / DryLevels, weapon);
+            entry = createState(image, float(f) / FadeLevels, float(d) / DryLevels,
+                weapon ? DecalSurface::Weapon : DecalSurface::World);
         }
         return entry;
     }
@@ -1059,7 +1079,7 @@ namespace MWRender
         {
             const auto image = makeMask(splat);
             if (!mProceduralState)
-                mProceduralState = createState(image, 0.f, 0.f, false);
+                mProceduralState = createState(image, 0.f, 0.f, DecalSurface::World);
             look = new osg::StateSet(*mProceduralState, osg::CopyOp::SHALLOW_COPY);
             const auto flags = osg::StateAttribute::ON | osg::StateAttribute::OVERRIDE | osg::StateAttribute::PROTECTED;
             look->setTextureAttributeAndModes(0, decalTexture(*mResourceSystem, image), flags);
@@ -1260,8 +1280,8 @@ namespace MWRender
                 out.u32(std::uint32_t(m.fingerprint));
                 out.u32(std::uint32_t(m.fingerprint >> 32));
                 out.f64(m.hour);
-                out.u32(m.anchors.size());
-                for (const auto& a : m.anchors)
+                out.u32(m.anchors->size());
+                for (const auto& a : *m.anchors)
                 {
                     for (auto i : a.indices)
                         out.u32(i);
@@ -1358,7 +1378,8 @@ namespace MWRender
                     const auto size = in.u32();
                     if (m.style >= Style_Count || m.ordinal > 4096 || !size || size % 3 || size > MaxWeaponMarkVertices)
                         return false;
-                    m.anchors.reserve(size);
+                    auto anchors = std::make_shared<WeaponAnchors>();
+                    anchors->reserve(size);
                     for (unsigned k = 0; k < size; ++k)
                     {
                         SceneUtil::SurfaceDecals::Anchor a;
@@ -1372,8 +1393,9 @@ namespace MWRender
                             a.weights[w] = in.f32();
                         const float u = in.f32(), v = in.f32();
                         a.uv = { u, v };
-                        m.anchors.push_back(a);
+                        anchors->push_back(a);
                     }
+                    m.anchors = std::move(anchors);
                     blood.marks.push_back(std::move(m));
                 }
                 if (key.isSet())
