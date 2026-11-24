@@ -26,6 +26,9 @@ namespace Settings
         SettingValue<bool> mBestAttack{ mIndex, "Game", "best attack" };
         SettingValue<bool> mBrutalAdrenalineHud{ mIndex, "Game", "brutal adrenaline hud" };
         SettingValue<bool> mBrutalEnabled{ mIndex, "Game", "brutal enabled" };
+        SettingValue<bool> mBrutalPlayerDeathScene{ mIndex, "Game", "brutal player death scene" };
+        SettingValue<bool> mBrutalDamageFlash{ mIndex, "Game", "brutal damage flash" };
+        SettingValue<bool> mBrutalLowHealthVignette{ mIndex, "Game", "brutal low health vignette" };
         SettingValue<bool> mBrutalFirstPersonBody{ mIndex, "Game", "brutal first person body" };
         SettingValue<bool> mBrutalRagdoll{ mIndex, "Game", "brutal ragdoll" };
         SettingValue<bool> mBrutalGroundFinisher{ mIndex, "Game", "brutal ground finisher" };

@@ -18,6 +18,7 @@ local DEFAULTS={
     guaranteedHits=true,
     meleeGeometry=true,
     ragdollEnabled=true,
+    deathSceneEnabled=true,
     ragdollWeaponDrop=40,
     dynamicProps=true,
     objectGrabEnabled=true,
@@ -50,6 +51,8 @@ local DEFAULTS={
     dismemberment=true,
     bloodEffects=true,
     sparkEffects=true,
+    damageFlash=true,
+    lowHealthVignette=true,
     bloodDecals=true,
     weaponBlood=true,
     worldBlood=true,
@@ -70,7 +73,7 @@ local DARK_MESSIAH_KEYS={'firstPersonBody','cameraMotionMovement','dualWieldEnab
     'kickEnabled','kickAlwaysRagdoll','superKickEnabled','slideEnabled','slideFxEnabled','activeBlockEnabled',
     'shieldBashEnabled','parryEnabled','clinchEnabled','clinchFxEnabled','attackCombosEnabled',
     'fastAttacksEnabled','wallBounceEnabled','adrenalineEnabled','finisherEnabled','groundFinisherEnabled','backstabEnabled','bloodEffects',
-    'sparkEffects','bloodDecals','weaponBlood','worldBlood','combatSounds','heroVoice'}
+    'sparkEffects','lowHealthVignette','bloodDecals','weaponBlood','worldBlood','combatSounds','heroVoice'}
 local darkMessiahData=vfs.fileExists('animations/brutal_npc/brutal_hit.kf')
     and vfs.fileExists('animations/brutal_fp/brutal_blockhit1.kf')
     and vfs.fileExists('sound/brutal_dm/armor_heavy_01.wav')

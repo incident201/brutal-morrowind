@@ -1155,8 +1155,19 @@ namespace MWMechanics
     void CharacterController::playRandomDeath(float startpoint)
     {
         if (mPtr == getPlayer())
+        {
+            const bool deathScene = brutalPlayerDeathScene();
+            if (!deathScene)
+                MWBase::Environment::get().getWorld()->getCamera()->setMode(MWRender::Camera::Mode::ThirdPerson, true);
             if (auto* animation = dynamic_cast<MWRender::NpcAnimation*>(mAnimation))
-                animation->preparePlayerDeathPose(); // The first-person rig has no death clip.
+            {
+                // Both death views need animations from the full rig.
+                if (deathScene)
+                    animation->preparePlayerDeathPose();
+                else
+                    animation->setViewMode(MWRender::NpcAnimation::VM_Normal);
+            }
+        }
 
         mDeathState = hitStateToDeathState(mHitState);
         if (mDeathState == CharState_None && MWBase::Environment::get().getWorld()->isSwimming(mPtr))
@@ -4478,7 +4489,8 @@ namespace MWMechanics
 
     bool CharacterController::hasPhysicalDeath() const
     {
-        return Settings::game().mBrutalRagdoll && (mPtr.getClass().isNpc() || MWPhysics::findCreatureRig(mPtr));
+        return Settings::game().mBrutalRagdoll && (mPtr != getPlayer() || brutalPlayerDeathScene())
+            && (mPtr.getClass().isNpc() || MWPhysics::findCreatureRig(mPtr));
     }
 
     bool CharacterController::canSwordClinch() const

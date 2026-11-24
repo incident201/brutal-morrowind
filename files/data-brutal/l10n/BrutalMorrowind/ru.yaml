@@ -25,6 +25,8 @@ ragdollEnabled: Ragdoll
 ragdollEnabledDescription: "Физические падения NPC и существ, включая улучшения тел, пределы суставов, физику выпавшего снаряжения и подъём живых NPC (подъёму нужны анимации Dark Messiah)."
 ragdollWeaponDrop: Шанс выпадения оружия, %
 ragdollWeaponDropDescription: "Шанс выпадения каждого оружия из рук живого сбитого с ног NPC. При смерти оружие выпадает всегда. Этот шанс также применяется к щитам и заряженным боеприпасам."
+deathSceneEnabled: Сцена смерти игрока
+deathSceneEnabledDescription: "Камера следует за головой игрока, а фон за меню смерти плавно темнеет. Отключение возвращает обычную анимацию смерти от третьего лица."
 dynamicProps: Физика предметов мира
 dynamicPropsDescription: "Удары сдвигают лежащие предметы."
 objectGrabEnabled: Захват и бросок предметов
@@ -73,6 +75,10 @@ slowMotionEnabled: Замедление при добивании
 slowMotionEnabledDescription: "Краткое замедление после смертельного адреналинового удара."
 dismemberment: Расчленение
 dismembermentDescription: "Отсечение частей тела при добивании. Требует ragdoll."
+damageFlash: Вспышка при получении урона
+damageFlashDescription: "Края экрана ненадолго краснеют, когда игрок получает урон."
+lowHealthVignette: Виньетка низкого здоровья
+lowHealthVignetteDescription: "Красная рамка по краям экрана появляется, когда у игрока меньше 5 единиц здоровья."
 bloodEffects: Эффекты крови
 bloodEffectsDescription: "Брызги крови мода."
 sparkEffects: Искры при ударе

@@ -426,7 +426,13 @@ namespace MWRender
         // Static remains available for explicit scripted cameras.
         if ((Settings::game().mFirstPersonFullBody || MWMechanics::brutalDmFirstPerson()) && !Settings::game().mFirstPersonBodyAllowThirdPerson
             && (newMode == Mode::ThirdPerson || newMode == Mode::Preview || newMode == Mode::Vanity))
-            newMode = Mode::FirstPerson;
+        {
+            const bool classicDeath = newMode == Mode::ThirdPerson && !MWMechanics::brutalPlayerDeathScene()
+                && !mTrackingPtr.isEmpty() && mTrackingPtr == MWBase::Environment::get().getWorld()->getPlayerPtr()
+                && mTrackingPtr.getClass().getCreatureStats(mTrackingPtr).isDead();
+            if (!classicDeath)
+                newMode = Mode::FirstPerson;
+        }
         if (mMode == newMode)
         {
             mQueuedMode = std::nullopt;

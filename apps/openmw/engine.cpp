@@ -82,6 +82,7 @@
 #include "mwdialogue/journalimp.hpp"
 #include "mwdialogue/scripttest.hpp"
 
+#include "mwmechanics/brutaloptions.hpp"
 #include "mwmechanics/mechanicsmanagerimp.hpp"
 
 #include "mwstate/statemanagerimp.hpp"
@@ -207,7 +208,8 @@ void OMW::Engine::updatePlayerDeath(float duration, bool paused)
     if (running)
     {
         const auto player = mWorld->getPlayerPtr();
-        if (!player.getClass().getCreatureStats(player).isDead())
+        const auto& stats = player.getClass().getCreatureStats(player);
+        if (!stats.isDead())
         {
             if (mPlayerDeathElapsed)
             {
@@ -219,6 +221,15 @@ void OMW::Engine::updatePlayerDeath(float duration, bool paused)
         }
         if (paused)
             return;
+
+        if (!mPlayerDeathElapsed && !MWMechanics::brutalPlayerDeathScene())
+        {
+            // The classic path opens the load prompt when Actors finishes the death animation.
+            mStateManager->endGame();
+            if (stats.isDeathAnimationFinished())
+                mStateManager->askLoadRecent();
+            return;
+        }
     }
     else if (!mPlayerDeathElapsed || *mPlayerDeathElapsed >= fadeEnd)
         return;

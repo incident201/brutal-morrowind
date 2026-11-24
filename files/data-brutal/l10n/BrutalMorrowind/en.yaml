@@ -25,6 +25,8 @@ ragdollEnabled: Ragdoll
 ragdollEnabledDescription: "Physical falls for NPCs and creatures, including body enhancements, joint limits, dropped equipment physics and living NPC recovery (recovery needs Dark Messiah animations)."
 ragdollWeaponDrop: Weapon drop chance, %
 ragdollWeaponDropDescription: "Chance per held weapon when a living NPC is knocked down. Held weapons always drop on death. This chance also applies to shields and loaded ammunition."
+deathSceneEnabled: Player death scene
+deathSceneEnabledDescription: "The camera follows the player's head and the scene fades behind the death menu. Turn off for the standard third-person death animation."
 dynamicProps: Movable world items
 dynamicPropsDescription: "Impacts move loose items."
 objectGrabEnabled: Grab and throw items
@@ -73,6 +75,10 @@ slowMotionEnabled: Finisher slow motion
 slowMotionEnabledDescription: "Brief slow motion after a lethal adrenaline strike."
 dismemberment: Dismemberment
 dismembermentDescription: "Finishers sever body parts. Requires ragdoll."
+damageFlash: Damage flash
+damageFlashDescription: "Briefly reddens the edges of the screen when the player takes damage."
+lowHealthVignette: Low health vignette
+lowHealthVignetteDescription: "Shows red edges while the player has less than 5 health."
 bloodEffects: Blood effects
 bloodEffectsDescription: "The mod’s blood sprays."
 sparkEffects: Impact sparks

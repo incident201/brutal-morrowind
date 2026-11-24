@@ -131,6 +131,12 @@ namespace MWGui
 {
     namespace
     {
+        bool damageFlashEnabled()
+        {
+            const auto& game = Settings::game();
+            return Settings::gui().mHitFader && (!game.mBrutalEnabled || game.mBrutalDamageFlash);
+        }
+
         Settings::SettingValue<bool>* findHiddenSetting(GuiWindow window)
         {
             switch (window)
@@ -2316,28 +2322,37 @@ namespace MWGui
 
     void WindowManager::updateDamageVignettes(float duration, bool gameRunning)
     {
-        if (!mDamageVignette || mPlayerDeathFading)
+        if (mPlayerDeathFading)
             return;
-        if (!gameRunning || !useDarkMessiahDamageVignette() || !Settings::gui().mHitFader)
-        {
-            mDamageVignetteTime = 0.f;
-            mDamageVignette->notifyAlphaChanged(0.f);
-            mCriticalHealthVignette->notifyAlphaChanged(0.f);
+        const bool flash = damageFlashEnabled();
+        if (!flash)
+            mHitFader->clear();
+        if (!mDamageVignette)
             return;
-        }
 
-        const auto world = MWBase::Environment::get().getWorld();
-        if (!world->getTimeManager()->isPaused())
-            mDamageVignetteTime = std::max(0.f, mDamageVignetteTime - duration);
-        const auto player = world->getPlayerPtr();
-        const float health = player.getClass().getCreatureStats(player).getHealth().getCurrent();
-        mCriticalHealthVignette->notifyAlphaChanged(std::clamp((5.f - health) / 5.f, 0.f, .5f));
+        float criticalAlpha = 0.f;
+        if (gameRunning && useDarkMessiahDamageVignette() && Settings::gui().mHitFader)
+        {
+            const auto world = MWBase::Environment::get().getWorld();
+            if (!flash)
+                mDamageVignetteTime = 0.f;
+            else if (!world->getTimeManager()->isPaused())
+                mDamageVignetteTime = std::max(0.f, mDamageVignetteTime - duration);
+
+            const auto player = world->getPlayerPtr();
+            const auto& stats = player.getClass().getCreatureStats(player);
+            if (Settings::game().mBrutalLowHealthVignette && !stats.isDead())
+                criticalAlpha = std::clamp((5.f - stats.getHealth().getCurrent()) / 5.f, 0.f, .5f);
+        }
+        else
+            mDamageVignetteTime = 0.f;
+        mCriticalHealthVignette->notifyAlphaChanged(criticalAlpha);
         mDamageVignette->notifyAlphaChanged(std::min(.5f, mDamageVignetteTime));
     }
 
     void WindowManager::activateHitOverlay(float damage, bool interrupt)
     {
-        if (mPlayerDeathFading || !Settings::gui().mHitFader)
+        if (mPlayerDeathFading || !damageFlashEnabled())
             return;
 
         if (useDarkMessiahDamageVignette())
@@ -2387,12 +2402,15 @@ namespace MWGui
         mHitFader->clearQueue();
         mScreenFader->notifyAlphaChanged(*fade);
         const bool useDarkMessiah = useDarkMessiahDamageVignette();
-        const bool showHit = Settings::gui().mHitFader;
+        const bool showHit = damageFlashEnabled();
         if (mDamageVignette)
         {
             // Hold the lethal hit and zero-health layers under the black fade.
-            mDamageVignette->notifyAlphaChanged(useDarkMessiah && showHit ? std::min(.5f, mDamageVignetteTime) : 0.f);
-            mCriticalHealthVignette->notifyAlphaChanged(useDarkMessiah && showHit ? .5f : 0.f);
+            if (!useDarkMessiah || !showHit)
+                mDamageVignetteTime = 0.f;
+            mDamageVignette->notifyAlphaChanged(std::min(.5f, mDamageVignetteTime));
+            const bool showCritical = useDarkMessiah && Settings::gui().mHitFader && Settings::game().mBrutalLowHealthVignette;
+            mCriticalHealthVignette->notifyAlphaChanged(showCritical ? .5f : 0.f);
         }
         // The stock additive layer sits above black and follows the same fade.
         mHitFader->notifyAlphaChanged(!useDarkMessiah && showHit ? 1.f - *fade : 0.f);

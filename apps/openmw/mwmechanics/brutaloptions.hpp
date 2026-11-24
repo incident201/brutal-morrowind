@@ -24,6 +24,11 @@ namespace MWMechanics
         return Settings::game().mBrutalEnabled && Settings::game().mFirstPersonRigidViewmodel && !Settings::game().mBrutalClassicFirstPerson;
     }
 
+    inline bool brutalPlayerDeathScene()
+    {
+        return Settings::game().mBrutalEnabled && Settings::game().mBrutalPlayerDeathScene;
+    }
+
     // Requested dual-wield preference is owned by the permanent Lua settings section.
     // This runtime switch avoids a second, potentially conflicting settings.cfg owner.
     inline bool sBrutalDualWield = true;

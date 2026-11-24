@@ -36,11 +36,11 @@ local options={setting('enabled','checkbox'),setting('allowThirdPerson','checkbo
 }
 for _,key in ipairs({
     'firstPersonBody','firstPersonAnimations','cameraMotionMovement','dualWieldEnabled','npcAnimations','guaranteedHits','meleeGeometry',
-    'ragdollEnabled','ragdollWeaponDrop','dynamicProps','objectGrabEnabled','movementEnabled','staminaEnabled',
+    'ragdollEnabled','ragdollWeaponDrop','deathSceneEnabled','dynamicProps','objectGrabEnabled','movementEnabled','staminaEnabled',
     'kickEnabled','kickAlwaysRagdoll','slideEnabled','activeBlockEnabled','shieldBashEnabled','parryEnabled',
     'clinchEnabled','attackCombosEnabled','fastAttacksEnabled','wallBounceEnabled','npcAiTweaks','npcStagger','woundedNpcs','npcFlee','npcWeaponPickup','physicalProjectiles','hitRecovery',
     'adrenalineEnabled','finisherEnabled','groundFinisherEnabled','backstabEnabled','groundFinisherHealth',
-    'superKickEnabled','slowMotionEnabled','dismemberment','bloodEffects','sparkEffects',
+    'superKickEnabled','slowMotionEnabled','dismemberment','damageFlash','lowHealthVignette','bloodEffects','sparkEffects',
     'bloodDecals','weaponBlood','worldBlood','combatSounds','heroVoice','adrenalineHudEnabled','adrenalineFxEnabled','slideFxEnabled','clinchFxEnabled',
 }) do
     if key=='ragdollWeaponDrop' or key=='groundFinisherHealth' then

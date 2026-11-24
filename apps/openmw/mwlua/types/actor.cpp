@@ -480,6 +480,8 @@ namespace MWLua
                 {"classicNpcAnimations", g.mBrutalClassicNpcAnimations}, {"firstPersonBody", g.mBrutalFirstPersonBody},
                 {"dismemberment", g.mBrutalDismemberment}, {"npcCombatTweaks", g.mDarkMessiahNpcCombat},
                 {"guaranteedHits", g.mMeleeContactAlwaysHits}, {"ragdoll", g.mBrutalRagdoll},
+                {"playerDeathScene", g.mBrutalPlayerDeathScene}, {"damageFlash", g.mBrutalDamageFlash},
+                {"lowHealthVignette", g.mBrutalLowHealthVignette},
                 {"groundFinisher", g.mBrutalGroundFinisher}, {"backstab", g.mBrutalBackstab},
                 {"ragdollEnhancements", g.mRagdollEnhancement}, {"npcStandup", g.mDarkMessiahStandUp},
                 {"ragdollSoftStops", g.mRagdollSoftStops}, {"ragdollNeutralPose", g.mRagdollNeutralPose},
@@ -552,6 +554,9 @@ namespace MWLua
                 g.mDarkMessiahNpcCombat.set(on("npcCombatTweaks"));
                 g.mMeleeContactAlwaysHits.set(on("guaranteedHits"));
                 g.mBrutalRagdoll.set(on("ragdoll"));
+                g.mBrutalPlayerDeathScene.set(on("playerDeathScene"));
+                g.mBrutalDamageFlash.set(on("damageFlash"));
+                g.mBrutalLowHealthVignette.set(on("lowHealthVignette"));
                 g.mBrutalGroundFinisher.set(on("groundFinisher"));
                 g.mBrutalBackstab.set(on("backstab"));
                 g.mRagdollEnhancement.set(on("ragdoll") && on("ragdollEnhancements"));

@@ -1898,7 +1898,14 @@ namespace MWMechanics
 
                 stats.getMagicEffects().add(EffectKey(ESM::MagicEffect::Vampirism), vampirism);
 
-                if (!isPlayer)
+                if (isPlayer)
+                {
+                    const auto state = MWBase::Environment::get().getStateManager();
+                    // The classic death path ends the game at the start of the animation.
+                    if (state->getState() == MWBase::StateManager::State_Ended)
+                        state->askLoadRecent();
+                }
+                else
                 {
                     // NPC death animation is over, disable actor collision
                     MWBase::Environment::get().getWorld()->enableActorCollision(actor.getPtr(), false);
