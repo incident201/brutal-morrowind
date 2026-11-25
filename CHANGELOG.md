@@ -1,6 +1,11 @@
 Brutal Morrowind (unreleased)
 ----------------------------
 
+    Acrobatics determines jump height with Dark Messiah movement enabled. The curve supports powerful Fortify Acrobatics effects such as Icarian Flight.
+    Exceeding the carry limit switches the player to the Alt walking gait and disables running, sprinting and jumping while Dark Messiah movement is enabled.
+    Athletics reduces sprint stamina costs and speeds passive recovery with Dark Messiah stamina enabled. Passive recovery resumes when sprinting stops.
+    In contact-based melee and with physical projectiles, the player's weapon skill scales damage after armor. Damage goes from 30% at skill 0 to full damage at 50 and 120% at 100.
+    Damaging shots and throws build adrenaline. Charged attacks build more. A short bow draw deals less damage and launches a slower arrow.
     Dark Messiah import recipe 33 includes first-person spear and halberd poses with the shaft held on the right. Quick thrusts keep both grips and vary their paths even across separate clicks. Charged thrusts draw back from the same stance. Dark Messiah's staff sweeps handle lateral attacks, and run and sprint each have their own weapon sway.
     Staff attacks and polearm side sweeps can hit several enemies. The first target takes the full hit. Later targets take half the base damage before their own defences apply.
     The player's first-person shadow includes the head and hands.

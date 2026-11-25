@@ -19,6 +19,7 @@
 #include <components/esm/luascripts.hpp>
 #include <components/esm3/esmreader.hpp>
 #include <components/esm3/esmwriter.hpp>
+#include <components/esm3/loadskil.hpp>
 #include <components/esm3/loadweap.hpp>
 #include <components/esm3/loadarmo.hpp>
 
@@ -794,6 +795,20 @@ namespace MWLua
             data["brutalAttackId"] = brutalAttackId;
             data["brutalPowered"] = brutalPowered;
             data["brutalGroundFinisher"] = brutalGroundFinisher;
+            const auto& game = Settings::game();
+            if (successful && isHealth && damage > 0.f && !brutalBlocked && !brutalPowered && !brutalGroundFinisher
+                && game.mBrutalEnabled && !attacker.isEmpty() && attacker == MWMechanics::getPlayer())
+            {
+                ESM::RefId skill;
+                if (sourceType == MWMechanics::DamageSourceType::Melee && game.mMeleeContactAlwaysHits
+                    && !weapon.isEmpty() && weapon.getType() == ESM::Weapon::sRecordId)
+                    skill = weapon.getClass().getEquipmentSkill(weapon);
+                else if (sourceType == MWMechanics::DamageSourceType::Ranged && game.mBrutalPhysicalProjectiles
+                    && MWMechanics::isMissileItem(ammo))
+                    skill = ESM::Skill::Marksman;
+                if (!skill.empty())
+                    data["brutalWeaponDamageSkill"] = attacker.getClass().getSkill(attacker, skill);
+            }
             data["brutalFast"] = !attacker.isEmpty() && attacker.getClass().isActor()
                 && attacker.getClass().getCreatureStats(attacker).mBrutalFastStrike;
             data["brutalShieldRush"] = !attacker.isEmpty() && attacker.getClass().isActor()

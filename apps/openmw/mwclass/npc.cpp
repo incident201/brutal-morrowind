@@ -1080,6 +1080,8 @@ namespace MWClass
                     * (1.f + std::max(0.f, mageffects.getOrDefault(ESM::MagicEffect::SwiftSwim).getMagnitude()) * 0.01f);
             if (MWBase::Environment::get().getMechanicsManager()->isSneaking(ptr))
                 return MWPhysics::PlayerKinetics::SneakSpeed;
+            if (normalizedEncumbrance > 1.0f)
+                return MWPhysics::PlayerKinetics::WalkSpeed;
             switch (stats.mBrutalGait)
             {
                 case MWPhysics::PlayerKinetics::Gait_Walk:
@@ -1121,19 +1123,19 @@ namespace MWClass
 
     float Npc::getJump(const MWWorld::Ptr& ptr) const
     {
+        const float normalizedEncumbrance = getNormalizedEncumbrance(ptr);
+        if (normalizedEncumbrance > 1.0f)
+            return 0.f;
+
         if (ptr == MWMechanics::getPlayer() && Settings::game().mKineticPlayerMovement)
         {
             const auto& stats = getNpcStats(ptr);
             if (stats.isParalyzed() || stats.getKnockedDown() || stats.isDead())
                 return 0.f;
-            // Jump magic remains an explicit exception, not a character-stat multiplier.
+            const float acrobatics = stats.getSkill(ESM::Skill::Acrobatics).getModified();
             const float magic = stats.getMagicEffects().getOrDefault(ESM::MagicEffect::Jump).getMagnitude();
-            return MWPhysics::PlayerKinetics::JumpSpeed + std::clamp(magic * 2.f, 0.f, 580.f);
+            return MWPhysics::PlayerKinetics::jumpSpeed(acrobatics) + std::clamp(magic * 2.f, 0.f, 580.f);
         }
-
-        const float normalizedEncumbrance = getNormalizedEncumbrance(ptr);
-        if (normalizedEncumbrance > 1.0f)
-            return 0.f;
 
         const MWMechanics::NpcStats& stats = getNpcStats(ptr);
         if (stats.isParalyzed() || stats.getKnockedDown() || stats.isDead())

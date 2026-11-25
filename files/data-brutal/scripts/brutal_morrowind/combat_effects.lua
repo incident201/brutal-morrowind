@@ -130,9 +130,22 @@ interface.spawnBloodEffect = function(position)
     -- while the normal damage vignette communicates wounds to the player.
 end
 
+local function weaponSkillDamageMultiplier(skill)
+    skill = math.max(0, math.min(100, skill))
+    if skill <= 50 then
+        local t = skill / 50
+        return 0.30 + 0.30 * t + 0.40 * t * t
+    end
+    local t = (skill - 50) / 50
+    return 1 + 0.20 * (2 * t - t * t)
+end
+
 interface.adjustDamageForDifficulty = function(attack)
     previous.adjustDamageForDifficulty(attack)
     local multiplier = rangedDamageMultiplier[attack.brutalRangedZone]
+    if attack.brutalWeaponDamageSkill then
+        multiplier = (multiplier or 1) * weaponSkillDamageMultiplier(attack.brutalWeaponDamageSkill)
+    end
     if multiplier and attack.damage and attack.damage.health then
         attack.damage.health = attack.damage.health * multiplier
     end

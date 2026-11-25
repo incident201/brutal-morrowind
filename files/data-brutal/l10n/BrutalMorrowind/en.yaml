@@ -18,7 +18,7 @@ firstPersonAnimationsDescription: "Choose the arm and weapon animation set."
 npcAnimations: NPC animations
 npcAnimationsDescription: "Choose the NPC animation set."
 guaranteedHits: 100% melee hit chance
-guaranteedHitsDescription: "Turn off to restore skill- and fatigue-based hit rolls."
+guaranteedHitsDescription: "The player's weapon skill scales melee damage. Turn off to restore skill- and fatigue-based hit rolls."
 meleeGeometry: Weapon contact and wide swings
 meleeGeometryDescription: "Use visible weapon contact and the swing area."
 ragdollEnabled: Ragdoll
@@ -64,7 +64,7 @@ woundedNpcsDescription: "Below 30% health an NPC fights and walks wounded, as in
 npcFlee: NPC flight
 npcWeaponPickup: NPCs pick up weapons
 physicalProjectiles: Physical arrows and missiles
-physicalProjectilesDescription: "Arrows, bolts and thrown weapons fall on an arc and hit what they touch without a skill roll. They stay in bodies until looted, stick in wood and wooden shields and glance off stone and metal. A raised shield blocks only the missiles that strike it."
+physicalProjectilesDescription: "Arrows, bolts and thrown weapons fall on an arc and hit what they touch without a skill roll. The player's Marksman skill scales their damage. They stay in bodies until looted, stick in wood and wooden shields and glance off stone and metal. A raised shield blocks only the missiles that strike it."
 npcWeaponPickupDescription: "An NPC left without a weapon in a fight runs to a weapon lying nearby, picks it up and fights with it. A shield lying right beside it is taken too."
 npcFleeDescription: "A blow that leaves an NPC below 10% health makes it run away for up to 20 seconds; then it fights on until the next blow."
 hitRecovery: Suppress player hit recoil

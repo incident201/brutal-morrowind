@@ -989,8 +989,10 @@ namespace MWMechanics
                     || mMovementState == CharState_SneakLeft || mMovementState == CharState_SneakRight;
                 mMovementAnimSpeed = (sneaking ? 33.5452f : (isRunning() ? 222.857f : 154.064f));
                 mMovementAnimationHasMovement = false;
+                const auto& cls = mPtr.getClass();
                 if (mPtr == getPlayer() && Settings::game().mKineticPlayerMovement
-                    && mPtr.getClass().getCreatureStats(mPtr).mBrutalGait != MWPhysics::PlayerKinetics::Gait_Stance)
+                    && (cls.getCreatureStats(mPtr).mBrutalGait != MWPhysics::PlayerKinetics::Gait_Stance
+                        || cls.getNormalizedEncumbrance(mPtr) > 1.f))
                 {
                     // Imported Dark Messiah clips play at their authored rate at DM's speeds.
                     namespace K = MWPhysics::PlayerKinetics;
@@ -3672,6 +3674,7 @@ namespace MWMechanics
         }
 
         const bool kineticPlayer = isPlayer && Settings::game().mKineticPlayerMovement;
+        const bool forcedWalk = kineticPlayer && cls.getNormalizedEncumbrance(mPtr) > 1.f;
         bool isFirstPersonPlayer = isPlayer && MWBase::Environment::get().getWorld()->isFirstPerson();
         bool godmode = isPlayer && MWBase::Environment::get().getWorld()->getGodModeState();
 
@@ -3701,7 +3704,11 @@ namespace MWMechanics
         }
 
         if (isPlayer)
+        {
+            if (forcedWalk)
+                mBrutalSprinting = false;
             updateBrutalSlide(duration);
+        }
 
         if (!cls.isActor())
             updateAnimQueue();
@@ -3719,7 +3726,8 @@ namespace MWMechanics
             bool isrunning = cls.getCreatureStats(mPtr).getStance(MWMechanics::CreatureStats::Stance_Run) && !flying;
             CreatureStats& stats = cls.getCreatureStats(mPtr);
             // A Lua-selected Dark Messiah gait replaces Morrowind's run stance.
-            const int gait = (kineticPlayer || Settings::game().mBrutalSlide) ? stats.mBrutalGait : 0;
+            const int inputGait = (kineticPlayer || Settings::game().mBrutalSlide) ? stats.mBrutalGait : 0;
+            const int gait = forcedWalk ? MWPhysics::PlayerKinetics::Gait_Walk : inputGait;
             if (gait != MWPhysics::PlayerKinetics::Gait_Stance)
                 isrunning = gait != MWPhysics::PlayerKinetics::Gait_Walk && !flying;
             Movement& movementSettings = cls.getMovementSettings(mPtr);

@@ -1,6 +1,8 @@
 #ifndef OPENMW_MWPHYSICS_PLAYERKINETICS_H
 #define OPENMW_MWPHYSICS_PLAYERKINETICS_H
 
+#include <algorithm>
+
 namespace MWPhysics::PlayerKinetics
 {
     // Dark Messiah's player movement, in Morrowind units (1 DM inch = DmScale units).
@@ -29,6 +31,23 @@ namespace MWPhysics::PlayerKinetics
     inline constexpr float StopSpeed = 50.f * DmScale;
     inline constexpr float AirAccelerate = 10.f;
     inline constexpr float AirWishCap = 30.f * DmScale;
+
+    inline constexpr float jumpSpeed(float acrobatics)
+    {
+        // Skill 50 gives the default kinetic jump. The upper limit covers
+        // one Icarian Flight scroll even at full mastery.
+        const float skill = std::clamp(acrobatics, 0.f, 1100.f);
+        constexpr float reference = 50.f / 15.f;
+        constexpr float referenceSquared = reference * reference;
+        const float early = std::min(skill, 50.f) / 15.f;
+        const float earlySquared = early * early;
+        const float earlyBonus = (earlySquared * earlySquared - referenceSquared * referenceSquared) / 15.f;
+        const float linearBonus = .8f * std::max(skill - 50.f, 0.f);
+        const float excess = std::max(skill - 100.f, 0.f);
+        // The quadratic term starts with zero slope at 100 and builds up
+        // for strong Fortify Acrobatics effects.
+        return JumpSpeed + earlyBonus + linearBonus + .0014f * excess * excess;
+    }
 
     enum Gait { Gait_Stance = 0, Gait_Walk = 1, Gait_Run = 2, Gait_Sprint = 3 };
 

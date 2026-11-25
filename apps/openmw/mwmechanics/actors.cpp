@@ -1,6 +1,8 @@
 #include "actors.hpp"
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <optional>
 
 #include <components/esm3/esmreader.hpp>
@@ -37,6 +39,8 @@
 #include "../mwbase/world.hpp"
 
 #include "../mwmechanics/aibreathe.hpp"
+
+#include "../mwphysics/playerkinetics.hpp"
 
 #include "../mwrender/vismask.hpp"
 
@@ -414,8 +418,7 @@ namespace MWMechanics
         // magic effects
         adjustMagicEffects(ptr, duration);
 
-        // fatigue restoration
-        calculateRestoration(ptr, duration);
+        updateFatigue(ptr, duration);
     }
 
     void Actors::playIdleDialogue(const MWWorld::Ptr& actor) const
@@ -910,28 +913,54 @@ namespace MWMechanics
         stats.setFatigue(fatigue);
     }
 
-    void Actors::calculateRestoration(const MWWorld::Ptr& ptr, float duration) const
+    void Actors::updateFatigue(const MWWorld::Ptr& ptr, float duration) const
     {
-        if (ptr.getClass().getCreatureStats(ptr).isDead())
+        const auto& cls = ptr.getClass();
+        CreatureStats& stats = cls.getCreatureStats(ptr);
+        if (stats.isDead())
             return;
 
-        MWMechanics::CreatureStats& stats = ptr.getClass().getCreatureStats(ptr);
-
-        // Current fatigue can be above base value due to a fortify effect.
-        // In that case stop here and don't try to restore.
         DynamicStat<float> fatigue = stats.getFatigue();
-        if (fatigue.getCurrent() >= fatigue.getBase())
+        const auto& game = Settings::game();
+        const bool player = ptr == getPlayer();
+        const bool brutalStamina = player && game.mBrutalEnabled && game.mBrutalStamina;
+        bool spendingSprintFatigue = false;
+        if (brutalStamina && game.mKineticPlayerMovement
+            && stats.mBrutalGait == MWPhysics::PlayerKinetics::Gait_Sprint && cls.getNormalizedEncumbrance(ptr) <= 1.f)
+        {
+            const auto& env = MWBase::Environment::get();
+            const auto* controls = env.getLuaManager()->getActorControls(ptr);
+            spendingSprintFatigue = controls && controls->mMovement > 0.3f
+                && std::abs(controls->mSideMovement) <= 0.3f && !env.getWorld()->isSwimming(ptr);
+        }
+
+        // A fortify effect can raise current fatigue above its base value.
+        if (!spendingSprintFatigue && fatigue.getCurrent() >= fatigue.getBase())
             return;
 
-        const bool player = ptr == getPlayer();
-        if (player && Settings::game().mBrutalStamina && stats.mBrutalBlockRequested && stats.mBrutalBlockRaised)
+        const float athleticsBonus = brutalStamina
+            ? (std::clamp(cls.getSkill(ptr, ESM::Skill::Athletics), 0.f, 100.f) - 50.f) * (0.20f / 50.f)
+            : 0.f;
+        if (spendingSprintFatigue)
+        {
+            const float cost = fatigue.getBase() * (1.f - athleticsBonus) * duration / 6.f;
+            if (fatigue.getCurrent() > 0.f)
+            {
+                fatigue.setCurrent(fatigue.getCurrent() - cost);
+                stats.setFatigue(fatigue);
+            }
+            // Leave exhaustion visible until the sprint input controller selects a new gait.
+            return;
+        }
+
+        if (brutalStamina && stats.mBrutalBlockRequested && stats.mBrutalBlockRaised)
             duration /= 3.f;
 
-        const float regenFraction = Settings::game().mPlayerFatigueRegenFraction;
+        const float regenFraction = game.mPlayerFatigueRegenFraction;
         if (regenFraction > 0.f && player)
         {
-            fatigue.setCurrent(std::min(fatigue.getModified(),
-                fatigue.getCurrent() + regenFraction * fatigue.getModified() * duration));
+            const float recovered = regenFraction * (1.f + athleticsBonus) * fatigue.getModified() * duration;
+            fatigue.setCurrent(std::min(fatigue.getModified(), fatigue.getCurrent() + recovered));
             stats.setFatigue(fatigue);
             return;
         }

@@ -210,7 +210,7 @@ namespace MWMechanics
 
         void adjustMagicEffects(const MWWorld::Ptr& creature, float duration) const;
 
-        void calculateRestoration(const MWWorld::Ptr& ptr, float duration) const;
+        void updateFatigue(const MWWorld::Ptr& ptr, float duration) const;
 
         void updateBrutalAdrenalineArrest(const MWWorld::Ptr& guard, SidingCache& cachedAllies) const;
         void updateCrimePursuit(const MWWorld::Ptr& ptr, float duration, SidingCache& cachedAllies) const;
