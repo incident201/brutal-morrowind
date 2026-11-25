@@ -1240,7 +1240,7 @@ namespace MWRender
         {
             osg::ref_ptr<NpcAnimation> owner;
             if (mOwner.lock(owner) && ((mBodyAwareness
-                    && (owner->isBodyAwarenessHiddenForClinch() || owner->hasGroundFinisherContact()))
+                    && (owner->isBodyAwarenessHiddenForClinch() || owner->isPlayingGroundFinisher()))
                     || (owner->hasPlayerShadowBody() && (visitor->getTraversalMask() & Mask_PlayerShadow))))
                 return;
             traverse(node, visitor);
@@ -1279,8 +1279,8 @@ namespace MWRender
             osg::ref_ptr<NpcAnimation> actor;
             if (perspective && mActor.lock(actor))
             {
-                constexpr std::string_view backstab = "brutal_backstab_out";
-                const std::string_view execution = actor->hasGroundFinisherContact() ? "brutal_ground_finisher" : backstab;
+                const std::string_view execution
+                    = actor->isPlayingGroundFinisher() ? "brutal_ground_finisher" : "brutal_backstab_out";
                 if (actor->isPlaying(execution))
                 {
                     // Match the viewmodel projection to the actual contact, easing in and out of the player's FOV.
@@ -1346,7 +1346,7 @@ namespace MWRender
     void NpcAnimation::setRenderBin()
     {
         if (mViewMode == VM_FirstPerson && !useFullBodyFirstPerson() && !isPlaying("brutal_backstab_out")
-            && !hasGroundFinisherContact())
+            && !isPlayingGroundFinisher())
         {
             [[maybe_unused]] static const bool prototypeAdded = [&] {
                 osg::ref_ptr<osgUtil::RenderBin> depthClearBin(new osgUtil::RenderBin);
@@ -2702,7 +2702,7 @@ namespace MWRender
         {
             const auto* state = mObjectRoot->getStateSet();
             const bool overlay = state && state->useRenderBinDetails() && state->getBinName() == "DepthClear";
-            if (overlay == (isPlaying("brutal_backstab_out") || hasGroundFinisherContact()))
+            if (overlay == (isPlaying("brutal_backstab_out") || isPlayingGroundFinisher()))
                 setRenderBin();
         }
         updateNpcGuardPose(timepassed);
@@ -2722,7 +2722,8 @@ namespace MWRender
                 : 0.75f + 0.25f * mAimingFactor;
 
             mFirstPersonNeckController->setRotate(
-                osg::Quat(mPtr.getRefData().getPosition().rot[0] * rotateFactor, osg::Vec3f(-1, 0, 0)));
+                osg::Quat(mGroundFinisherPitch.value_or(mPtr.getRefData().getPosition().rot[0] * rotateFactor),
+                    osg::Vec3f(-1, 0, 0)));
             if (useFullBodyFirstPerson())
                 mFirstPersonNeckController->setRotationPivot(
                     osg::Vec3f(0.f, Settings::game().mFirstPersonBodyForward.get(), 124.f + mFirstPersonOffset.z()));
@@ -2744,6 +2745,7 @@ namespace MWRender
             // (liveBodyEyeOffset() is added by the controller itself during traversal.)
             auto offset = mFirstPersonOffset;
             offset.z() += mPtr.getClass().getCreatureStats(mPtr).mBrutalBackstabEyeLift;
+            offset.z() -= mGroundFinisherLowering;
             mFirstPersonNeckController->setOffset(useFullBodyFirstPerson() ? osg::Vec3f() : offset);
         }
         if (mViewMode == VM_FirstPerson && !mBodyAwareness && mObjectParts[ESM::PRT_Shield] && carriesLeftWeapon())

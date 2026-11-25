@@ -568,6 +568,8 @@ namespace MWRender
 
         // World transforms are applied parents first after physics moves the actor root.
         std::optional<osg::Matrixf> getBoneWorldMatrix(std::string_view bone) const;
+        std::optional<osg::Matrixf> sampleBoneInModelSpace(
+            std::string_view group, std::string_view bone, float time) const;
         void setBoneWorldMatrix(std::string_view bone, const osg::Matrixf& world);
         void stopAllAnimations();
         // Explicit ownership keeps animation callbacks from replacing Bullet's pose.

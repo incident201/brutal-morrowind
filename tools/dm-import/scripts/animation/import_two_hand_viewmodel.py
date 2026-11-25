@@ -359,7 +359,7 @@ def convert(source, target, retarget):
     # keeps the left palm close to its rigid item-space target as well.
     midpoints = (original_times[:-1] + original_times[1:]) * .5
     times = np.sort(np.r_[original_times, midpoints[np.diff(original_times) > .022]])
-    attacking = group in ('weapononehand', 'brutal_ground_finisher')
+    attacking = group == 'weapononehand'
     falling = group == 'brutal_fallattack'
     running = group.startswith('run')
     sprint_start = Pose(retarget.rig, channels, 0.).world(ITEM) if group == 'brutal_sprint1h' else None
@@ -459,7 +459,8 @@ def build(arms, clinch, native_skeleton, native_animation):
         convert(folder / 'weapononehand.kf', output / (weapon_group + '.kf'), retarget)
         for path in sources:
             convert(path, output / (path.stem[:-2] + family + '.kf'), retarget)
-        for group in (*guards, *kicks, 'brutal_ground_finisher', 'brutal_fallattack'):
+        # The execution uses the base sword's single-handed grip.
+        for group in (*guards, *kicks, 'brutal_fallattack'):
             path = folder / (group + '.kf')
             convert(path, output / path.name, retarget)
         for group in contest:

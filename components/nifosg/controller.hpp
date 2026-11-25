@@ -245,6 +245,7 @@ namespace NifOsg
         osg::Callback* getAsCallback() override { return this; }
 
         KfTransform getCurrentTransformation(osg::NodeVisitor* nv) override;
+        KfTransform sampleTransformation(float time) const;
 
         void operator()(NifOsg::MatrixTransform*, osg::NodeVisitor*);
 

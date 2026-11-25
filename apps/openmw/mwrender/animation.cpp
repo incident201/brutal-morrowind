@@ -43,6 +43,7 @@
 #include <components/misc/constants.hpp>
 #include <components/misc/pathhelpers.hpp>
 #include <components/misc/resourcehelpers.hpp>
+#include <components/nifosg/controller.hpp>
 
 #include <components/vfs/manager.hpp>
 #include <components/vfs/pathutil.hpp>
@@ -1788,6 +1789,48 @@ namespace MWRender
         return osg::computeLocalToWorld(paths.front());
     }
 
+    std::optional<osg::Matrixf> Animation::sampleBoneInModelSpace(
+        std::string_view group, std::string_view bone, float time) const
+    {
+        const auto state = mStates.find(group);
+        const auto found = getNodeMap().find(std::string(bone));
+        if (state == mStates.end() || found == getNodeMap().end())
+            return std::nullopt;
+        const auto paths = found->second->getParentalNodePaths(mObjectRoot);
+        if (paths.empty())
+            return std::nullopt;
+
+        osg::Matrixf result;
+        const auto& tracks = state->second.mSource->mControllerMap;
+        for (const auto* node : paths.front())
+        {
+            const auto* transform = dynamic_cast<const NifOsg::MatrixTransform*>(node);
+            if (!transform || node == mObjectRoot)
+                continue;
+            auto local = transform->getMatrix();
+            for (const auto& arm : tracks)
+            {
+                const auto controller = arm.find(Misc::StringUtils::lowerCase(node->getName()));
+                if (controller == arm.end())
+                    continue;
+                if (const auto* track = dynamic_cast<const NifOsg::KeyframeController*>(controller->second.get()))
+                {
+                    const auto key = track->sampleTransformation(time);
+                    if (key.mRotation)
+                    {
+                        local.makeRotate(*key.mRotation);
+                        const auto scale = key.mScale.value_or(transform->mScale);
+                        local.preMultScale(osg::Vec3f(scale, scale, scale));
+                    }
+                    local.setTrans(key.mTranslation.value_or(transform->getMatrix().getTrans()));
+                }
+                break;
+            }
+            result.preMult(local);
+        }
+        return result;
+    }
+
     void Animation::setBoneWorldMatrix(std::string_view bone, const osg::Matrixf& world)
     {
         const auto found = getNodeMap().find(std::string(bone));
@@ -1935,6 +1978,8 @@ namespace MWRender
                 for (const auto* from : {"idle*", "walk*", "run*"})
                     for (const auto* to : {"idle*", "walk*", "run*"})
                         overrides.push_back({from, "", to, "", .22f, "sineInOut", false});
+            else
+                overrides.push_back({"brutal_ground_finisher*", "", "*", "", .20f, "sineOut", false});
             if (pairedSprintArms)
             {
                 // Blend the free arm back onto the grip when the player stops sprinting.

@@ -118,7 +118,6 @@ namespace MWRender
             {
                 owner->fitSwordClinchPose(*visitor);
                 owner->fitBackstabPose(*visitor);
-                owner->fitGroundFinisherPose(*visitor);
                 owner->fitSwordWipePose();
                 owner->fitNockedArrow();
             }

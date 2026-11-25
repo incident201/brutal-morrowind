@@ -155,12 +155,8 @@ namespace MWRender
             mSwordWipeSourcePose.first = nullptr;
         }
         if (!wipeFitted && mClinchSourcePose.empty() && mSwordWallSourcePose.empty() && mHeldGripSourcePose.empty()
-            && mBackstabSourcePose.empty() && mGroundFinisherSourcePose.empty())
+            && mBackstabSourcePose.empty())
             return;
-        for (const auto& [node, source] : mGroundFinisherSourcePose | std::views::reverse)
-            if (node.valid())
-                node->setMatrix(source);
-        mGroundFinisherSourcePose.clear();
         for (const auto& [node, source] : mBackstabSourcePose | std::views::reverse)
             if (node.valid())
                 node->setMatrix(source);
@@ -181,107 +177,36 @@ namespace MWRender
             mSkeleton->markDirty();
     }
 
-    bool NpcAnimation::hasGroundFinisherContact() const
+    std::optional<osg::Vec3f> NpcAnimation::groundFinisherStrikeOffset(std::string_view group, float pitch)
     {
-        return mGroundFinisherPoint && isPlaying("brutal_ground_finisher");
+        const float hit = getTextKeyTime(std::string(group) + ": hit");
+        const bool sweeping = hasPolearmViewmodel();
+        const auto mount = sampleBoneInModelSpace(group, "Weapon Bone", hit + (sweeping ? .018f : 0.f));
+        const auto eye = sampleBoneInModelSpace(group, "Brutal Camera Pivot", hit);
+        const auto carrier = sampleBoneInModelSpace(group, "Brutal Camera Carrier", hit);
+        const auto root = nodeWorld(mObjectRoot);
+        if (hit < 0.f || !mount || !eye || !carrier || !root)
+            return std::nullopt;
+
+        float reach = getClinchBladeRange().z();
+        if (reach <= 0.f)
+            return std::nullopt;
+        if (sweeping)
+            reach = std::min(reach * .65f, 38.f);
+
+        const osg::Vec3f pivot = eye->getTrans() + carrier->getTrans();
+        const osg::Quat tilt(pitch, -osg::X_AXIS);
+        const osg::Vec3f strikingPoint = osg::Vec3f(0.f, reach, 0.f) * *mount;
+        const osg::Vec3f worldPoint = (pivot + tilt * (strikingPoint - pivot)) * *root;
+        const auto& actor = mPtr.getRefData().getPosition();
+        return osg::Quat(actor.rot[2], osg::Z_AXIS) * (worldPoint - actor.asVec3());
     }
 
-    void NpcAnimation::fitGroundFinisherPose(osg::NodeVisitor& visitor)
+    float NpcAnimation::groundFinisherCameraDrop(std::string_view group, float time) const
     {
-        if (!hasGroundFinisherContact() || mViewMode != VM_FirstPerson || useFullBodyFirstPerson() || mBodyAwareness)
-            return;
-        const float relative = getCurrentTime("brutal_ground_finisher")
-            - getTextKeyTime("brutal_ground_finisher: hit");
-        const float weight = smooth((relative + .31f) / .20f) * (1.f - smooth((relative - .18f) / .33f));
-        if (weight <= 0.f)
-            return;
-        const auto blade = nodeWorld(getWeaponNode());
-        const float length = getClinchBladeRange().z();
-        if (!blade || length <= 0.f)
-            return;
-
-        const osg::Vec3f tip = osg::Vec3f(0, length, 0) * *blade;
-        osg::Vec3f axis = tip - osg::Vec3f(blade->getTrans());
-        if (axis.normalize() < .001f)
-            return;
-        const float yaw = mPtr.getRefData().getPosition().rot[2];
-        osg::Vec3f thrust(-.14f * std::sin(yaw), -.14f * std::cos(yaw), -1.f);
-        thrust.normalize();
-        osg::Quat down, turn;
-        down.makeRotate(axis, thrust);
-        turn.slerp(weight, osg::Quat(), down);
-        // Lower the tip past the near surface on the hit key, then lift it back along the same line.
-        const float depth = std::lerp(26.f, -8.f, smooth((relative + .16f) / .16f))
-            + 22.f * smooth((relative - .09f) / .23f);
-        const auto goal = *mGroundFinisherPoint + osg::Z_AXIS * depth;
-        const osg::Matrixf correction = osg::Matrixf::translate(-tip) * osg::Matrixf::rotate(turn)
-            * osg::Matrixf::translate(tip + (goal - tip) * weight);
-        std::array<GripArm, 2> arms;
-        GripArmLimits limits;
-        limits.clavicleTurn = .35f;
-        limits.minElbowBend = .11f;
-        const auto source = [](osg::MatrixTransform* node) { return node->getMatrix(); };
-        const bool paired = mViewmodelSet == BrutalViewmodel_Paired;
-        float clamp = 0.f;
-        osg::Matrixf applied;
-        const bool fitted = paired
-            ? solveSharedGripArms(getNodeMap(), correction, tip, source, arms, applied, limits)
-            : solveGripArms(getNodeMap(), correction, source, arms, clamp, limits, nullptr, 1);
-        if (!fitted)
-            return;
-        if (!paired && clamp > .2f)
-        {
-            const auto right = getNodeMap().find("Bip01 R Clavicle");
-            if (right != getNodeMap().end())
-            {
-                auto* clavicle = right->second.get();
-                const osg::Matrixf original = clavicle->getMatrix();
-                const auto& arm = arms[0];
-                osg::Vec3f toward = osg::Vec3f(arm.world[2].getTrans()) * correction - arm.world[0].getTrans();
-                toward.normalize();
-                // Let the shoulder follow the wrist into the thrust without lengthening the arm.
-                const osg::Vec3f shift = toward * std::min(clamp, 10.f);
-                const osg::Matrixf local = osg::Matrixf::inverse(arm.parent)
-                    * (arm.clavicle ? arm.clavicleResult : original);
-                auto lean = original;
-                lean.setTrans(original.getTrans() + osg::Matrixf::transform3x3(shift, local));
-                clavicle->setMatrix(lean);
-                std::array<GripArm, 2> leaned;
-                float remainder = 0.f;
-                if (solveGripArms(getNodeMap(), osg::Matrixf::translate(-shift) * correction,
-                        source, leaned, remainder, limits, nullptr, 1) && remainder < clamp)
-                {
-                    mGroundFinisherSourcePose.emplace_back(clavicle, original);
-                    arms[0] = std::move(leaned[0]);
-                }
-                else
-                    clavicle->setMatrix(original);
-            }
-        }
-        for (unsigned i = 0; i < (paired ? 2u : 1u); ++i)
-        {
-            const auto& arm = arms[i];
-            if (arm.clavicle)
-            {
-                mGroundFinisherSourcePose.emplace_back(arm.clavicle, arm.clavicleSource);
-                arm.clavicle->setMatrix(arm.clavicleResult);
-            }
-            for (std::size_t joint = 0; joint < arm.bones.size(); ++joint)
-            {
-                mGroundFinisherSourcePose.emplace_back(arm.bones[joint], arm.source[joint]);
-                arm.bones[joint]->setMatrix(arm.result[joint]);
-            }
-        }
-        if (mSkeleton && visitor.getFrameStamp())
-        {
-            mSkeleton->markDirty();
-            osg::NodeVisitor bounds(osg::NodeVisitor::TRAVERSE_ALL_CHILDREN);
-            bounds.setVisitorType(osg::NodeVisitor::UPDATE_VISITOR);
-            bounds.setTraversalNumber(visitor.getTraversalNumber());
-            bounds.setFrameStamp(new osg::FrameStamp(*visitor.getFrameStamp()));
-            bounds.setNodeMaskOverride(~0u);
-            mObjectRoot->accept(bounds);
-        }
+        const auto carrier = sampleBoneInModelSpace(group, "Brutal Camera Carrier", time);
+        const auto root = nodeWorld(mObjectRoot);
+        return carrier && root ? -osg::Matrixf::transform3x3(osg::Vec3f(carrier->getTrans()), *root).z() : 0.f;
     }
 
     void NpcAnimation::fitSwordClinchPose(osg::NodeVisitor& visitor)

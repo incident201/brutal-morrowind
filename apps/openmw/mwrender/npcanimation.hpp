@@ -268,8 +268,8 @@ namespace MWRender
 
         std::vector<std::pair<osg::observer_ptr<osg::MatrixTransform>, osg::Matrixf>> mClinchSourcePose;
         std::vector<std::pair<osg::observer_ptr<osg::MatrixTransform>, osg::Matrixf>> mBackstabSourcePose;
-        std::vector<std::pair<osg::observer_ptr<osg::MatrixTransform>, osg::Matrixf>> mGroundFinisherSourcePose;
-        std::optional<osg::Vec3f> mGroundFinisherPoint;
+        std::optional<float> mGroundFinisherPitch;
+        float mGroundFinisherLowering = 0.f;
         std::pair<osg::observer_ptr<osg::MatrixTransform>, osg::Matrixf> mSwordWipeSourcePose;
         ESM::RefNum mSwordWipeItem;
         std::optional<std::pair<osg::Vec3f, osg::Vec3f>> mBackstabBlade;
@@ -489,9 +489,14 @@ namespace MWRender
         void restoreTransientPose() override;
         void fitSwordClinchPose(osg::NodeVisitor& visitor);
         void fitBackstabPose(osg::NodeVisitor& visitor);
-        void setGroundFinisherPoint(std::optional<osg::Vec3f> point) { mGroundFinisherPoint = point; }
-        bool hasGroundFinisherContact() const;
-        void fitGroundFinisherPose(osg::NodeVisitor& visitor);
+        void setGroundFinisherStance(std::optional<float> pitch, float lowering)
+        {
+            mGroundFinisherPitch = pitch;
+            mGroundFinisherLowering = lowering;
+        }
+        bool isPlayingGroundFinisher() const { return isPlaying("brutal_ground_finisher"); }
+        std::optional<osg::Vec3f> groundFinisherStrikeOffset(std::string_view group, float pitch);
+        float groundFinisherCameraDrop(std::string_view group, float time) const;
         void setSwordWipeItem(ESM::RefNum item) { mSwordWipeItem = item; }
         void fitSwordWipePose();
         /// With the Dark Messiah bow, keep a nocked arrow between the right fingers and the bow's arrow rest.

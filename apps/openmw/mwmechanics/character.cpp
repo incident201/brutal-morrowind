@@ -1864,19 +1864,27 @@ namespace MWMechanics
 
         const float yaw = playerPose.rot[2];
         const float pitch = playerPose.rot[0];
-        const bool sword = mWeaponType == ESM::Weapon::LongBladeOneHand || mWeaponType == ESM::Weapon::LongBladeTwoHand
-            || (mWeaponType == ESM::Weapon::ShortBladeOneHand && !hasBrutalOffhandDagger());
+        const float strikePitch = brutalStaffWeapon(mWeaponType) ? .57f : .20f;
+        const float eyeHeight = getMeleeAim(mPtr).first.z() - origin.z();
         mGroundFinisher.emplace(GroundFinisher{ MWWorld::SafePtr(victim), MWWorld::SafePtr(mWeapon), entry,
-            entry - getMeleeTorsoPosition(victim), yaw, pitch, yaw, pitch, sword });
+            entry - getMeleeTorsoPosition(victim), std::nullopt, strikePitch, eyeHeight, 0.f, 0.f, yaw, pitch, yaw, pitch });
         mReadyToHit = false;
         mBrutalChargedHold = false;
         mBrutalFast = BrutalFast::None;
         resetBrutalFastContinuation();
         mUpperBodyState = UpperBodyState::WeaponEquipped;
         MWBase::Environment::get().getWorld()->breakInvisibility(mPtr);
+        MWRender::Animation::ScopedDeferActiveGroupReset join(*mAnimation);
         mAnimation->disable(mCurrentWeapon);
         playBlendedAnimation(sGroundFinisher, Priority_Knockdown, MWRender::BlendMask_All,
             true, 1.f, "start", "stop", 0.f, 0);
+        if (auto* npc = dynamic_cast<MWRender::NpcAnimation*>(mAnimation))
+        {
+            mGroundFinisher->mStrikeOffset = npc->groundFinisherStrikeOffset(sGroundFinisher, strikePitch);
+            mGroundFinisher->mAuthoredDrop = npc->groundFinisherCameraDrop(
+                sGroundFinisher, mAnimation->getTextKeyTime(sGroundFinisher + ": hit"));
+            mGroundFinisher->mLowering = mGroundFinisher->mAuthoredDrop;
+        }
         return true;
     }
 
@@ -1899,18 +1907,32 @@ namespace MWMechanics
         const float returning = mAnimation->getTextKeyTime(sGroundFinisher + ": return start");
         const float end = mAnimation->getTextKeyTime(sGroundFinisher + ": stop");
         if (!victim.isEmpty() && victim.isInCell())
-        {
             finisher.mContact = getMeleeTorsoPosition(victim) + finisher.mTorsoOffset;
-            const auto look = finisher.mContact - getMeleeAim(mPtr).first;
-            const auto facing = finisher.mContact - playerPose.asVec3();
+        const auto facing = finisher.mContact - playerPose.asVec3();
+        const float reach = std::hypot(facing.x(), facing.y());
+        const auto strike = finisher.mStrikeOffset;
+        // Scale the authored crouch for the actual weapon length and the
+        // victim's height. The same curve carries the camera and both arms.
+        const float authoredDrop = finisher.mAuthoredDrop;
+        if (!victim.isEmpty() && victim.isInCell())
+        {
             const float blend = std::clamp(MWBase::Environment::get().getFrameDuration() / .12f, 0.f, 1.f);
-            if (std::hypot(facing.x(), facing.y()) > 8.f)
+            if (strike)
             {
-                const float angle = std::atan2(facing.x(), facing.y()) - finisher.mInitialYaw;
+                const float lowering = std::clamp(authoredDrop + strike->z() - facing.z() + 2.f, 8.f, 64.f);
+                finisher.mLowering = std::lerp(finisher.mLowering, lowering, blend);
+            }
+            if (reach > 8.f)
+            {
+                const float gripAngle = strike ? std::clamp(std::atan2(strike->x(), strike->y()), -.37f, .37f) : 0.f;
+                const float angle = std::atan2(facing.x(), facing.y()) - gripAngle - finisher.mInitialYaw;
                 const float yawOffset = std::clamp(std::remainder(angle, 2.f * osg::PIf), -1.6f, 1.6f);
                 finisher.mFocusYaw = std::lerp(finisher.mFocusYaw, finisher.mInitialYaw + yawOffset, blend);
             }
-            const float pitch = std::clamp(std::atan2(-look.z(), std::hypot(look.x(), look.y())), .36f, 1.23f);
+            // The head layer supplies the rest of the downward look during the drive.
+            const float framing = brutalStaffWeapon(mWeaponType) ? .26f : .41f;
+            const float pitch = std::clamp(
+                std::atan2(finisher.mEyeHeight - finisher.mLowering - facing.z(), reach) - framing, .18f, 1.1f);
             finisher.mFocusPitch = std::lerp(finisher.mFocusPitch, pitch, blend);
         }
         const float weight = backstabBlend(time / std::max(.1f, hit * .72f))
@@ -1920,9 +1942,13 @@ namespace MWMechanics
         if (std::abs(playerPose.rot[0] - pitch) > .001f
             || std::abs(std::remainder(playerPose.rot[2] - yaw, 2.f * osg::PIf)) > .001f)
             world->rotateObject(mPtr, osg::Vec3f(pitch, 0.f, yaw));
-        if (finisher.mSword)
-            if (auto* npc = dynamic_cast<MWRender::NpcAnimation*>(mAnimation))
-                npc->setGroundFinisherPoint(finisher.mContact);
+        if (auto* npc = dynamic_cast<MWRender::NpcAnimation*>(mAnimation))
+        {
+            const float bodyRatio
+                = authoredDrop > 1.f ? npc->groundFinisherCameraDrop(sGroundFinisher, time) / authoredDrop : 0.f;
+            npc->setGroundFinisherStance(std::lerp(finisher.mInitialPitch, finisher.mStrikePitch, weight),
+                (finisher.mLowering - authoredDrop) * bodyRatio);
+        }
         return true;
     }
 
@@ -1931,7 +1957,7 @@ namespace MWMechanics
         if (mGroundFinisher && mAnimation)
         {
             if (auto* npc = dynamic_cast<MWRender::NpcAnimation*>(mAnimation))
-                npc->setGroundFinisherPoint(std::nullopt);
+                npc->setGroundFinisherStance(std::nullopt, 0.f);
             mAnimation->disable(sGroundFinisher);
         }
         mGroundFinisher.reset();
@@ -1949,9 +1975,6 @@ namespace MWMechanics
         if (!contact)
             return;
         mGroundFinisher->mContact = *contact;
-        if (mGroundFinisher->mSword)
-            if (auto* npc = dynamic_cast<MWRender::NpcAnimation*>(mAnimation))
-                npc->setGroundFinisherPoint(*contact);
         const auto& skill = mWeapon.getClass().getEquipmentSkill(mWeapon);
         const int attack = skill == ESM::Skill::ShortBlade || skill == ESM::Skill::LongBlade || skill == ESM::Skill::Spear
             ? ESM::Weapon::AT_Thrust : ESM::Weapon::AT_Chop;
@@ -4290,25 +4313,26 @@ namespace MWMechanics
             if (mGroundFinisher)
             {
                 movement = {};
-                const float toImpact = mAnimation->getTextKeyTime("brutal_ground_finisher: hit")
+                const float toImpact = mAnimation->getTextKeyTime(sGroundFinisher + ": hit")
                     - mAnimation->getCurrentTime(sGroundFinisher);
-                if (mGroundFinisher->mSword && toImpact > .06f && !mGroundFinisher->mVictim.ptrOrEmpty().isEmpty())
+                if (toImpact > .06f && !mGroundFinisher->mVictim.ptrOrEmpty().isEmpty())
                 {
                     const auto& feet = mPtr.getRefData().getPosition();
                     auto direction = mGroundFinisher->mContact - feet.asVec3();
                     direction.z() = 0.f;
-                    const float stanceDistance = mWeaponType == ESM::Weapon::ShortBladeOneHand ? 24.f : 32.f;
+                    const auto strike = mGroundFinisher->mStrikeOffset;
+                    const float stanceDistance = strike ? std::clamp(std::hypot(strike->x(), strike->y()), 23.f, 74.f) : 42.f;
                     const float gap = direction.normalize() - stanceDistance;
-                    if (gap > 0.f)
+                    if (std::abs(gap) > 2.f)
                     {
-                        // Take a short physical step while raising the sword. Keep the step on supported ground.
-                        const auto ahead = feet.asVec3() + direction * std::min(18.f, gap);
+                        // Set the feet for the weapon's reach before the drive, on supported ground.
+                        const auto ahead = feet.asVec3() + direction * std::clamp(gap, -18.f, 18.f);
                         const auto floor = world->getRayCasting()->castRay(ahead + osg::Z_AXIS * 14.f,
                             ahead - osg::Z_AXIS * 20.f, sFinisherGround);
                         if (floor.mHit && floor.mHitNormal.z() >= .65f)
                         {
                             const osg::Quat toLocal(feet.rot[2], osg::Z_AXIS);
-                            movement = (toLocal * direction) * std::min(210.f, gap * 9.f);
+                            movement = (toLocal * direction) * std::clamp(gap * 7.f, -78.f, 165.f);
                         }
                     }
                 }

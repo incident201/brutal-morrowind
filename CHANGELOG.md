@@ -48,7 +48,8 @@ Brutal Morrowind (unreleased)
     Combat: The player and NPCs release held weapons, shields and lights on ordinary deaths and finishers. NPCs that survive a knockdown use the weapon-drop chance.
     Ragdolls: On death the first-person camera follows the head's motion. The downward nod stops short of the neck, and the camera keeps clearance from the body and floor before the screen fades and the menu opens.
     Effects: Import Dark Messiah's incoming-damage flash and separate critical-health vignette below 5 HP.
-    Combat: Release a fully charged melee attack while aiming at a downed enemy to perform a ground finisher with matching first-person camera motion. Its switch and default 30% health threshold are available in Brutal Morrowind settings.
+    Release a fully charged melee attack near a downed enemy in front of you to perform a ground finisher. Its switch and default 30% health threshold are available in Brutal Morrowind settings.
+    One-handed weapons, two-handed swords, battle axes and warhammers use Dark Messiah's sword finisher with a one-handed grip. Staves, spears and halberds share the staff finisher and its grip. Reimport the Dark Messiah assets with recipe 34 for the weapon turn and camera motion.
     Animations: Restore beast-race locomotion, improve clinches on uneven ground and import Dark Messiah camera motion.
     Ragdolls: Fix delayed corpse cuts and impulses after looting, and support open armor contours in waist cuts.
     Effects: Melee weapons of the player and NPCs keep the blood of living targets. It dries, washes off in water or rain, is cleaned by repair and wears away within a game day. Hits leave Dark Messiah blood splatters on nearby floors and walls; outdoors the rain washes them away. Recipe 11 requires reimporting the Dark Messiah assets.

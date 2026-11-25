@@ -206,9 +206,10 @@ namespace MWMechanics
             MWWorld::SafePtr mWeapon;
             osg::Vec3f mContact;
             osg::Vec3f mTorsoOffset;
+            std::optional<osg::Vec3f> mStrikeOffset;
+            float mStrikePitch, mEyeHeight, mAuthoredDrop, mLowering;
             float mInitialYaw, mInitialPitch;
             float mFocusYaw, mFocusPitch;
-            bool mSword;
         };
         std::optional<GroundFinisher> mGroundFinisher;
         enum class BrutalBackstabPhase
