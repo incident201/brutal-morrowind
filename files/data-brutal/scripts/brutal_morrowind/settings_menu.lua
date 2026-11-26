@@ -51,6 +51,7 @@ for _,key in ipairs({
     end
 end
 options[#options+1]=setting('superKickSpeed','number',{integer=true,min=460,max=1000})
-options[#options+1]=setting('adrenalineFastHits','number',{integer=true,min=1,max=30})
+options[#options+1]=setting('adrenalineMinDamage','number',{min=1,max=10000,precision=4})
+options[#options+1]=setting('adrenalineHealthFraction','number',{min=.1,max=2,precision=4})
 options[#options+1]=setting('adrenalineDecay','checkbox')
 I.Settings.registerGroup{key=S.GROUP,page='BrutalMorrowind',l10n=L,name='GroupName',permanentStorage=true,settings=options}

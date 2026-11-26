@@ -1,5 +1,5 @@
--- The configured number of fast hits fills one charge; a charged hit or a perfect
--- shield block counts double. A power strike or a locked projectile spends a full charge.
+-- Physical health lost fills the gauge relative to the victim's maximum health.
+-- A power strike or a locked projectile spends a full charge.
 local self=require('openmw.self')
 local core=require('openmw.core')
 local types=require('openmw.types')
@@ -9,8 +9,7 @@ local hud=require('scripts.brutal_morrowind.adrenaline_ui')
 local fx=require('scripts.brutal_morrowind.adrenaline_fx')
 local settings=require('scripts.brutal_morrowind.settings')
 local CAPACITY,MULTIPLIER,MIN_STRENGTH=100,1,.8
-local function gain() return CAPACITY/settings.get('adrenalineFastHits') end
-local CHARGED_SHARE=2
+local PERFECT_BLOCK_GAIN=100*2/15
 -- A won clinch or a kick that sends a living opponent into a fall.
 local BONUS_SHARE=1/3
 -- DM's base charge is20 points: its1-point loss every20 simulation seconds
@@ -150,14 +149,17 @@ local function damaged(e)
     if not settings.get('adrenalineEnabled') then return end
     if types.Actor.isDead(self) or not e.successful or not e.targetWasAlive
         or not e.target or not e.target:isValid() or not types.Actor.objectIsInstance(e.target)
-        or type(e.healthDamage)~='number' or e.healthDamage<=0 then return end
+        or type(e.healthDamage)~='number' or not (e.healthDamage>0)
+        or type(e.targetMaxHealth)~='number' or not (e.targetMaxHealth>0) then return end
     if e.sourceType~='ranged' and (e.sourceType~='melee' or not melee(e.weapon)) then return end
     if e.powered then return end
     -- Native attack IDs deduplicate hits and tie guided shots to their launch receipt.
     if not e.attackId or e.attackId==0 or seen[e.attackId] then return end
     seen[e.attackId]=true;seenOrder[#seenOrder+1]=e.attackId
     if #seenOrder>128 then seen[table.remove(seenOrder,1)]=nil end
-    add(gain()*(e.fast and 1 or CHARGED_SHARE))
+    local damageToFill=math.max(settings.get('adrenalineMinDamage'),
+        settings.get('adrenalineHealthFraction')*e.targetMaxHealth)
+    add(CAPACITY*e.healthDamage/damageToFill)
 end
 -- The player's shield met a blow inside the perfect window (native receipt).
 local seenBlocks,blockOrder={},{}
@@ -170,7 +172,7 @@ local function perfectBlock(e)
         if #blockOrder>64 then seenBlocks[table.remove(blockOrder,1)]=nil end
     end
     perfectBlocks=perfectBlocks+1
-    add(gain()*CHARGED_SHARE)
+    add(PERFECT_BLOCK_GAIN)
 end
 local function beginSlowMotion(attackId)
     if slowAttackId or not visible() then return end
@@ -233,13 +235,14 @@ local function spendThrow()
 end
 return {
     interfaceName='BrutalAdrenaline',
-    interface={version=7,bonus=function() self:sendEvent('BrutalAdrenalineBonus',{}) end,fill=fill,reserveSuperKick=reserveSuperKick,spendThrow=spendThrow,status=function()
+    interface={version=8,bonus=function() self:sendEvent('BrutalAdrenalineBonus',{}) end,fill=fill,reserveSuperKick=reserveSuperKick,spendThrow=spendThrow,status=function()
         return {amount=meter,capacity=CAPACITY,ready=meter>=CAPACITY and not pendingKick and not projectileSpent(),apiAvailable=available,
             superKickPending=pendingKick,superKicks=superKicks,rejectedKicks=rejectedKicks,lastKickId=lastKickId,
             token=available and query(self) or '',gains=gains,spent=spent,hudVisible=hud.isVisible(),
             fxVisible=fx.isVisible(),decayElapsed=decayElapsed,decayInterval=DECAY_INTERVAL,
             arrestDeferred=arrestEffectState==true,
-            decayAmount=DECAY_AMOUNT,hitsToReady=math.ceil((CAPACITY-meter)/gain()-.001),perfectBlocks=perfectBlocks,
+            decayAmount=DECAY_AMOUNT,minDamage=settings.get('adrenalineMinDamage'),
+            healthFraction=settings.get('adrenalineHealthFraction'),perfectBlocks=perfectBlocks,
             slowPending=slowAttackId~=nil and not slowActive,slowActive=slowActive,slowStarted=slowStarted,slowEnded=slowEnded,
             slowDelay=SLOW_DELAY,slowDuration=SLOW_DURATION,slowFactor=SLOW_FACTOR}
     end},

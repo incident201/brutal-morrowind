@@ -1547,6 +1547,7 @@ namespace MWLua
                     const auto& stats = target.getClass().getCreatureStats(target);
                     const bool aliveBefore = !stats.isDead();
                     const float healthBefore = stats.getHealth().getCurrent();
+                    const float maximumHealth = stats.getHealth().getModified();
                     target.getClass().onHit(target, damages, weaponId, attackerPtr, successful, sourceType);
                     const float healthDamage = std::max(0.f, healthBefore - stats.getHealth().getCurrent());
                     if (worldBlood && successful && aliveBefore && healthDamage > 0.f)
@@ -1594,6 +1595,8 @@ namespace MWLua
                             receipt["aliveBefore"] = aliveBefore;
                             receipt["deadAfter"] = stats.isDead();
                             receipt["actualHealthDamage"] = healthDamage;
+                            receipt["healthBefore"] = healthBefore;
+                            receipt["maximumHealth"] = maximumHealth;
                             manager->sendLocalEvent(target, "BrutalHitApplied", receipt);
                         });
                 },

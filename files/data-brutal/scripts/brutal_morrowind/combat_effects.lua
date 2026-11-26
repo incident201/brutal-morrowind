@@ -163,18 +163,17 @@ interface.adjustDamageForDifficulty = function(attack)
     end
 end
 
-local function reportDamagingHit(attack, aliveBefore, healthDamage)
+local function reportDamagingHit(attack, receipt)
     local attacker = attack.attacker
     if not attacker or not attacker:isValid() then return end
-    local fast = attack.brutalFast or false
-    if attack.sourceType == 'ranged' then
-        fast = (attack.strength or 0) < 0.999
-    end
+    if attack.brutalGroundFinisher then return end
+    local damage = math.min(receipt.actualHealthDamage, math.max(0, receipt.healthBefore))
     attacker:sendEvent('BrutalDamagingHit', {
         target = self, weapon = attack.weapon, sourceType = attack.sourceType,
-        successful = attack.successful, healthDamage = healthDamage,
-        targetWasAlive = aliveBefore, powered = attack.brutalPowered or false,
-        attackId = attack.brutalAttackId, fast = fast,
+        successful = attack.successful, healthDamage = damage,
+        targetMaxHealth = receipt.maximumHealth,
+        targetWasAlive = receipt.aliveBefore, powered = attack.brutalPowered or false,
+        attackId = attack.brutalAttackId,
     })
 end
 
@@ -191,8 +190,7 @@ interface.onHit = function(attack)
     currentAttack, selectedArmor = outerAttack, outerArmor
     local healthDamage = (attack.damage or {}).health or 0
     local ranged = attack.sourceType == 'ranged'
-    local poweredMelee = attack.sourceType == 'melee' and attack.brutalPowered and settings.get('finisherEnabled')
-    if (ranged or poweredMelee) and settings.get('adrenalineEnabled')
+    if (ranged or attack.sourceType == 'melee') and settings.get('adrenalineEnabled')
         and attack.brutalAttackId and attack.brutalAttackId ~= 0 then
         -- Combat queues damage. Wait for the receipt from the action that actually applied it.
         pendingHits[attack.brutalAttackId] = {attack = attack, age = 0}
@@ -226,12 +224,9 @@ interface.onHit = function(attack)
             types.Actor.addExternalVelocity(self, direction(attack) * 420 + util.vector3(0, 0, 70))
         end
     end
-    -- The player's shield met the blow inside the parry window: adrenaline like a charged hit.
+    -- The player's shield met the blow inside the parry window.
     if attack.brutalPerfectBlock and aliveBefore and types.Player.objectIsInstance(self) then
         self:sendEvent('BrutalPerfectShieldBlock', {attackId = attack.brutalAttackId, attacker = attack.attacker})
-    end
-    if not ranged then
-        reportDamagingHit(attack, aliveBefore, healthDamage)
     end
 end
 interface.brutalFeedbackStats = function()
@@ -262,8 +257,8 @@ return {
             pendingHits[data.attackId] = nil
             if damage <= 0 then return end
             local attack = entry.attack
+            reportDamagingHit(attack, data)
             if attack.sourceType == 'ranged' then
-                reportDamagingHit(attack, data.aliveBefore, damage)
                 return
             end
             -- Notify from this native damage action, never from a delayed sample

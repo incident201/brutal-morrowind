@@ -1,6 +1,10 @@
 Brutal Morrowind (unreleased)
 ----------------------------
 
+    Weapon clinches require raising the guard within the first 70% of the timed parry window, or 0.35 seconds by default. Timed melee weapon parries retain their 0.5-second default window and protect the defender's health and stamina.
+    Adrenaline builds from physical health actually lost after armor and weapon skill. By default a full charge requires two thirds of the target's maximum health, with a minimum of 60 damage. Both coefficients replace the hit-count setting. Overkill and automatic finishers add no extra charge.
+    Script settings refresh their scroll range after text wrapping, removing the empty area below the last option.
+    Fractional adrenaline settings display rounded values while preserving their full precision until edited.
     Acrobatics determines jump height with Dark Messiah movement enabled. The curve supports powerful Fortify Acrobatics effects such as Icarian Flight.
     Exceeding the carry limit switches the player to the Alt walking gait and disables running, sprinting and jumping while Dark Messiah movement is enabled.
     Athletics reduces sprint stamina costs and speeds passive recovery with Dark Messiah stamina enabled. Passive recovery resumes when sprinting stops.

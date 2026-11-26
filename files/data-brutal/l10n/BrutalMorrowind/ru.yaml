@@ -70,7 +70,7 @@ npcFleeDescription: "Удар, после которого у NPC остаётс
 hitRecovery: Убрать оглушение игрока
 hitRecoveryDescription: "Полученный урон не прерывает действия игрока."
 adrenalineEnabled: Адреналин и добивания
-adrenalineEnabledDescription: "Попадания копят заряд для добивания или сверхпинка."
+adrenalineEnabledDescription: "Физический урон здоровью копит заряд для добивания или сверхпинка."
 slowMotionEnabled: Замедление при добивании
 slowMotionEnabledDescription: "Краткое замедление после смертельного адреналинового удара."
 dismemberment: Расчленение
@@ -103,8 +103,10 @@ clinchFxEnabled: Размытие после клинча
 clinchFxEnabledDescription: "Краткое размытие после проигранного клинча."
 superKickSpeed: Импульс адреналинового пинка
 superKickSpeedDescription: "Скорость отбрасывания сверхпинком. Обычный пинок — 460 ед/с."
-adrenalineFastHits: Быстрых ударов до полного адреналина
-adrenalineFastHitsDescription: "Число быстрых попаданий до полного заряда. Заряженный удар или идеальный блок щитом считаются за два."
+adrenalineMinDamage: Минимальный урон для полного адреналина
+adrenalineMinDamageDescription: "Нижний порог урона здоровью для полной шкалы. По умолчанию 60. Порог равен большему из этого значения и максимального здоровья цели, умноженного на долю здоровья."
+adrenalineHealthFraction: Доля здоровья для полного адреналина
+adrenalineHealthFractionDescription: "Максимальное здоровье цели умножается на этот коэффициент для расчёта урона до полной шкалы, с учётом минимального порога. По умолчанию 2/3. Значение 0.5 означает половину здоровья цели."
 adrenalineDecay: Убывание адреналина
 adrenalineDecayDescription: "Заряд постепенно убывает вне боя."
 finisherEnabled: Адреналиновые добивания оружием

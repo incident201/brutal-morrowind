@@ -63,7 +63,8 @@ local DEFAULTS={
     slideFxEnabled=true,
     clinchFxEnabled=true,
     superKickSpeed=460,
-    adrenalineFastHits=15,
+    adrenalineMinDamage=60,
+    adrenalineHealthFraction=2/3,
     adrenalineDecay=true,
 }
 -- Components that play Dark Messiah animations or use its sounds and textures.
@@ -102,7 +103,8 @@ local function validate(key,value)
         return math.max(0,math.min(100,math.floor(value)))
     end
     if key=='superKickSpeed' then return math.max(460,math.min(1000,value)) end
-    if key=='adrenalineFastHits' then return math.max(1,math.min(30,math.floor(value))) end
+    if key=='adrenalineMinDamage' then return math.max(1,math.min(10000,value)) end
+    if key=='adrenalineHealthFraction' then return math.max(.1,math.min(2,value)) end
     return value
 end
 local function refresh()

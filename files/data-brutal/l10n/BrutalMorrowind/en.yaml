@@ -70,7 +70,7 @@ npcFleeDescription: "A blow that leaves an NPC below 10% health makes it run awa
 hitRecovery: Suppress player hit recoil
 hitRecoveryDescription: "Damage does not interrupt player actions."
 adrenalineEnabled: Adrenaline and finishers
-adrenalineEnabledDescription: "Damaging hits charge a finisher or super kick."
+adrenalineEnabledDescription: "Physical health damage charges a finisher or super kick."
 slowMotionEnabled: Finisher slow motion
 slowMotionEnabledDescription: "Brief slow motion after a lethal adrenaline strike."
 dismemberment: Dismemberment
@@ -103,8 +103,10 @@ clinchFxEnabled: Clinch blur
 clinchFxEnabledDescription: "Brief blur after losing a clinch."
 superKickSpeed: Adrenaline kick impulse
 superKickSpeedDescription: "Super kick launch speed. Ordinary kicks use 460 units/s."
-adrenalineFastHits: Fast hits to fill adrenaline
-adrenalineFastHitsDescription: "Fast hits needed to fill the gauge. A charged hit or a perfect shield block counts as two."
+adrenalineMinDamage: Minimum damage for full adrenaline
+adrenalineMinDamageDescription: "Lower bound on health damage needed for a full gauge. Default 60. The threshold is the greater of this value and the target's maximum health multiplied by the health fraction."
+adrenalineHealthFraction: Health fraction for full adrenaline
+adrenalineHealthFractionDescription: "Maximum target health multiplied by this coefficient sets the damage needed for a full gauge, subject to the minimum damage. Default 2/3. A value of 0.5 means half the target's health."
 adrenalineDecay: Adrenaline decay
 adrenalineDecayDescription: "Charge slowly drains between fights."
 finisherEnabled: Adrenaline weapon finishers

@@ -207,7 +207,8 @@ namespace MWMechanics
         // Impacts against a guard cost more to deliver than to absorb. Fractions of
         // maximum match the player's nine-unit stamina scale and do not favour a
         // particular race/level. Ordinary open hits and misses keep their old costs.
-        void spendBrutalBlockStamina(const MWWorld::Ptr& attacker, const MWWorld::Ptr& blocker, bool heavy)
+        void spendBrutalBlockStamina(
+            const MWWorld::Ptr& attacker, const MWWorld::Ptr& blocker, bool heavy, bool timedParry = false)
         {
             ++blocker.getClass().getCreatureStats(blocker).mBrutalGuardBlocks;
             if (!Settings::game().mBrutalStamina)
@@ -221,9 +222,12 @@ namespace MWMechanics
                 stats.setFatigue(fatigue);
             };
             spend(attacker, heavy ? 3.f / 9.f : 2.f / 9.f);
-            spend(blocker, heavy ? heavyBlockStaminaFraction : 1.f / 9.f);
-            if (blocker.getClass().getCreatureStats(blocker).getFatigue().getCurrent() <= 0.f)
-                openBrutalGuard(blocker);
+            if (!timedParry)
+            {
+                spend(blocker, heavy ? heavyBlockStaminaFraction : 1.f / 9.f);
+                if (blocker.getClass().getCreatureStats(blocker).getFatigue().getCurrent() <= 0.f)
+                    openBrutalGuard(blocker);
+            }
         }
 
         bool brutalGuardBreakingAttack(const MWWorld::Ptr& attacker, float strength)
@@ -259,7 +263,9 @@ namespace MWMechanics
             }
             const double now = MWBase::Environment::get().getWorld()->getTimeManager()->getSimulationTime();
             const float parryWindow = Settings::game().mDarkMessiahParryWindow.get();
-            const bool timed = now - stats.mBrutalBlockRaisedAt <= parryWindow;
+            const double guardAge = now - stats.mBrutalBlockRaisedAt;
+            const bool timed = guardAge <= parryWindow;
+            constexpr float clinchWindowFraction = .7f;
 
             MWWorld::InventoryStore& inv = blocker.getClass().getInventoryStore(blocker);
             const auto parrying = inv.getSlot(MWWorld::InventoryStore::Slot_CarriedRight);
@@ -271,11 +277,12 @@ namespace MWMechanics
             MWBase::Environment::get().getSoundManager()->playSound3D(blocker,
                 ESM::RefId::stringRefId(timed ? "Brutal Sword Parry" : "Brutal Sword Contact"), 1.0f, 1.0f);
             if (timed && attacker.getClass().isNpc()
-                && !MWBase::Environment::get().getMechanicsManager()->requestSwordClinch(blocker, attacker))
+                && (guardAge > parryWindow * clinchWindowFraction
+                    || !MWBase::Environment::get().getMechanicsManager()->requestSwordClinch(blocker, attacker)))
                 attacker.getClass().getCreatureStats(attacker).mBrutalParried = true;
             stats.mBrutalParryResult = timed ? BrutalParry_Timed : BrutalParry_Parried;
             spendBrutalBlockStamina(attacker, blocker,
-                attacker.getClass().getCreatureStats(attacker).mBrutalGuardBreakingAttack);
+                attacker.getClass().getCreatureStats(attacker).mBrutalGuardBreakingAttack, timed);
             return true;
         }
     }
