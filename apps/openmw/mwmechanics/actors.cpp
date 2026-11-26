@@ -954,7 +954,10 @@ namespace MWMechanics
         }
 
         if (brutalStamina && stats.mBrutalBlockRequested && stats.mBrutalBlockRaised)
-            duration /= 3.f;
+        {
+            const float blockSkill = std::clamp(cls.getSkill(ptr, ESM::Skill::Block), 0.f, 100.f);
+            duration *= .25f + blockSkill / 600.f;
+        }
 
         const float regenFraction = game.mPlayerFatigueRegenFraction;
         if (regenFraction > 0.f && player)

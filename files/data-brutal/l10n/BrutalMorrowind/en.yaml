@@ -34,7 +34,7 @@ objectGrabEnabledDescription: "Pick up small world items, carry them, drop them,
 movementEnabled: Walking, running and sprinting
 movementEnabledDescription: "Dark Messiah speeds. Alt walks; sprint uses the assigned button."
 staminaEnabled: Dark Messiah stamina
-staminaEnabledDescription: "Dark Messiah stamina costs and recovery."
+staminaEnabledDescription: "Dark Messiah stamina costs and recovery. Athletics improves sprint costs and recovery. Block reduces guard impact costs and the recovery penalty while holding a guard."
 kickEnabled: Kick
 kickEnabledDescription: "Kick using the assigned button."
 kickAlwaysRagdoll: Kick always triggers ragdoll

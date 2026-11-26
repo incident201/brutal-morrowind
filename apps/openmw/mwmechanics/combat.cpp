@@ -196,12 +196,21 @@ namespace MWMechanics
             return std::max(0.f, fatigue.getBase()) * fraction;
         }
 
-        bool canAbsorbChargedAttack(const CreatureStats& playerStats)
+        float defenderBlockStaminaCost(const MWWorld::Ptr& blocker, float fraction)
+        {
+            const auto& game = Settings::game();
+            const float multiplier = game.mBrutalEnabled && game.mBrutalStamina
+                ? 1.25f - .005f * std::clamp(blocker.getClass().getSkill(blocker, ESM::Skill::Block), 0.f, 100.f)
+                : 1.f;
+            return blockStaminaCost(blocker.getClass().getCreatureStats(blocker).getFatigue(), fraction) * multiplier;
+        }
+
+        bool canAbsorbChargedAttack(const MWWorld::Ptr& blocker)
         {
             if (!Settings::game().mBrutalStamina || MWBase::Environment::get().getWorld()->getGodModeState())
                 return true;
-            const auto& fatigue = playerStats.getFatigue();
-            return fatigue.getCurrent() >= blockStaminaCost(fatigue, heavyBlockStaminaFraction);
+            return blocker.getClass().getCreatureStats(blocker).getFatigue().getCurrent()
+                >= defenderBlockStaminaCost(blocker, heavyBlockStaminaFraction);
         }
 
         // Impacts against a guard cost more to deliver than to absorb. Fractions of
@@ -213,18 +222,19 @@ namespace MWMechanics
             ++blocker.getClass().getCreatureStats(blocker).mBrutalGuardBlocks;
             if (!Settings::game().mBrutalStamina)
                 return;
-            const auto spend = [](const MWWorld::Ptr& actor, float fraction) {
+            const auto spend = [](const MWWorld::Ptr& actor, float amount) {
                 if (actor == getPlayer() && MWBase::Environment::get().getWorld()->getGodModeState())
                     return;
                 auto& stats = actor.getClass().getCreatureStats(actor);
                 auto fatigue = stats.getFatigue();
-                fatigue.setCurrent(std::max(0.f, fatigue.getCurrent() - blockStaminaCost(fatigue, fraction)));
+                fatigue.setCurrent(std::max(0.f, fatigue.getCurrent() - amount));
                 stats.setFatigue(fatigue);
             };
-            spend(attacker, heavy ? 3.f / 9.f : 2.f / 9.f);
+            spend(attacker, blockStaminaCost(attacker.getClass().getCreatureStats(attacker).getFatigue(),
+                                heavy ? 3.f / 9.f : 2.f / 9.f));
             if (!timedParry)
             {
-                spend(blocker, heavy ? heavyBlockStaminaFraction : 1.f / 9.f);
+                spend(blocker, defenderBlockStaminaCost(blocker, heavy ? heavyBlockStaminaFraction : 1.f / 9.f));
                 if (blocker.getClass().getCreatureStats(blocker).getFatigue().getCurrent() <= 0.f)
                     openBrutalGuard(blocker);
             }
@@ -283,6 +293,8 @@ namespace MWMechanics
             stats.mBrutalParryResult = timed ? BrutalParry_Timed : BrutalParry_Parried;
             spendBrutalBlockStamina(attacker, blocker,
                 attacker.getClass().getCreatureStats(attacker).mBrutalGuardBreakingAttack, timed);
+            if (blocker == getPlayer())
+                blocker.getClass().skillUsageSucceeded(blocker, ESM::Skill::Block, ESM::Skill::Block_Success);
             return true;
         }
     }
@@ -474,7 +486,7 @@ namespace MWMechanics
             // A timed player guard can deflect even when it cannot pay the
             // full charge cost. The ensuing impact still drains the reserve.
             const bool chargeBreaksGuard = brutalGuardBreakingAttack(attacker, attackStrength)
-                && (npcGuard || (!timedPlayerGuard && !canAbsorbChargedAttack(blockerStats)));
+                && (npcGuard || (!timedPlayerGuard && !canAbsorbChargedAttack(blocker)));
             if (chargeBreaksGuard || woundedGuardBreak)
             {
                 bool disarmed = false;
@@ -805,7 +817,7 @@ namespace MWMechanics
             {
                 auto fatigue = stats.getFatigue();
                 fatigue.setCurrent(std::max(
-                    0.f, fatigue.getCurrent() - blockStaminaCost(fatigue, projectileBlockStaminaFraction)));
+                    0.f, fatigue.getCurrent() - defenderBlockStaminaCost(blocker, projectileBlockStaminaFraction)));
                 stats.setFatigue(fatigue);
                 if (fatigue.getCurrent() <= 0.f)
                     openBrutalGuard(blocker);

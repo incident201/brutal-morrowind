@@ -1,6 +1,7 @@
 Brutal Morrowind (unreleased)
 ----------------------------
 
+    Successful melee weapon blocks and timed parries train Block, like shield and projectile blocks. With Dark Messiah stamina enabled, Block reduces defensive stamina costs and the recovery penalty while holding a guard. Skill 50 retains the previous balance, and skills 0–100 bound impact costs to 125–75% of that value.
     Weapon clinches require raising the guard within the first 70% of the timed parry window, or 0.35 seconds by default. Timed melee weapon parries retain their 0.5-second default window and protect the defender's health and stamina.
     Adrenaline builds from physical health actually lost after armor and weapon skill. By default a full charge requires two thirds of the target's maximum health, with a minimum of 60 damage. Both coefficients replace the hit-count setting. Overkill and automatic finishers add no extra charge.
     Script settings refresh their scroll range after text wrapping, removing the empty area below the last option.

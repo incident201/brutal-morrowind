@@ -34,7 +34,7 @@ objectGrabEnabledDescription: "Поднимайте небольшие пред�
 movementEnabled: Ходьба, бег и спринт
 movementEnabledDescription: "Скорости Dark Messiah. Alt — ходьба; кнопка спринта задаётся выше."
 staminaEnabled: Выносливость Dark Messiah
-staminaEnabledDescription: "Восстановление и затраты сил по правилам Dark Messiah."
+staminaEnabledDescription: "Восстановление и затраты сил по правилам Dark Messiah. Атлетика снижает расход спринта и ускоряет восстановление. Защита снижает затраты на блокирование и штраф к восстановлению при удержании блока."
 kickEnabled: Пинок
 kickEnabledDescription: "Пинок назначенной кнопкой."
 kickAlwaysRagdoll: Пинок всегда вызывает ragdoll
