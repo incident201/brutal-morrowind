@@ -1,11 +1,15 @@
 #ifndef OPENMW_MWPHYSICS_PROJECTILE_H
 #define OPENMW_MWPHYSICS_PROJECTILE_H
 
+#include <array>
 #include <atomic>
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <vector>
 
 #include <LinearMath/btVector3.h>
+#include <osg/BoundingBox>
 
 #include "ptrholder.hpp"
 
@@ -23,10 +27,39 @@ namespace MWPhysics
     class PhysicsTaskScheduler;
     class PhysicsSystem;
 
+    enum class ProjectileHitType
+    {
+        World,
+        Terrain,
+        Water,
+        Projectile,
+        Shield,
+    };
+
+    ProjectileHitType getProjectileHitType(int collisionGroup);
+
+    struct ProjectileShield
+    {
+        struct Contact
+        {
+            float mFraction;
+            osg::Vec3f mPoint;
+            osg::Vec3f mNormal;
+        };
+
+        ESM::RefNum mActor;
+        const btCollisionObject* mCollider;
+        osg::Vec3f mForward;
+        osg::BoundingBox mBounds;
+        std::vector<std::array<osg::Vec3f, 3>> mTriangles;
+
+        std::optional<Contact> intersect(const osg::Vec3f& from, const osg::Vec3f& to, float limit) const;
+    };
+
     class Projectile final : public PtrHolder
     {
     public:
-        Projectile(const MWWorld::Ptr& caster, const osg::Vec3f& position, float radius,
+        Projectile(const MWWorld::Ptr& caster, const osg::Vec3f& position, float radius, bool magic,
             PhysicsTaskScheduler* scheduler, PhysicsSystem* physicssystem);
         ~Projectile() override;
 
@@ -35,6 +68,7 @@ namespace MWPhysics
         void updateCollisionObjectPosition();
 
         bool isActive() const { return mActive.load(std::memory_order_acquire); }
+        bool isMagic() const { return mMagic; }
 
         MWWorld::Ptr getTarget() const;
 
@@ -42,26 +76,27 @@ namespace MWPhysics
         void setCaster(const MWWorld::Ptr& caster);
         const btCollisionObject* getCasterCollisionObject() const { return mCasterColObj; }
 
-        void setHitWater() { mHitWater = true; }
+        ProjectileHitType getHitType() const { return mHitType; }
 
-        bool getHitWater() const { return mHitWater; }
-
-        void hit(const btCollisionObject* target, btVector3 pos, btVector3 normal);
+        void hit(const btCollisionObject* target, btVector3 pos, btVector3 normal, ProjectileHitType type);
+        void hit(ESM::RefNum target, btVector3 pos, btVector3 normal, ProjectileHitType type);
 
         void setValidTargets(const std::vector<MWWorld::Ptr>& targets);
         bool isValidTarget(const btCollisionObject* target) const;
 
         btVector3 getHitPosition() const { return mHitPosition; }
+        btVector3 getHitNormal() const { return mHitNormal; }
 
     private:
         std::unique_ptr<btCollisionShape> mShape;
         btConvexShape* mConvexShape;
 
-        bool mHitWater;
+        const bool mMagic;
         std::atomic<bool> mActive;
         MWWorld::Ptr mCaster;
         const btCollisionObject* mCasterColObj;
-        const btCollisionObject* mHitTarget;
+        ESM::RefNum mHitTarget;
+        ProjectileHitType mHitType = ProjectileHitType::World;
         btVector3 mHitPosition;
         btVector3 mHitNormal;
 

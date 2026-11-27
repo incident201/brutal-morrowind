@@ -1,3 +1,74 @@
+Brutal Morrowind 0.3.0
+----------------------------
+
+    NPCs enter combat and finish drawing their weapon before raising an adaptive guard. An opening projectile hit can no longer leave them fighting with a hidden weapon.
+    Switching from a two-handed weapon to a thrown weapon in the inventory restores the retained shield's left-arm pose without re-equipping the shield.
+    Thrown objects follow the player's aim at release without being deflected into the floor by the throw animation's camera tilt. Turning during the windup still changes the throw direction.
+    The game writes save format 38. Saves from earlier Brutal Morrowind versions and vanilla OpenMW 0.51 still load.
+    One option controls physical projectiles and impacts on loose objects. If either older option was off, the combined option starts off.
+    Successful melee weapon blocks and timed parries train Block, like shield and projectile blocks. With Dark Messiah stamina enabled, Block reduces defensive stamina costs and the recovery penalty while holding a guard. Skill 50 retains the previous balance, and skills 0–100 bound impact costs to 125–75% of that value.
+    Weapon clinches require raising the guard within the first 70% of the timed parry window, or 0.35 seconds by default. Timed melee weapon parries retain their 0.5-second default window and protect the defender's health and stamina.
+    Adrenaline builds from physical health actually lost after armor and weapon skill. By default a full charge requires two thirds of the target's maximum health, with a minimum of 60 damage. Both coefficients replace the hit-count setting. Overkill and automatic finishers add no extra charge.
+    Script settings refresh their scroll range after text wrapping, removing the empty area below the last option.
+    Fractional adrenaline settings display rounded values while preserving their full precision until edited.
+    Acrobatics determines jump height with Dark Messiah movement enabled. The curve supports powerful Fortify Acrobatics effects such as Icarian Flight.
+    Exceeding the carry limit switches the player to the Alt walking gait and disables running, sprinting and jumping while Dark Messiah movement is enabled.
+    Athletics reduces sprint stamina costs and speeds passive recovery with Dark Messiah stamina enabled. Passive recovery resumes when sprinting stops.
+    In contact-based melee and with physical projectiles, the player's weapon skill scales damage after armor. Damage goes from 30% at skill 0 to full damage at 50 and 120% at 100.
+    Damaging shots and throws build adrenaline. Charged attacks build more. A short bow draw deals less damage and launches a slower arrow.
+    Dark Messiah import recipe 33 includes first-person spear and halberd poses with the shaft held on the right. Quick thrusts keep both grips and vary their paths even across separate clicks. Charged thrusts draw back from the same stance. Dark Messiah's staff sweeps handle lateral attacks, and run and sprint each have their own weapon sway.
+    Staff attacks and polearm side sweeps can hit several enemies. The first target takes the full hit. Later targets take half the base damage before their own defences apply.
+    The player's first-person shadow includes the head and hands.
+    Blood sprays vary in size and shape on floors and walls. Dark puddles grow under bodies, at severed necks and limbs, and at the waist cut on both halves. Wet pools leave blood on actors' feet and tracks fade along their path.
+    Sheathing a bloody one-handed sword in first person plays the Dark Messiah wipe animation when the player is on the ground, out of combat and has a free left hand. Blood clears from the guard towards the tip as the hand passes over it.
+    Arrows and thrown weapons stay embedded when an NPC dies or the shield falls. Loot the corpse or pull a missile from the dropped shield to recover it. Taking the shield also puts any remaining missiles in your inventory.
+    A charged hit on a blocking NPC weapon has a 10% chance to disarm and stagger the NPC. The chance rises to 30% against a wounded NPC.
+    NPCs with ranged or thrown weapons can kick at close range. The kick requires 30% of maximum stamina, costs 15% of base stamina and has a ten-second cooldown.
+    Starting the next bow draw within 1.15 seconds of a shot uses a faster reload at any Marksman skill.
+    Full adrenaline guides a bow shot or a thrown weapon to the visible head nearest the crosshair within a small radius. The world slows during the last part of the flight, and the head hit is lethal.
+    Arrows and thrown weapons leave a small blood mark at the visible NPC contact. Regular hits do 200% damage to the head, 100% to the torso and 65% to the limbs.
+    Darts, throwing stars and other thrown weapons use Dark Messiah's right-hand dagger-throw animation. Import recipe 26 adds the preparation, held pose, release and recovery.
+    First person: Bows use Dark Messiah's animations: the bow is drawn and lowered, an arrow is taken from the quiver over the shoulder, nocked and pulled to full draw, and moving keeps the bow ready. The arrow stays between the fingers and the bow's rest, the bow bends with the draw, and the draw, take, release and impact sounds come from Dark Messiah. Import recipe 25 adds these animations and sounds.
+    Combat: Arrows, bolts and thrown weapons fly faster on a falling arc. One that touches a body hits it, without a skill roll, and stays in it; looting the body takes it out. Missiles stick in wood, earth and cloth, glance off or snap on stone and metal, and knock loose items aside. A raised shield stops a missile only when the missile actually strikes it; arrows stick in wooden shields and glance off metal ones. NPCs with a shield raise it against a player drawing a bow, and archers aim above distant targets.
+    AI: NPCs fighting the same target fan out around it. An NPC standing in the arc of an ally closer to the target steps sideways towards a free flank instead of queueing behind it.
+    Physics: An NPC that runs out of stamina collapses into a ragdoll instead of playing Morrowind's knockout animation, stays down until its stamina recovers, then stands up.
+    Combat: Thrown objects hurt more, in proportion to their momentum, and a hit to the head does more damage. A head hit knocks the victim down 60 to 90 percent of the time, more often with heavier objects.
+    Crime: A guard pursuing a player who is fighting with adrenaline joins the fight instead of waiting beside them, and returns to the arrest once the adrenaline fades. A player with adrenaline who is not fighting is arrested as usual.
+    Combat: A raised shield stops arrows, bolts and thrown weapons from the front. A weapon guard turns thrown weapons, and arrows and bolts only when raised within the parry window. Each blocked missile costs the blocker half a light blow's stamina.
+    Sneak behind an unaware humanoid with two short blades to ready a backstab. Attack or release a charged strike to perform it. Sneak and Short Blade scale the damage. Witnesses can report the attack. Import recipe 24 includes the paired animation, camera motion and victim sounds.
+    Combat: An NPC left without a weapon in a fight runs to the weapon nearby that its AI rates best, takes it straight into its hand with Dark Messiah's weapon pickup animation or a reach over a table, and fights on. A shield lying beside it is taken afterwards. A setting turns this off. The animations use import recipe 23.
+    Physics: Weapons released by a knocked-down NPC no longer sink through the floor when the NPC gets up, and a weapon knocked from a swinging hand flies a few metres instead of over the walls.
+    First-person two-handed swords, battle axes and warhammers release the left hand during the back-step thrust and return to the paired grip. Quick swings play at 86 percent of the previous rate. These animations use import recipe 22.
+    First-person two-handed swords, battle axes and warhammers keep the neutral charge low and prepare the left-step sweep on the right. The forward chop follows the one-handed sword motion and returns to the paired grip.
+    First-person two-handed swords, battle axes and warhammers sway less while running and are carried low in the right hand while sprinting.
+    First-person two-handed swords, battle axes and warhammers swing through a wider arc with both hands on the grip. Pressing attack in midair raises the weapon and delivers a falling strike on release or landing.
+    A lethal hit gives the player's ragdoll a small impulse in the direction of the impact. The menu opens after 2.65 seconds. The scene starts darkening at 5.55 seconds and takes another 5.4 seconds to fade to black behind the menu.
+    NPCs wait for four seconds of continuous player guard at close range before choosing a charged response. A held shield or weapon guard absorbs a charge at a cost of two ninths of base stamina. Holding guard restores stamina at one third of the normal rate.
+    Weapon blood spreads across model seams with soft edges. Dry floor and wall splatters keep their shape and colour without a visible decal rectangle.
+    The pickup animation reaches towards the prop before it lifts. A held severed head faces the player. The new animations use Dark Messiah import recipe 17.
+    Inventory: Fix repeated frame errors when opening the inventory with blood on an equipped weapon.
+    Combat: Wounded NPCs from Dark Messiah. Below 30% health an NPC stands, walks and attacks with the wounded guard's animations (Argonians and Khajiit keep their own stance and walk). Its sword parry gives way half the time and its shield block four times in five; any blow may stagger it, and a charged blow, a kick or a shield bash knocks it down three times in ten. A blow that leaves an NPC below 10% health makes it flee for up to 20 seconds. Both have their own settings.
+    Sounds: A separate Hero voice setting turns off the hero's grunts on adrenaline strikes, super kicks, throws and jumps while keeping the other Dark Messiah sounds.
+    Sounds: A female player character grunts with female voices from Dark Messiah instead of its male hero. Recipe 15 requires reimporting the Dark Messiah assets.
+    Combat: Pick up and carry small physical objects with G and drop or throw them with Use (left click), auto-holstering and restoring equipped gear with Dark Messiah first-person animations, camera motion and sounds, directional hit-location NPC staggers, and adrenaline-powered ragdoll knockdowns. Recipe 14 requires reimporting the Dark Messiah assets.
+    Combat: NPCs brace against repeated fast attacks and prefer a charged guard breaker against a prolonged player block.
+    Combat: Guard impacts drain both actors' stamina, with a greater cost for the attacker; charged blows and kicks open defence.
+    Combat: Living actors intercept NPC and creature melee attacks without redirecting damage into bystanders.
+    Combat: NPC weapon and shield guards follow the incoming aim and require contact with the equipped item.
+    Animations: Preserve both grips during two-handed NPC guards.
+    Animations: Add first-person sword-derived motion, paired grips, parries, wall recoil and clinches for claymores, battle axes and warhammers.
+    Animations: Keep two-handed clinch grips and sleeves in view with weapon-specific camera pitch and bounded shoulder and elbow motion.
+    Camera: Keep first-person movement and crouching attached to the visible body, including with a readied spell.
+    Combat: Rebalance adrenaline, add obstacle trips and configurable weapon drops, and simplify ragdoll settings.
+    Combat: The player and NPCs release held weapons, shields and lights on ordinary deaths and finishers. NPCs that survive a knockdown use the weapon-drop chance.
+    Ragdolls: On death the first-person camera follows the head's motion. The downward nod stops short of the neck, and the camera keeps clearance from the body and floor before the screen fades and the menu opens.
+    Effects: Import Dark Messiah's incoming-damage flash and separate critical-health vignette below 5 HP.
+    Release a fully charged melee attack near a downed enemy in front of you to perform a ground finisher. Its switch and default 30% health threshold are available in Brutal Morrowind settings.
+    One-handed weapons, two-handed swords, battle axes and warhammers use Dark Messiah's sword finisher with a one-handed grip. Staves, spears and halberds share the staff finisher and its grip. Reimport the Dark Messiah assets with recipe 34 for the weapon turn and camera motion.
+    Animations: Restore beast-race locomotion, improve clinches on uneven ground and import Dark Messiah camera motion.
+    Ragdolls: Fix delayed corpse cuts and impulses after looting, and support open armor contours in waist cuts.
+    Effects: Melee weapons of the player and NPCs keep the blood of living targets. It dries, washes off in water or rain, is cleaned by repair and wears away within a game day. Hits leave Dark Messiah blood splatters on nearby floors and walls; outdoors the rain washes them away. Recipe 11 requires reimporting the Dark Messiah assets.
+
 Brutal Morrowind 0.2.1
 ---------------------
 

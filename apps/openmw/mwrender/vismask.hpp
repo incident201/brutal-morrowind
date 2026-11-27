@@ -56,6 +56,9 @@ namespace MWRender
         Mask_Lighting = (1 << 19),
 
         Mask_Groundcover = (1 << 20),
+
+        // Full player model used by the shadow cameras in first person.
+        Mask_PlayerShadow = (1 << 21),
     };
 
     // Defines masks to remove when using ToggleWorld command

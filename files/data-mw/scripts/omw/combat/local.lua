@@ -18,6 +18,11 @@ end
 
 local settings = storage.globalSection('SettingsOMWCombat')
 
+local function useBrutalImpactSound(attack)
+    return (attack.brutalKick or attack.brutalBash == 'Brutal Shield Metal' or attack.brutalBash == 'Brutal Shield Wood')
+        and Actor.getBrutalOption('combatSounds')
+end
+
 local function getSkill(actor, skillId)
     if Creature.objectIsInstance(actor) then
         local specialization = core.stats.Skill.record(skillId).specialization
@@ -193,7 +198,7 @@ local function applyArmor(attack)
             end
 
             -- Brutal Morrowind: a kick or shield bash plays Dark Messiah's own impact in onHit.
-            if attack.brutalKick or attack.brutalBash then
+            if useBrutalImpactSound(attack) then
             elseif skillid == 'lightarmor' then
                 core.sound.playSound3d('Light Armor Hit', self)
             elseif skillid == 'mediumarmor' then
@@ -270,13 +275,10 @@ local function onHit(data)
     if data.successful and not godMode() then
         I.Combat.applyArmor(data)
         I.Combat.adjustDamageForDifficulty(data)
-        if data.brutalKick then
-            core.sound.playSound3d('Brutal Kick Hit', self)
-        elseif data.brutalBash == 'Brutal Shield Metal' or data.brutalBash == 'Brutal Shield Wood' then
-            core.sound.playSound3d(data.brutalBash, self)
-        end
+        local brutalSound = useBrutalImpactSound(data)
+        if brutalSound then core.sound.playSound3d(data.brutalKick and 'Brutal Kick Hit' or data.brutalBash, self) end
         if getDamage(data, 'health') > 0 then
-            if not data.brutalKick and not data.brutalBash then core.sound.playSound3d('Health Damage', self) end
+            if not brutalSound then core.sound.playSound3d('Health Damage', self) end
             if data.hitPos then
                 I.Combat.spawnBloodEffect(data.hitPos)
             end

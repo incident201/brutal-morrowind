@@ -270,6 +270,7 @@ namespace SceneUtil {
         virtual osg::StateSet* prepareStateSetForRenderingShadow(ViewDependentData& vdd, unsigned int traversalNumber) const;
 
         void setWorldMask(unsigned int worldMask) { _worldMask = worldMask; }
+        void setShadowOnlyMask(unsigned int shadowOnlyMask) { _shadowOnlyMask = shadowOnlyMask; }
 
         osg::ref_ptr<osg::StateSet> getOrCreateShadowsBinStateSet();
 
@@ -308,6 +309,7 @@ namespace SceneUtil {
         float                                   _shadowFadeStart = 0.0f;
 
         unsigned int                            _worldMask = ~0u;
+        unsigned int                            _shadowOnlyMask = 0u;
 
         class DebugHUD final : public osg::Referenced
         {

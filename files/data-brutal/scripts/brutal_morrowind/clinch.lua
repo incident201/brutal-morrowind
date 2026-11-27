@@ -24,20 +24,55 @@ local function visible()
         and types.Player.getControlSwitch(self,types.Player.CONTROL_SWITCH.Controls)
         and types.Player.getControlSwitch(self,types.Player.CONTROL_SWITCH.Fighting)
 end
+-- Spear and staff, and the daggers, play their own Dark Messiah contest and camera.
+local function headClips()
+    local weapon=types.Actor.getEquipment(self)[types.Actor.EQUIPMENT_SLOT.CarriedRight]
+    if weapon and types.Weapon.objectIsInstance(weapon) then
+        local kind=types.Weapon.record(weapon).type
+        if (kind==types.Weapon.TYPE.SpearTwoWide or kind==types.Weapon.TYPE.BluntTwoWide) and head.staff then return head.staff,-.14 end
+        if kind==types.Weapon.TYPE.ShortBladeOneHand and head.dagger then return head.dagger end
+        local paired=kind==types.Weapon.TYPE.LongBladeTwoHand or kind==types.Weapon.TYPE.AxeTwoHand
+            or kind==types.Weapon.TYPE.BluntTwoClose
+        return head, paired and .24 or nil
+    end
+    return head
+end
 local function headMotion(state)
     if not headLoaded or camera.getMode()~=camera.MODE.FirstPerson then return end
-    local clip=head[state.group]
+    local clips,gripPitch=headClips()
+    local clip=clips[state.group]
     if not clip or not clip.frames or #clip.frames<1 then return end
     local position=state.phase=='align' and 0 or math.max(0,math.min(#clip.frames-1,state.elapsed*clip.fps))
     local lo=math.floor(position)+1
     local a,b=clip.frames[lo],clip.frames[math.min(lo+1,#clip.frames)]
     local f=position-math.floor(position)
+    local pitch,yaw,roll=a[1]+(b[1]-a[1])*f,a[2]+(b[2]-a[2])*f,a[3]+(b[3]-a[3])*f
     -- The ordinary camera update clears extra angles before this onFrame.
     -- Add the source head track after its usual bob/roll, without rotating the
     -- physical body or applying a cumulative offset from the previous frame.
-    camera.setExtraPitch(camera.getExtraPitch()+a[1]+(b[1]-a[1])*f)
-    camera.setExtraYaw(camera.getExtraYaw()+a[2]+(b[2]-a[2])*f)
-    camera.setExtraRoll(camera.getExtraRoll()+a[3]+(b[3]-a[3])*f)
+    local gripOffset=0
+    if gripPitch then
+        -- Follow the grip during the contest and ease back into the authored
+        -- camera on either exit.
+        local t=state.group=='brutal_clinch' and (state.phase=='align' and 0 or state.elapsed/.22)
+            or 1-state.elapsed/.5
+        t=math.max(0,math.min(1,t))
+        gripOffset=gripPitch*t*t*(3-2*t)
+        if state.group~='brutal_clinch' then
+            local held=clips.brutal_clinch
+            local last=held and held.frames and held.frames[#held.frames]
+            if last then
+                local progress=math.max(0,math.min(1,state.elapsed/.18))
+                progress=progress*progress*(3-2*progress)
+                pitch=last[1]+(pitch-last[1])*progress
+                yaw=last[2]+(yaw-last[2])*progress
+                roll=last[3]+(roll-last[3])*progress
+            end
+        end
+    end
+    camera.setExtraPitch(camera.getExtraPitch()+pitch+gripOffset)
+    camera.setExtraYaw(camera.getExtraYaw()+yaw)
+    camera.setExtraRoll(camera.getExtraRoll()+roll)
 end
 return {
     interfaceName='BrutalClinch',
@@ -60,7 +95,7 @@ return {
         if e.result=='win' then
             wins=wins+1
             if awarded~=e.id and I.BrutalAdrenaline then
-                awarded=e.id;I.BrutalAdrenaline.fill()
+                awarded=e.id;self:sendEvent('BrutalAdrenalineBonus',{})
             end
         elseif e.result=='lose' then losses=losses+1
         elseif e.result=='cancel' then cancels=cancels+1 end

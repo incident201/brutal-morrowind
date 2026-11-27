@@ -292,6 +292,8 @@ namespace MWRender
         std::size_t totalVertices = 0;
         for (const auto& snapshot : snapshots)
         {
+            // Each mesh's own cross-section must form closed rings to be capped.
+            std::vector<CutSegment> meshSegments;
             auto source = std::make_shared<Source>();
             source->snapshot = snapshot;
             for (auto* node : snapshot.sourcePath) source->sourcePath.emplace_back(node);
@@ -383,9 +385,23 @@ namespace MWRender
                 for (const auto& vertex : input)
                     if (std::abs((vertex.vertex.p - center) * normal) < .0001f)
                     { failure = 3; return false; }
-                appendCutSegment({ input[0].vertex.p, input[1].vertex.p, input[2].vertex.p }, center, normal, segments);
+                appendCutSegment({ input[0].vertex.p, input[1].vertex.p, input[2].vertex.p }, center, normal, meshSegments);
                 for (unsigned side = 0; side < 2; ++side)
                     append(halves[side], clip(input, center, normal, side));
+            }
+            if (!meshSegments.empty())
+            {
+                std::vector<osg::Vec3f> meshPoints;
+                std::vector<std::vector<int>> meshLoops;
+                bool closed = buildCutContours(meshSegments, meshPoints, meshLoops) == 0;
+                if (!closed && closeOpenCutChains(meshSegments, 6.f))
+                    closed = buildCutContours(meshSegments, meshPoints, meshLoops) == 0;
+                // A mesh that still cannot close is split without a cap of its own;
+                // the body and the other layers cap the cut.
+                if (closed)
+                    segments.insert(segments.end(), meshSegments.begin(), meshSegments.end());
+                else
+                    ++uncappedMeshes;
             }
             sources.push_back(source);
             for (unsigned side = 0; side < 2; ++side)

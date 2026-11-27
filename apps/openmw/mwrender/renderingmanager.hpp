@@ -14,9 +14,14 @@
 
 #include <osgUtil/IncrementalCompileOperation>
 
+#include <array>
 #include <deque>
+#include <optional>
+#include <utility>
+#include <vector>
 #include <memory>
 #include <span>
+#include <string>
 #include <unordered_map>
 
 namespace osg
@@ -92,6 +97,7 @@ namespace MWRender
     class IntersectionVisitorWithIgnoreList;
 
     class EffectManager;
+    class BrutalBlood;
     class ScreenshotManager;
     class FogManager;
     class SkyManager;
@@ -183,6 +189,19 @@ namespace MWRender
         RayResult castRay(const osg::Vec3f& origin, const osg::Vec3f& dest, bool ignorePlayer,
             bool ignoreActors = false, std::span<const MWWorld::Ptr> ignoreList = {}, bool melee = false);
 
+        struct SurfaceResult
+        {
+            bool mHit = false;
+            bool mTerrain = false;
+            osg::Vec3f mPosition;
+            osg::Vec3f mNormal;
+            MWWorld::Ptr mObject;
+            std::string mTexture;
+        };
+
+        /// The visible world surface (not actors) on a segment, with its object and base texture.
+        SurfaceResult castRayForSurface(const osg::Vec3f& origin, const osg::Vec3f& dest);
+
         std::vector<float> findSegmentCandidates(
             std::span<const std::pair<osg::Vec3f, osg::Vec3f>> segments,
             std::span<const unsigned> buckets);
@@ -211,6 +230,7 @@ namespace MWRender
         bool spawnBrutalDecapitation(const osg::Vec3f& lowerCenter, const osg::Vec3f& lowerNormal,
             const osg::Vec3f& upperCenter, const osg::Vec3f& upperNormal, const osg::Vec3f& inheritedVelocity);
         std::map<std::string, double> getBrutalImpactStats() const;
+        BrutalBlood* getBrutalBlood() { return mBrutalBlood.get(); }
 
 
         /// Clear all savegame-specific data
@@ -321,7 +341,8 @@ namespace MWRender
         const bool mSkyBlending;
 
         osg::ref_ptr<osgUtil::IntersectionVisitor> getIntersectionVisitor(osgUtil::Intersector* intersector,
-            bool ignorePlayer, bool ignoreActors, std::span<const MWWorld::Ptr> ignoreList = {});
+            bool ignorePlayer, bool ignoreActors, std::span<const MWWorld::Ptr> ignoreList = {},
+            bool ignoreMissileItems = false);
 
         osg::ref_ptr<IntersectionVisitorWithIgnoreList> mIntersectionVisitor;
 
@@ -352,6 +373,9 @@ namespace MWRender
         std::unique_ptr<FogManager> mFog;
         std::unique_ptr<ScreenshotManager> mScreenshotManager;
         std::unique_ptr<EffectManager> mEffectManager;
+        std::unique_ptr<BrutalBlood> mBrutalBlood;
+        void collectBloodSurfaces(const osg::Vec3f& center, float radius, std::vector<osg::Vec3d>& positions,
+            std::vector<std::array<unsigned, 3>>& triangles);
         std::unique_ptr<SceneUtil::ShadowManager> mShadowManager;
         osg::ref_ptr<PostProcessor> mPostProcessor;
         osg::ref_ptr<NpcAnimation> mPlayerAnimation;

@@ -3,6 +3,9 @@
 
 #include <components/sceneutil/nodecallback.hpp>
 #include <osg/Quat>
+#include <osg/Vec3f>
+
+#include <functional>
 
 namespace osg
 {
@@ -31,6 +34,9 @@ namespace MWRender
 
         void setRotationCarrier(const osg::MatrixTransform* carrier) { mRotationCarrier = carrier; }
 
+        /// An extra offset evaluated during the update traversal, after nodes traversed earlier are posed.
+        void setOffsetProvider(std::function<osg::Vec3f()> provider) { mOffsetProvider = std::move(provider); }
+
         const osg::Vec3f& getOffset() const { return mOffset; }
 
         const osg::Quat& getRotate() const { return mRotate; }
@@ -45,6 +51,7 @@ namespace MWRender
         osg::Vec3f mRotationPivot;
         bool mUseRotationPivot = false;
         const osg::MatrixTransform* mRotationCarrier = nullptr;
+        std::function<osg::Vec3f()> mOffsetProvider;
         osg::Quat mRotate;
         osg::Node* mRelativeTo;
     };

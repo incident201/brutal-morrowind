@@ -68,6 +68,7 @@
 
 #include "../mwworld/cellstore.hpp"
 #include "../mwworld/class.hpp"
+#include "../mwworld/datetimemanager.hpp"
 #include "../mwworld/esmstore.hpp"
 #include "../mwworld/globals.hpp"
 #include "../mwworld/player.hpp"
@@ -130,6 +131,12 @@ namespace MWGui
 {
     namespace
     {
+        bool damageFlashEnabled()
+        {
+            const auto& game = Settings::game();
+            return Settings::gui().mHitFader && (!game.mBrutalEnabled || game.mBrutalDamageFlash);
+        }
+
         Settings::SettingValue<bool>* findHiddenSetting(GuiWindow window)
         {
             switch (window)
@@ -500,6 +507,19 @@ namespace MWGui
         mHitFader = hitFader.get();
         mWindows.push_back(std::move(hitFader));
 
+        // The original material uses ordinary alpha blending and draws the
+        // damage layer over the low-health layer. Both sit below the death fade.
+        const std::string damageTexture = "textures/brutal_dm/damage_vignette.png";
+        if (mResourceSystem->getVFS()->exists(damageTexture))
+        {
+            auto criticalHealth = std::make_unique<ScreenFader>(damageTexture);
+            mCriticalHealthVignette = criticalHealth.get();
+            mWindows.push_back(std::move(criticalHealth));
+            auto damage = std::make_unique<ScreenFader>(damageTexture);
+            mDamageVignette = damage.get();
+            mWindows.push_back(std::move(damage));
+        }
+
         auto screenFader = std::make_unique<ScreenFader>("black");
         mScreenFader = screenFader.get();
         mWindows.push_back(std::move(screenFader));
@@ -646,8 +666,8 @@ namespace MWGui
         if (!mMap)
             return; // UI not created yet
 
-        mHud->setVisible(mHudEnabled && !loading);
-        mToolTips->setVisible(mHudEnabled && !loading);
+        mHud->setVisible(mHudEnabled && !loading && !mPlayerDeathFading);
+        mToolTips->setVisible(mHudEnabled && !loading && !mPlayerDeathFading);
 
         bool gameMode = !isGuiMode();
 
@@ -675,13 +695,14 @@ namespace MWGui
         // If in game mode (or interactive messagebox), show the pinned windows
         if (mGuiModes.empty())
         {
-            mMap->setVisible(mMap->pinned() && !isConsoleMode() && !(mForceHidden & GW_Map) && (mAllowed & GW_Map));
+            const bool showPinned = !isConsoleMode() && !mPlayerDeathFading;
+            mMap->setVisible(mMap->pinned() && showPinned && !(mForceHidden & GW_Map) && (mAllowed & GW_Map));
             mStatsWindow->setVisible(
-                mStatsWindow->pinned() && !isConsoleMode() && !(mForceHidden & GW_Stats) && (mAllowed & GW_Stats));
-            mInventoryWindow->setVisible(mInventoryWindow->pinned() && !isConsoleMode()
+                mStatsWindow->pinned() && showPinned && !(mForceHidden & GW_Stats) && (mAllowed & GW_Stats));
+            mInventoryWindow->setVisible(mInventoryWindow->pinned() && showPinned
                 && !(mForceHidden & GW_Inventory) && (mAllowed & GW_Inventory));
             mSpellWindow->setVisible(
-                mSpellWindow->pinned() && !isConsoleMode() && !(mForceHidden & GW_Magic) && (mAllowed & GW_Magic));
+                mSpellWindow->pinned() && showPinned && !(mForceHidden & GW_Magic) && (mAllowed & GW_Magic));
 
             if (Settings::gui().mControllerMenus)
             {
@@ -999,6 +1020,7 @@ namespace MWGui
 
         bool gameRunning
             = MWBase::Environment::get().getStateManager()->getState() != MWBase::StateManager::State_NoGame;
+        updateDamageVignettes(frameDuration, gameRunning);
 
         if (gameRunning)
             updateMap();
@@ -1990,6 +2012,8 @@ namespace MWGui
     void WindowManager::clear()
     {
         mPlayerBounty = -1;
+        mPlayerDeathFading = false;
+        mDamageVignetteTime = 0.f;
 
         for (const auto& window : mWindows)
         {
@@ -2291,10 +2315,58 @@ namespace MWGui
         mBlindnessFader->notifyAlphaChanged(percent / 100.f);
     }
 
-    void WindowManager::activateHitOverlay(bool interrupt)
+    bool WindowManager::useDarkMessiahDamageVignette() const
     {
-        if (!Settings::gui().mHitFader)
+        return mDamageVignette && Settings::game().mBrutalEnabled;
+    }
+
+    void WindowManager::updateDamageVignettes(float duration, bool gameRunning)
+    {
+        if (mPlayerDeathFading)
             return;
+        const bool flash = damageFlashEnabled();
+        if (!flash)
+            mHitFader->clear();
+        if (!mDamageVignette)
+            return;
+
+        float criticalAlpha = 0.f;
+        if (gameRunning && useDarkMessiahDamageVignette() && Settings::gui().mHitFader)
+        {
+            const auto world = MWBase::Environment::get().getWorld();
+            if (!flash)
+                mDamageVignetteTime = 0.f;
+            else if (!world->getTimeManager()->isPaused())
+                mDamageVignetteTime = std::max(0.f, mDamageVignetteTime - duration);
+
+            const auto player = world->getPlayerPtr();
+            const auto& stats = player.getClass().getCreatureStats(player);
+            if (Settings::game().mBrutalLowHealthVignette && !stats.isDead())
+                criticalAlpha = std::clamp((5.f - stats.getHealth().getCurrent()) / 5.f, 0.f, .5f);
+        }
+        else
+            mDamageVignetteTime = 0.f;
+        mCriticalHealthVignette->notifyAlphaChanged(criticalAlpha);
+        mDamageVignette->notifyAlphaChanged(std::min(.5f, mDamageVignetteTime));
+    }
+
+    void WindowManager::activateHitOverlay(float damage, bool interrupt)
+    {
+        if (mPlayerDeathFading || !damageFlashEnabled())
+            return;
+
+        if (useDarkMessiahDamageVignette())
+        {
+            if (damage > 0.f)
+            {
+                // Dark Messiah's networked hit power decays by one per second.
+                // The render cap maintains peak opacity longer for stronger hits.
+                const float power = .3f + 1.7f * std::min(1.f, damage / 30.f);
+                mDamageVignetteTime = std::max(mDamageVignetteTime, power);
+                mHitFader->clear();
+            }
+            return;
+        }
 
         if (!interrupt && !mHitFader->isEmpty())
             return;
@@ -2302,6 +2374,46 @@ namespace MWGui
         mHitFader->clearQueue();
         mHitFader->fadeTo(100, 0.0f);
         mHitFader->fadeTo(0, 0.5f);
+    }
+
+    void WindowManager::setPlayerDeathFade(std::optional<float> fade)
+    {
+        if (!fade && !mPlayerDeathFading)
+            return;
+        if (mPlayerDeathFading != fade.has_value())
+        {
+            mPlayerDeathFading = fade.has_value();
+            updateVisible();
+        }
+        if (!fade)
+        {
+            mScreenFader->clear();
+            mHitFader->clear();
+            if (mDamageVignette)
+            {
+                mDamageVignetteTime = 0.f;
+                mDamageVignette->clear();
+                mCriticalHealthVignette->clear();
+            }
+            return;
+        }
+
+        mScreenFader->clearQueue();
+        mHitFader->clearQueue();
+        mScreenFader->notifyAlphaChanged(*fade);
+        const bool useDarkMessiah = useDarkMessiahDamageVignette();
+        const bool showHit = damageFlashEnabled();
+        if (mDamageVignette)
+        {
+            // Hold the lethal hit and zero-health layers under the black fade.
+            if (!useDarkMessiah || !showHit)
+                mDamageVignetteTime = 0.f;
+            mDamageVignette->notifyAlphaChanged(std::min(.5f, mDamageVignetteTime));
+            const bool showCritical = useDarkMessiah && Settings::gui().mHitFader && Settings::game().mBrutalLowHealthVignette;
+            mCriticalHealthVignette->notifyAlphaChanged(showCritical ? .5f : 0.f);
+        }
+        // The stock additive layer sits above black and follows the same fade.
+        mHitFader->notifyAlphaChanged(!useDarkMessiah && showHit ? 1.f - *fade : 0.f);
     }
 
     void WindowManager::setWerewolfOverlay(bool set)

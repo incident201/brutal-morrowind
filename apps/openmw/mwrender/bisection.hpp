@@ -28,6 +28,7 @@ namespace MWRender
         osg::Vec3f center, normal;
         float surfaceRadius = 0, cutDistance = 0, reconstructionError = 0;
         std::size_t sourceTriangles = 0, resultTriangles = 0, capTriangles = 0, capLoops = 0;
+        std::size_t uncappedMeshes = 0; // Open meshes split without a cap of their own.
         std::size_t protectedTriangles = 0, articulatedSurfaces = 0, decalTriangles = 0;
         double preparationMilliseconds = 0;
         int failure = 0;

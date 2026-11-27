@@ -1,7 +1,14 @@
 #include "aicombat.hpp"
 
+#include <algorithm>
+#include <limits>
+#include <map>
+
 #include <components/detournavigator/navigatorutils.hpp>
+#include <components/debug/debuglog.hpp>
 #include <components/esm3/aisequence.hpp>
+#include <components/esm3/loadarmo.hpp>
+#include <components/esm3/loadweap.hpp>
 #include <components/misc/coordinateconverter.hpp>
 #include <components/misc/mathutil.hpp>
 #include <components/misc/pathgridutils.hpp>
@@ -12,6 +19,9 @@
 
 #include "../mwworld/class.hpp"
 #include "../mwworld/esmstore.hpp"
+#include "../mwworld/datetimemanager.hpp"
+#include "../mwworld/inventorystore.hpp"
+#include "../mwworld/worldmodel.hpp"
 
 #include "../mwbase/dialoguemanager.hpp"
 #include "../mwbase/environment.hpp"
@@ -25,9 +35,11 @@
 #include "character.hpp"
 #include "combat.hpp"
 #include "creaturestats.hpp"
+#include "npcstats.hpp"
 #include "movement.hpp"
 #include "pathgrid.hpp"
 #include "steering.hpp"
+#include "weaponpriority.hpp"
 #include "weapontype.hpp"
 
 namespace
@@ -58,11 +70,182 @@ namespace MWMechanics
         constexpr float DmDodgeChance = 0.5f; // base_dodge_chance, against an incoming attack
         constexpr float DmPreventiveDodgeChance = 0.2f;
         constexpr float DmDodgeDuration = 0.5f;
+        constexpr float DmGuardChargeDelay = 4.f;
 
         bool darkMessiahMelee(const MWWorld::Ptr& actor, bool ranged)
         {
             return !ranged && actor.getClass().isNpc() && actor != getPlayer()
                 && Settings::game().mDarkMessiahNpcCombat;
+        }
+
+        // ACT_GRAB_WEAPON. The NPC crouches at this horizontal distance from the item's origin
+        // (the source hand lands about 22 units in front of the guard's root; a table blocks the
+        // body farther out), gives an item up after these seconds and searches again at this interval.
+        constexpr float BrutalPickupReach = 46.f;
+        constexpr float BrutalPickupTableReach = 62.f;
+        // Above this height over the NPC's feet the item lies on a table, a crate or a shelf, and
+        // the standing reach is played instead of the crouch; higher items are out of reach.
+        constexpr float BrutalPickupTableHeight = 25.f;
+        constexpr float BrutalPickupMaxHeight = 105.f;
+        constexpr float BrutalPickupWeaponGiveUp = 8.f;
+        constexpr float BrutalPickupShieldGiveUp = 4.f;
+        constexpr float BrutalPickupRescan = .75f;
+        constexpr float BrutalPickupSettled = .3f; // seconds the item must lie still before the crouch
+        // The navmesh ends short of an item whose own collision cuts it, or at a table's edge. The NPC
+        // then walks straight at the item; blocked for this long within this much more than its
+        // reach, it crouches or leans from there.
+        constexpr float BrutalPickupStalled = .4f;
+        constexpr float BrutalPickupStretch = 50.f;
+
+        // Two NPCs never run for one item: item -> (claiming actor, claim expiry).
+        std::map<ESM::RefNum, std::pair<ESM::RefNum, double>> sBrutalPickupClaims;
+
+        bool isTwoHanded(const MWWorld::ConstPtr& weapon)
+        {
+            return weapon.getType() == ESM::Weapon::sRecordId
+                && getWeaponType(weapon.get<ESM::Weapon>()->mBase->mData.mType)->mFlags & ESM::WeaponType::TwoHanded;
+        }
+
+        bool isShield(const MWWorld::ConstPtr& item)
+        {
+            return item.getType() == ESM::Armor::sRecordId
+                && item.get<ESM::Armor>()->mBase->mData.mType == ESM::Armor::Shield;
+        }
+
+        bool hasWeapon(const MWWorld::Ptr& actor)
+        {
+            auto& inventory = actor.getClass().getInventoryStore(actor);
+            for (auto it = inventory.begin(MWWorld::ContainerStore::Type_Weapon); it != inventory.end(); ++it)
+                if (getWeaponType(it->get<ESM::Weapon>()->mBase->mData.mType)->mWeaponClass != ESM::WeaponType::Ammo
+                    && (!it->getClass().hasItemHealth(*it) || it->getClass().getItemHealth(*it) > 0))
+                    return true;
+            return false;
+        }
+
+        bool drawsMissile(const MWWorld::Ptr& target)
+        {
+            if (!target.getClass().hasInventoryStore(target)
+                || target.getClass().getCreatureStats(target).getDrawState() != DrawState::Weapon
+                || !MWBase::Environment::get().getMechanicsManager()->isAttackingOrSpell(target))
+                return false;
+            const auto& inventory = target.getClass().getInventoryStore(target);
+            const auto weapon = inventory.getSlot(MWWorld::InventoryStore::Slot_CarriedRight);
+            if (weapon == inventory.end() || weapon->getType() != ESM::Weapon::sRecordId)
+                return false;
+            const auto weaponClass = getWeaponType(weapon->get<ESM::Weapon>()->mBase->mData.mType)->mWeaponClass;
+            return weaponClass == ESM::WeaponType::Ranged || weaponClass == ESM::WeaponType::Thrown;
+        }
+
+        bool carriesShield(const MWWorld::Ptr& actor)
+        {
+            if (!actor.getClass().hasInventoryStore(actor))
+                return false;
+            const auto& inventory = actor.getClass().getInventoryStore(actor);
+            const auto left = inventory.getSlot(MWWorld::InventoryStore::Slot_CarriedLeft);
+            return left != inventory.end() && isShield(*left);
+        }
+
+        bool hasShield(const MWWorld::Ptr& actor)
+        {
+            auto& inventory = actor.getClass().getInventoryStore(actor);
+            for (auto it = inventory.begin(MWWorld::ContainerStore::Type_Armor); it != inventory.end(); ++it)
+                if (isShield(*it) && it->getClass().getItemHealth(*it) > 0)
+                    return true;
+            return false;
+        }
+
+        bool holdsTwoHanded(const MWWorld::Ptr& actor)
+        {
+            auto& inventory = actor.getClass().getInventoryStore(actor);
+            const auto right = inventory.getSlot(MWWorld::InventoryStore::Slot_CarriedRight);
+            return right != inventory.end() && isTwoHanded(*right);
+        }
+
+        // A loose melee or thrown weapon (or a shield) the NPC may take, whoever owns it: one fighting
+        // for its life does not ask. Items with a script a quest may rely on stay; so does what the
+        // player holds and what lies higher than a table.
+        bool isBrutalPickupCandidate(const MWWorld::Ptr& actor, const MWWorld::Ptr& item, bool shield)
+        {
+            if (shield ? !isShield(item) : item.getType() != ESM::Weapon::sRecordId)
+                return false;
+            if (!shield)
+            {
+                const auto weaponClass = getWeaponType(item.get<ESM::Weapon>()->mBase->mData.mType)->mWeaponClass;
+                if (weaponClass != ESM::WeaponType::Melee && weaponClass != ESM::WeaponType::Thrown)
+                    return false;
+            }
+            if ((item.getClass().hasItemHealth(item) && item.getClass().getItemHealth(item) <= 0)
+                || !item.getClass().getScript(item).empty())
+                return false;
+            if (MWBase::Environment::get().getWorld()->getHeldObject() == item)
+                return false;
+            const float height = item.getRefData().getPosition().pos[2] - actor.getRefData().getPosition().pos[2];
+            return height > -80.f && height < BrutalPickupMaxHeight;
+        }
+
+        bool isBrutalPickupPresent(const MWWorld::Ptr& item)
+        {
+            return !item.isEmpty() && item.isInCell() && item.getCellRef().getCount() > 0
+                && item.getRefData().isEnabled() && item.getRefData().getBaseNode()
+                && MWBase::Environment::get().getWorld()->getHeldObject() != item;
+        }
+
+        // Weapons are ranked as the AI ranks its own inventory (damage, condition, enchantment and the
+        // NPC's skill with the type), a little less the farther they lie; shields by distance only.
+        MWWorld::Ptr findBrutalPickup(const MWWorld::Ptr& actor, const MWWorld::Ptr& enemy, bool shield, double now,
+            const std::vector<ESM::RefNum>& rejected)
+        {
+            const float radius = shield ? Settings::game().mBrutalNpcShieldPickupRadius.get()
+                                        : Settings::game().mBrutalNpcWeaponPickupRadius.get();
+            if (radius <= 0.f)
+                return {};
+            const osg::Vec3f origin = actor.getRefData().getPosition().asVec3();
+            std::vector<MWWorld::Ptr> items;
+            MWBase::Environment::get().getWorld()->getLooseEquipmentInRange(origin, radius, items);
+            for (auto it = sBrutalPickupClaims.begin(); it != sBrutalPickupClaims.end();)
+                it = it->second.second < now ? sBrutalPickupClaims.erase(it) : std::next(it);
+            const ESM::RefNum self = actor.getCellRef().getRefNum();
+            auto& inventory = actor.getClass().getInventoryStore(actor);
+            const auto left = inventory.getSlot(MWWorld::InventoryStore::Slot_CarriedLeft);
+            const bool shieldInHand = left != inventory.end() && isShield(*left);
+            MWWorld::Ptr best;
+            float bestScore = -std::numeric_limits<float>::max();
+            for (const MWWorld::Ptr& item : items)
+            {
+                if (!isBrutalPickupPresent(item) || !isBrutalPickupCandidate(actor, item, shield))
+                    continue;
+                const ESM::RefNum number = item.getCellRef().getRefNum();
+                if (number.isSet())
+                {
+                    if (std::find(rejected.begin(), rejected.end(), number) != rejected.end())
+                        continue;
+                    const auto claim = sBrutalPickupClaims.find(number);
+                    if (claim != sBrutalPickupClaims.end() && claim->second.first != self)
+                        continue;
+                }
+                osg::Vec3f offset = item.getRefData().getPosition().asVec3() - origin;
+                offset.z() = 0.f;
+                const float nearness = 1.f - .5f * std::min(offset.length() / radius, 1.f);
+                float score = -offset.length();
+                if (!shield)
+                {
+                    // With a shield still on its arm the NPC prefers a one-handed weapon.
+                    const float rating = std::max(rateWeapon(item, actor, enemy), .01f);
+                    score = rating * nearness * (shieldInHand && isTwoHanded(item) ? .5f : 1.f);
+                }
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    best = item;
+                }
+            }
+            return best;
+        }
+
+        void stopMovementForBrutalAction(const MWWorld::Ptr& actor)
+        {
+            auto& movement = actor.getClass().getMovementSettings(actor);
+            movement.mPosition[0] = movement.mPosition[1] = movement.mPosition[2] = 0.f;
         }
     }
 
@@ -77,6 +260,11 @@ namespace MWMechanics
     }
 
     void AiCombat::init() {}
+
+    void AiCombat::clearBrutalPickupClaims()
+    {
+        sBrutalPickupClaims.clear();
+    }
 
     /*
      * Current AiCombat movement states (as of 0.29.0), ignoring the details of the
@@ -131,16 +319,28 @@ namespace MWMechanics
         // Get or create temporary storage
         AiCombatStorage& storage = state.get<AiCombatStorage>();
 
+        auto& actorStats = actor.getClass().getCreatureStats(actor);
+        const auto clearDefence = [&] {
+            actorStats.mBrutalNpcGuardRequested = false;
+            actorStats.mBrutalGuardBreakingAttack = false;
+            actorStats.mBrutalFastPressure = 0;
+        };
         // No combat for dead creatures
-        if (actor.getClass().getCreatureStats(actor).isDead())
+        if (actorStats.isDead())
+        {
+            clearDefence();
             return true;
+        }
 
         const MWWorld::Ptr target = getTarget(); // The target to follow
 
         // Stop if the target doesn't exist
         if (target.isEmpty() || !target.getCellRef().getCount() || !target.getRefData().isEnabled()
             || target.getClass().getCreatureStats(target).isDead() || !target.getRefData().getBaseNode())
+        {
+            clearDefence();
             return true;
+        }
 
         if (actor == target) // This should never happen.
             return true;
@@ -149,6 +349,25 @@ namespace MWMechanics
         if (!actor.getClass().isMobile(actor))
         {
             storage.mFleeState = AiCombatStorage::FleeState_Idle;
+            return false;
+        }
+
+        if (characterController.isBrutalBowKicking()
+            || (!storage.isFleeing() && characterController.startBrutalBowKick(target)))
+        {
+            clearDefence();
+            storage.stopAttack();
+            actorStats.setAttackingOrSpell(false);
+            stopMovementForBrutalAction(actor);
+            storage.mActionCooldown -= duration;
+            return false;
+        }
+
+        if (updateBrutalPickup(actor, target, characterController, storage, duration))
+        {
+            clearDefence();
+            storage.mDmTargetGuardTime = 0.f;
+            storage.mActionCooldown -= duration;
             return false;
         }
 
@@ -170,7 +389,8 @@ namespace MWMechanics
             }
 
             storage.updateCombatMove(duration);
-            storage.updateDarkMessiah(duration, target);
+            storage.updateDarkMessiah(duration, actor, target, characterController);
+            updateBrutalSpread(actor, target, storage, duration);
             storage.mRotateMove = false;
             if (storage.mReadyToAttack)
                 updateActorsMovement(actor, duration, storage);
@@ -180,6 +400,8 @@ namespace MWMechanics
         }
         else
         {
+            clearDefence();
+            storage.mDmTargetGuardTime = 0.f;
             updateFleeing(actor, target, duration, characterController.getSupportedMovementDirections(), storage);
         }
         storage.mActionCooldown -= duration;
@@ -188,6 +410,269 @@ namespace MWMechanics
             return false;
 
         return attack(actor, target, storage, characterController);
+    }
+
+    namespace
+    {
+        constexpr float SpreadRadius = 600.f; // only fighters this close to the target take part
+        constexpr float SpreadStartArc = 0.785398f; // 45 degrees
+        constexpr float SpreadStopArc = 1.047198f; // 60 degrees
+        constexpr float SpreadSpeed = .8f;
+
+        // Which way (-1 left, 1 right, 0 stay) a melee fighter should drift around its target
+        // so that it is not standing in the arc of an ally that holds the front. Allies closer
+        // to the target keep their place; this actor moves away from them along the circle.
+        float chooseBrutalSpreadSide(const MWWorld::Ptr& actor, const MWWorld::Ptr& target, float current)
+        {
+            const osg::Vec3f targetPos = target.getRefData().getPosition().asVec3();
+            const osg::Vec3f actorPos = actor.getRefData().getPosition().asVec3();
+            const osg::Vec2f mine(actorPos.x() - targetPos.x(), actorPos.y() - targetPos.y());
+            const float myDistance = mine.length();
+            if (myDistance > SpreadRadius || myDistance < 1.f)
+                return 0.f;
+            const float myAngle = std::atan2(mine.x(), mine.y());
+            const unsigned myIndex = actor.getCellRef().getRefNum().mIndex;
+            const float arc = current != 0.f ? SpreadStopArc : SpreadStartArc;
+            float push = 0.f;
+            bool crowded = false;
+            for (const MWWorld::Ptr& ally : MWBase::Environment::get().getMechanicsManager()->getActorsFighting(target))
+            {
+                if (ally == actor || ally == target || ally.getClass().getCreatureStats(ally).isDead())
+                    continue;
+                const osg::Vec3f allyPos = ally.getRefData().getPosition().asVec3();
+                const osg::Vec2f theirs(allyPos.x() - targetPos.x(), allyPos.y() - targetPos.y());
+                const float distance = theirs.length();
+                if (distance > SpreadRadius || std::abs(allyPos.z() - targetPos.z()) > 200.f)
+                    continue;
+                const bool holdsFront = distance < myDistance - 15.f
+                    || (std::abs(distance - myDistance) <= 15.f && ally.getCellRef().getRefNum().mIndex < myIndex);
+                if (!holdsFront)
+                    continue;
+                const float delta = static_cast<float>(Misc::normalizeAngle(myAngle - std::atan2(theirs.x(), theirs.y())));
+                if (std::abs(delta) >= arc)
+                    continue;
+                crowded = true;
+                // Directly behind an ally: keep a chosen side, or pick one by identity.
+                const float away = std::abs(delta) < osg::DegreesToRadians(3.f)
+                    ? (current != 0.f ? -current : (myIndex % 2 ? 1.f : -1.f))
+                    : (delta > 0.f ? 1.f : -1.f);
+                push += away * (arc - std::abs(delta)) / arc;
+            }
+            if (!crowded || push == 0.f)
+                return 0.f;
+            // Increasing the angle around the target is a step to the fighter's left.
+            const float side = push > 0.f ? -1.f : 1.f;
+            // Only step where there is room and floor.
+            const int mask = MWPhysics::CollisionType_World | MWPhysics::CollisionType_HeightMap
+                | MWPhysics::CollisionType_Door | MWPhysics::CollisionType_Actor;
+            const osg::Vec3f half = MWBase::Environment::get().getWorld()->getHalfExtents(actor);
+            const osg::Vec2f facing = -mine / myDistance;
+            const osg::Vec3f right(facing.y(), -facing.x(), 0.f);
+            const osg::Vec3f source = actorPos + osg::Vec3f(0, 0, 0.75f * half.z());
+            const osg::Vec3f beside = source + right * (side * (half.x() + 56.f));
+            const auto* rays = MWBase::Environment::get().getWorld()->getRayCasting();
+            if (rays->castRay(source, beside, std::vector<MWWorld::ConstPtr>{ actor }, {}, mask).mHit
+                || !rays->castRay(beside, beside - osg::Vec3f(0, 0, 0.75f * half.z() + 96.f), mask).mHit)
+                return 0.f;
+            return side;
+        }
+    }
+
+    // NPCs attacking one target fan out around it instead of queueing in one arc.
+    void AiCombat::updateBrutalSpread(
+        const MWWorld::Ptr& actor, const MWWorld::Ptr& target, AiCombatStorage& storage, float duration)
+    {
+        bool ranged = false;
+        if (storage.mCurrentAction)
+            storage.mCurrentAction->getCombatRange(ranged);
+        const auto& stats = actor.getClass().getCreatureStats(actor);
+        const bool allowed = Settings::game().mBrutalEnabled && storage.mCurrentAction
+            && darkMessiahMelee(actor, ranged) && !stats.mBrutalNpcGuardRequested && !storage.mCombatMove
+            && !stats.getKnockedDown() && !storage.mUseCustomDestination;
+        if (!allowed)
+        {
+            if (storage.mBrutalSpreading && !storage.mCombatMove)
+                storage.mMovement.mPosition[0] = 0.f;
+            storage.mBrutalSpreading = false;
+            storage.mBrutalSpreadSide = 0.f;
+            return;
+        }
+        storage.mBrutalSpreadTimer -= duration;
+        if (storage.mBrutalSpreadTimer <= 0.f)
+        {
+            auto& prng = MWBase::Environment::get().getWorld()->getPrng();
+            storage.mBrutalSpreadTimer = .25f + .15f * Misc::Rng::rollProbability(prng);
+            storage.mBrutalSpreadSide = chooseBrutalSpreadSide(actor, target, storage.mBrutalSpreadSide);
+        }
+        const float side = storage.mBrutalSpreadSide * SpreadSpeed;
+        if (storage.mReadyToAttack)
+        {
+            storage.mMovement.mPosition[0] = side;
+            storage.mBrutalSpreading = side != 0.f;
+        }
+        else
+        {
+            if (storage.mBrutalSpreading)
+                storage.mMovement.mPosition[0] = 0.f;
+            storage.mBrutalSpreading = false;
+            // Approaching: curve onto a free flank while the path still leads to the target.
+            if (side != 0.f)
+                actor.getClass().getMovementSettings(actor).mPosition[0] = side;
+        }
+    }
+
+    bool AiCombat::updateBrutalPickup(const MWWorld::Ptr& actor, const MWWorld::Ptr& target,
+        CharacterController& characterController, AiCombatStorage& storage, float duration)
+    {
+        auto& stats = actor.getClass().getCreatureStats(actor);
+        const auto finish = [&](bool reject) {
+            if (storage.mBrutalPickupItem.isSet())
+            {
+                if (reject)
+                    storage.mBrutalPickupRejected.push_back(storage.mBrutalPickupItem);
+                sBrutalPickupClaims.erase(storage.mBrutalPickupItem);
+            }
+            storage.mBrutalPickupItem = ESM::RefNum();
+            storage.mBrutalPickupCrouching = false;
+            stats.mBrutalPickupPhase = 0;
+            stats.mBrutalPickupTarget = ESM::RefId();
+            return false;
+        };
+        if (!Settings::game().mBrutalNpcWeaponPickup || !actor.getClass().isNpc() || actor == getPlayer()
+            || actor.getClass().getNpcStats(actor).isWerewolf() || !characterController.canBrutalPickup())
+            return finish(false);
+
+        // The crouch and the rise with the item in hand, until the clip ends.
+        if (storage.mBrutalPickupCrouching)
+        {
+            if (characterController.isBrutalPickingUp())
+            {
+                stopMovementForBrutalAction(actor);
+                stats.setAttackingOrSpell(false);
+                return true;
+            }
+            finish(false);
+            storage.mActionCooldown = 0.f; // Choose the next action with the new item at once.
+            storage.mBrutalPickupScan = 0.f; // Then look for a shield right beside.
+            return false;
+        }
+
+        // A knockdown, a paired clinch, paralysis, flight or a health low enough to flee end it;
+        // the ordinary combat decision then runs.
+        const float health = stats.getHealth().getCurrent();
+        const bool shouldFlee = Settings::game().mBrutalNpcFlee
+            && health < Settings::game().mBrutalNpcFleeHealthFraction * stats.getHealth().getModified();
+        if (storage.isFleeing() || shouldFlee || stats.getKnockedDown() || stats.isParalyzed()
+            || characterController.isKnockedDown() || characterController.isKnockedOut() || stats.mBrutalClinchActive
+            || !stats.mBrutalClinchOpponent.ptrOrEmpty().isEmpty())
+            return finish(false);
+
+        const bool armed = hasWeapon(actor);
+        const bool wantShield = armed && !hasShield(actor) && !holdsTwoHanded(actor);
+        if (armed && !wantShield)
+            return finish(false);
+        MWWorld::WorldModel* model = MWBase::Environment::get().getWorldModel();
+        MWWorld::Ptr item;
+        if (storage.mBrutalPickupItem.isSet())
+        {
+            item = model->getPtr(storage.mBrutalPickupItem);
+            // Taken by someone else, grabbed by the player, or the need changed.
+            if (!isBrutalPickupPresent(item) || storage.mBrutalPickupShield != wantShield
+                || (item.getClass().hasItemHealth(item) && item.getClass().getItemHealth(item) <= 0))
+            {
+                finish(false);
+                item = MWWorld::Ptr();
+                storage.mBrutalPickupScan = 0.f;
+            }
+        }
+        // A blow's reaction: keep the chosen item and resume once it ends.
+        if (characterController.isRecovery())
+        {
+            if (item.isEmpty())
+                return false;
+            stopMovementForBrutalAction(actor);
+            return true;
+        }
+        const double now = MWBase::Environment::get().getWorld()->getTimeManager()->getSimulationTime();
+        if (item.isEmpty())
+        {
+            storage.mBrutalPickupScan -= duration;
+            if (storage.mBrutalPickupScan > 0.f)
+                return false;
+            storage.mBrutalPickupScan = BrutalPickupRescan;
+            model->registerPtr(actor);
+            item = findBrutalPickup(actor, target, wantShield, now, storage.mBrutalPickupRejected);
+            if (item.isEmpty())
+                return false;
+            model->registerPtr(item);
+            storage.mBrutalPickupItem = item.getCellRef().getRefNum();
+            storage.mBrutalPickupShield = wantShield;
+            storage.mBrutalPickupLastPos = item.getRefData().getPosition().asVec3();
+            storage.mBrutalPickupStill = 0.f;
+            storage.mBrutalPickupTime = 0.f;
+            storage.mBrutalPickupStall = 0.f;
+            storage.mBrutalPickupActorLast = actor.getRefData().getPosition().asVec3();
+            stats.mBrutalPickupTarget = item.getCellRef().getRefId();
+            Log(Debug::Info) << "Brutal pickup: " << actor.getCellRef().getRefId() << " goes for "
+                             << item.getCellRef().getRefId() << " at "
+                             << (storage.mBrutalPickupLastPos - actor.getRefData().getPosition().asVec3()).length();
+        }
+        sBrutalPickupClaims[storage.mBrutalPickupItem] = { actor.getCellRef().getRefNum(), now + 1.0 };
+
+        storage.mBrutalPickupTime += duration;
+        if (storage.mBrutalPickupTime > (wantShield ? BrutalPickupShieldGiveUp : BrutalPickupWeaponGiveUp))
+        {
+            Log(Debug::Info) << "Brutal pickup: " << actor.getCellRef().getRefId() << " gives up "
+                             << item.getCellRef().getRefId();
+            return finish(true);
+        }
+        const osg::Vec3f itemPos = item.getRefData().getPosition().asVec3();
+        storage.mBrutalPickupStill
+            = (itemPos - storage.mBrutalPickupLastPos).length() > 1.5f ? 0.f : storage.mBrutalPickupStill + duration;
+        storage.mBrutalPickupLastPos = itemPos;
+
+        stats.setAttackingOrSpell(false);
+        storage.stopAttack();
+        storage.stopCombatMove();
+        osg::Vec3f toItem = itemPos - actor.getRefData().getPosition().asVec3();
+        const bool table = toItem.z() > BrutalPickupTableHeight;
+        toItem.z() = 0.f;
+        const float reach = table ? BrutalPickupTableReach : BrutalPickupReach;
+        const osg::Vec3f actorPos = actor.getRefData().getPosition().asVec3();
+        bool stalled = false;
+        if (toItem.length() > reach || !characterController.hasClearBrutalPickupReach(item))
+        {
+            stats.mBrutalPickupPhase = 1;
+            stats.setMovementFlag(CreatureStats::Flag_Run, true);
+            if (pathTo(actor, itemPos, duration, characterController.getSupportedMovementDirections(), reach * .75f))
+            {
+                // The path ended short of the item: straight at it.
+                zTurn(actor, std::atan2(toItem.x(), toItem.y()));
+                actor.getClass().getMovementSettings(actor).mPosition[1] = 1.f;
+                const float advanced = (actorPos - storage.mBrutalPickupActorLast).length();
+                storage.mBrutalPickupStall = advanced < 60.f * duration ? storage.mBrutalPickupStall + duration : 0.f;
+            }
+            else
+                storage.mBrutalPickupStall = 0.f;
+            storage.mBrutalPickupActorLast = actorPos;
+            stalled = storage.mBrutalPickupStall >= BrutalPickupStalled
+                && toItem.length() <= reach + BrutalPickupStretch
+                && characterController.hasClearBrutalPickupReach(item);
+            if (!stalled)
+                return true;
+        }
+        stopMovementForBrutalAction(actor);
+        storage.mBrutalPickupStall = 0.f;
+        stats.mBrutalPickupPhase = 1;
+        const bool facing = zTurn(actor, std::atan2(toItem.x(), toItem.y()), osg::DegreesToRadians(15.f));
+        if (!facing || storage.mBrutalPickupStill < BrutalPickupSettled)
+            return true;
+        // A scripted animation or a reaction may refuse the crouch for now; the time limit applies.
+        if (!characterController.startBrutalPickup(item))
+            return true;
+        storage.mBrutalPickupCrouching = true;
+        stats.mBrutalPickupPhase = 2;
+        return true;
     }
 
     bool AiCombat::attack(const MWWorld::Ptr& actor, const MWWorld::Ptr& target, AiCombatStorage& storage,
@@ -226,6 +711,33 @@ namespace MWMechanics
 
         float& actionCooldown = storage.mActionCooldown;
         std::unique_ptr<Action>& currentAction = storage.mCurrentAction;
+
+        // Dark Messiah's flee: a blow that leaves an NPC below the flee fraction of its health makes
+        // it run for TimeFleeStop seconds. Afterwards it fights on; a later blow below the
+        // fraction makes it run again.
+        if (Settings::game().mBrutalNpcFlee && actorClass.isNpc() && actor != getPlayer())
+        {
+            const double now = MWBase::Environment::get().getWorld()->getTimeManager()->getSimulationTime();
+            const float health = stats.getHealth().getCurrent();
+            recordBrutalNpcHealthLoss(actor, storage.mBrutalLastHealth);
+            storage.mBrutalLastHealth = health;
+            if (now < stats.mBrutalFleeUntil)
+            {
+                forceFlee = true;
+                storage.mBrutalFleeing = true;
+            }
+            else if (storage.mBrutalFleeing)
+            {
+                storage.mBrutalFleeing = false;
+                actionCooldown = 0.f; // Turn back at once rather than after the flight's cooldown.
+            }
+        }
+        else if (storage.mBrutalFleeing)
+        {
+            storage.mBrutalFleeing = false;
+            stats.mBrutalFleeUntil = 0.0;
+            actionCooldown = 0.f;
+        }
 
         if (!forceFlee)
         {
@@ -428,6 +940,30 @@ namespace MWMechanics
                             }
                         }
 
+                        // Dark Messiah's flight (FindFleeFromEnemy) runs away from the enemy:
+                        // keep the points farther from it, on the far side of the actor.
+                        if (storage.mBrutalFleeing)
+                        {
+                            const osg::Vec3f actorPos = actor.getRefData().getPosition().asVec3();
+                            const osg::Vec3f enemyPos = target.getRefData().getPosition().asVec3();
+                            const osg::Vec3f away = actorPos - enemyPos;
+                            ESM::Pathgrid::PointList awayPoints;
+                            for (ESM::Pathgrid::Point point : points)
+                            {
+                                coords.toWorld(point);
+                                const osg::Vec3f position(point.mX, point.mY, point.mZ);
+                                if ((position - enemyPos).length() > away.length() + 200.f
+                                    && (position - actorPos) * away > 0.f)
+                                    awayPoints.push_back(point);
+                            }
+                            if (!awayPoints.empty())
+                            {
+                                for (ESM::Pathgrid::Point& point : awayPoints)
+                                    coords.toLocal(point); // The common path below converts to world.
+                                points = std::move(awayPoints);
+                            }
+                        }
+
                         if (!points.empty())
                         {
                             auto& prng = MWBase::Environment::get().getWorld()->getPrng();
@@ -576,6 +1112,11 @@ namespace MWMechanics
 
         if (darkMessiahMelee(actor, isDistantCombat))
         {
+            if (actor.getClass().getCreatureStats(actor).mBrutalNpcGuardRequested)
+            {
+                mMovement.mPosition[0] = mMovement.mPosition[1] = 0.f;
+                return;
+            }
             // Dark Messiah's guards hold their ground and face the target. They do not chain
             // 0.1-0.2 s side steps: a dodge is a deliberate step, at most once per DodgeDelay,
             // against an incoming attack (base_dodge_chance) or preventively.
@@ -697,10 +1238,69 @@ namespace MWMechanics
         }
     }
 
-    void AiCombatStorage::updateDarkMessiah(float duration, const MWWorld::Ptr& target)
+    void AiCombatStorage::updateDarkMessiah(float duration, const MWWorld::Ptr& actor,
+        const MWWorld::Ptr& target, CharacterController& characterController)
     {
-        if (!Settings::game().mDarkMessiahNpcCombat)
+        auto& stats = actor.getClass().getCreatureStats(actor);
+        bool ranged = false;
+        if (mCurrentAction)
+            mCurrentAction->getCombatRange(ranged);
+        const auto& targetStats = target.getClass().getCreatureStats(target);
+        if (!darkMessiahMelee(actor, ranged) || !mCurrentAction || !mCurrentAction->getWeapon()
+            || !mCurrentAction->isAttackingOrSpell() || isFleeing())
+        {
+            stats.mBrutalNpcGuardRequested = false;
+            stats.mBrutalGuardBreakingAttack = false;
+            mDmTargetGuardTime = 0.f;
             return;
+        }
+        const double now = MWBase::Environment::get().getWorld()->getTimeManager()->getSimulationTime();
+        const bool exhausted = Settings::game().mBrutalStamina && stats.getFatigue().getCurrent() <= 0.f;
+        const bool able = !stats.isDead() && !stats.isParalyzed() && !stats.getKnockedDown()
+            && !stats.mBrutalClinchActive && now >= stats.mBrutalGuardBrokenUntil && !exhausted && mLOS;
+        // A shield bearer covers itself from a player it sees drawing a bow or winding up a throw, at any range.
+        const bool missileThreat = able && target == getPlayer() && MWMechanics::physicalProjectiles()
+            && carriesShield(actor) && drawsMissile(target);
+        const bool available = (able && getDistanceToBounds(actor, target) <= mAttackRange + 48.f) || missileThreat;
+        // Count only a continuous guard the NPC can see at close range. A
+        // newly raised guard starts over even if the lowered frame fell between updates.
+        const bool observingGuard = available && target == getPlayer() && targetStats.mBrutalBlockRequested
+            && targetStats.mBrutalBlockRaised;
+        mDmTargetGuardTime = observingGuard
+            ? std::min(mDmTargetGuardTime + duration, static_cast<float>(now - targetStats.mBrutalBlockRaisedAt))
+            : 0.f;
+        if (stats.mBrutalNpcGuardRequested)
+        {
+            // A visible windup/release is still pressure even after the player
+            // has released the input. Keep the braced defence through that
+            // attack, while the absolute cap still forces a counterattack gap.
+            const bool incomingAttack
+                = MWBase::Environment::get().getMechanicsManager()->isAttackingOrSpell(target);
+            if (missileThreat)
+                stats.mBrutalGuardUntil = std::max(stats.mBrutalGuardUntil, now + .6);
+            else if (!available || now >= stats.mBrutalGuardUntil
+                || (now - stats.mBrutalLastFastPressureAt > 1.2 && !incomingAttack))
+            {
+                stats.mBrutalNpcGuardRequested = false;
+                stats.mBrutalGuardCooldownUntil = std::max(stats.mBrutalGuardCooldownUntil, now + .8);
+                mAttackCooldown = std::min(mAttackCooldown, .25f);
+            }
+        }
+        else if (available && target == getPlayer()
+            && ((stats.mBrutalFastPressure >= 2 && now - stats.mBrutalLastFastPressureAt <= 1.8
+                    && now >= stats.mBrutalGuardReactAt)
+                || missileThreat)
+            && now >= stats.mBrutalGuardCooldownUntil
+            && characterController.readyToStartBrutalGuard())
+        {
+            stats.mBrutalNpcGuardRequested = true;
+            stats.mBrutalGuardUntil = now + 2.4;
+            stats.mBrutalFastPressure = 0;
+            mAttack = false;
+            stats.setAttackingOrSpell(false);
+            mMovement.mPosition[0] = mMovement.mPosition[1] = 0.f;
+            stopCombatMove();
+        }
         auto& prng = MWBase::Environment::get().getWorld()->getPrng();
         mDmDodgeCooldown -= duration;
         mDmPreventiveTimer -= duration;
@@ -740,6 +1340,8 @@ namespace MWMechanics
     void AiCombatStorage::startAttackIfReady(const MWWorld::Ptr& actor, CharacterController& characterController,
         const ESM::Weapon* weapon, bool distantCombat, bool canShout)
     {
+        if (actor.getClass().getCreatureStats(actor).mBrutalNpcGuardRequested)
+            return;
         if (mReadyToAttack && characterController.readyToStartAttack())
         {
             if (mAttackCooldown <= 0)
@@ -753,6 +1355,9 @@ namespace MWMechanics
                 auto& prng = MWBase::Environment::get().getWorld()->getPrng();
                 mStrength = Misc::Rng::rollClosedProbability(prng);
                 const bool darkMessiah = darkMessiahMelee(actor, distantCombat);
+                auto& stats = actor.getClass().getCreatureStats(actor);
+                stats.mBrutalGuardBreakingAttack = darkMessiah && mDmTargetGuardTime >= DmGuardChargeDelay;
+                mDmChargedHold = stats.mBrutalGuardBreakingAttack ? .45f : 0.f;
                 if (darkMessiah)
                     mStrength = 1.f; // guards play the whole authored wind-up
 
@@ -787,11 +1392,17 @@ namespace MWMechanics
 
     void AiCombatStorage::updateAttack(const MWWorld::Ptr& actor, CharacterController& characterController)
     {
+        if (actor.getClass().getCreatureStats(actor).mBrutalNpcGuardRequested)
+            mAttack = false;
         if (mAttack)
         {
-            float attackStrength = characterController.calculateWindUp();
-            mAttack
-                = !characterController.readyToPrepareAttack() && attackStrength < mStrength && attackStrength != -1.f;
+            const float attackStrength = characterController.calculateWindUp();
+            const bool heavyHold = attackStrength >= 1.f && mDmChargedHold > 0.f;
+            if (heavyHold)
+                mDmChargedHold = std::max(0.f,
+                    mDmChargedHold - MWBase::Environment::get().getFrameDuration());
+            mAttack = !characterController.readyToPrepareAttack() && attackStrength != -1.f
+                && (attackStrength < mStrength || heavyHold);
         }
         actor.getClass().getCreatureStats(actor).setAttackingOrSpell(mAttack);
     }
@@ -858,20 +1469,11 @@ namespace
             = MWBase::Environment::get().getESMStore()->get<ESM::GameSetting>();
 
         // get projectile speed (depending on weapon type)
+        const bool missile = weapType != 0;
         if (MWMechanics::getWeaponType(weapType)->mWeaponClass == ESM::WeaponType::Thrown)
-        {
-            static float fThrownWeaponMinSpeed = gmst.find("fThrownWeaponMinSpeed")->mValue.getFloat();
-            static float fThrownWeaponMaxSpeed = gmst.find("fThrownWeaponMaxSpeed")->mValue.getFloat();
-
-            projSpeed = fThrownWeaponMinSpeed + (fThrownWeaponMaxSpeed - fThrownWeaponMinSpeed) * strength;
-        }
+            projSpeed = MWMechanics::getProjectileLaunchSpeed(true, strength);
         else if (weapType != 0)
-        {
-            static float fProjectileMinSpeed = gmst.find("fProjectileMinSpeed")->mValue.getFloat();
-            static float fProjectileMaxSpeed = gmst.find("fProjectileMaxSpeed")->mValue.getFloat();
-
-            projSpeed = fProjectileMinSpeed + (fProjectileMaxSpeed - fProjectileMinSpeed) * strength;
-        }
+            projSpeed = MWMechanics::getProjectileLaunchSpeed(false, strength);
         else // weapType is 0 ==> it's a target spell projectile
         {
             projSpeed = gmst.find("fTargetSpellMaxSpeed")->mValue.getFloat();
@@ -914,7 +1516,15 @@ namespace
         else
             tCollision = 0; // speed of projectile is not enough to reach moving target
 
-        return vDirToTarget + vTargetMoveDir * tCollision;
+        osg::Vec3f aim = vDirToTarget + vTargetMoveDir * tCollision;
+        if (missile && MWMechanics::physicalProjectiles() && projSpeed > 0.f)
+        {
+            // Aim above the target by the drop over the flight. The flight time is taken along the aim line,
+            // which is close enough at the angles a bow is used at.
+            const float flight = aim.length() / projSpeed;
+            aim.z() += 0.5f * MWMechanics::getProjectileGravity() * flight * flight;
+        }
+        return aim;
     }
 
 }

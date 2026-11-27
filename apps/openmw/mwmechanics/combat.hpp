@@ -1,21 +1,31 @@
 #ifndef OPENMW_MECHANICS_COMBAT_H
 #define OPENMW_MECHANICS_COMBAT_H
 
+#include <cstdint>
 #include <string_view>
 #include <utility>
+#include <vector>
 
-namespace osg
-{
-    class Vec3f;
-}
+#include <osg/Vec3f>
 
-namespace MWWorld
+#include "../mwworld/ptr.hpp"
+
+namespace MWRender
 {
-    class Ptr;
+    struct ProjectileContact;
 }
 
 namespace MWMechanics
 {
+    inline constexpr float sNpcGuardContactMargin = 4.f;
+
+    std::uint64_t nextCombatAttackId();
+    std::uint64_t getLastCombatAttackId();
+    void restoreCombatAttackId(std::uint64_t id);
+    bool supportsRangedFinisher(int weaponType);
+
+    bool isBrutalClinchProtected(const MWWorld::Ptr& actor);
+    void recordBrutalNpcHealthLoss(const MWWorld::Ptr& actor, float previousHealth);
 
     bool applyOnStrikeEnchantment(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, const MWWorld::Ptr& object,
         const osg::Vec3f& hitPosition, const bool fromProjectile = false);
@@ -43,8 +53,32 @@ namespace MWMechanics
 
     /// @note for a thrown weapon, \a weapon == \a projectile, for bows/crossbows, \a projectile is the arrow/bolt
     /// @note \a victim may be empty (e.g. for a hit on terrain), a non-actor (environment objects) or an actor
-    void projectileHit(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, MWWorld::Ptr weapon,
-        const MWWorld::Ptr& projectile, const osg::Vec3f& hitPosition, float attackStrength);
+    /// What became of an arrow, bolt or thrown weapon that reached an actor.
+    enum class ProjectileOutcome
+    {
+        NoActor, ///< Hit no actor: the world, an object or nothing.
+        Missed, ///< Reached an actor but did not hurt it (a failed hit roll).
+        Body, ///< Hurt the actor.
+        Shield, ///< Stopped by a raised wooden, chitin or other soft shield.
+        MetalShield, ///< Stopped by a raised metal shield.
+        Parried, ///< Turned by a raised weapon.
+    };
+
+    /// With \a flight (the missile's path through the victim, from and to), a raised shield stops it only
+    /// when that path actually crosses the shield.
+    ProjectileOutcome projectileHit(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, MWWorld::Ptr weapon,
+        const MWWorld::Ptr& projectile, const osg::Vec3f& hitPosition, float attackStrength,
+        const std::pair<osg::Vec3f, osg::Vec3f>* flight = nullptr, std::uint64_t attackId = 0, bool finisherHit = false,
+        const MWRender::ProjectileContact* contact = nullptr, bool shieldHit = false);
+    bool canInterceptProjectileWithShield(const MWWorld::Ptr& blocker);
+
+    /// Brutal physical missiles: falling arcs, contact hits, sticking and glancing.
+    bool physicalProjectiles();
+    bool isMissileItem(const MWWorld::Ptr& item);
+    /// Launch speed of an arrow or bolt (thrown == false) or a thrown weapon at the given draw strength.
+    float getProjectileLaunchSpeed(bool thrown, float attackStrength, bool playerBow = false);
+    /// Downward acceleration of arrows, bolts and thrown weapons, in units per second squared.
+    float getProjectileGravity();
 
     /// Get the chance (in percent) for \a attacker to successfully hit \a victim with a given weapon skill value
     float getHitChance(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, int skillValue);
@@ -81,11 +115,31 @@ namespace MWMechanics
     // Current gameplay eye and actor-directed aim, independent of observer cameras.
     std::pair<osg::Vec3f, osg::Vec3f> getMeleeAim(const MWWorld::Ptr& actor);
 
+    osg::Vec3f getMeleeTorsoPosition(const MWWorld::Ptr& actor);
+
+    // Vanilla targeting keeps its selected victim and accuracy roll. At the hit
+    // key, only refresh physical guard contact and intervening actor cover.
+    void refreshMeleeGuardContact(const MWWorld::Ptr& actor, MWWorld::Ptr& victim,
+        osg::Vec3f& hitPosition, int& contactPart);
+
+    // A protruding guard item can be reached before its owner's body. This does
+    // not extend the distance at which the owner can receive body damage.
+    bool hasReachableNpcGuardContact(const MWWorld::Ptr& actor, const MWWorld::Ptr& target, float reach,
+        const osg::Vec3f& hitPosition, int contactPart);
+
+    struct MeleeFollowThrough
+    {
+        MWWorld::Ptr mTarget;
+        osg::Vec3f mPosition;
+        int mPart;
+        bool mSuccessful = false;
+    };
+
     // Directed surface contact for the player; AI retains its selected combat target.
     // A player melee swing ("slash", "chop", "thrust" or "any") sweeps a fan of rays
     // along its stroke; an empty swing keeps the single aimed ray.
     std::pair<MWWorld::Ptr, osg::Vec3f> getHitContact(const MWWorld::Ptr& actor, float reach, int* contactPart = nullptr,
-        std::string_view swing = {});
+        std::string_view swing = {}, std::vector<MeleeFollowThrough>* followThrough = nullptr);
 
     bool friendlyHit(const MWWorld::Ptr& attacker, const MWWorld::Ptr& target, bool complain);
 }

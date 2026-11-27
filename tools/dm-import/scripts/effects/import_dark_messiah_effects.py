@@ -45,6 +45,35 @@ SOUNDS = {
     # Dark Messiah's named slow-motion cues.
     'slow_motion_in': ('player', 'Slow_Motion_In'),
     'slow_motion_out': ('player', 'Slow_Motion_Out'),
+    # Object grab, drop, throw effort/whoosh, and small-object impact sounds.
+    'object_pickup': ('inventory', 'Take_Object'),
+    'object_drop': ('inventory', 'Drop_Object'),
+    'object_throw_voice': ('player', 'Player_throwobject'),
+    'object_throw_whoosh': ('daggers', 'Daggers_Throw'),
+    'object_hit_flesh': ('collisions', 'FleshSmall_on_All'),
+    'object_hit_wood': ('collisions', 'WoodSmall_on_Stone'),
+    'object_hit_metal': ('collisions', 'MetalSmall_on_Stone'),
+    'object_hit_stone': ('collisions', 'StoneSmall_on_Stone'),
+    'object_hit_glass': ('collisions', 'GlassSmall_on_Stone'),
+    'object_hit_pottery': ('collisions', 'PotterySmall_on_Stone'),
+    'object_hit_book': ('collisions', 'Book_on_Stone'),
+    # The hero is male in Dark Messiah. A female player character uses selected
+    # combat grunts of its female NPCs: (script, event, chosen rndwave indices).
+    'critical_voice_female': ('npc_sounds_leanna', 'Leanna_striking', (0, 3)),
+    'object_throw_voice_female': ('npc_sounds_villager_female', 'villager_femaleB_striking', (0,)),
+    # Bow and physical arrows.
+    'arrow_flesh': ('bow', 'Arrow_Hit2.Arx'),
+    'arrow_wood': ('bow', 'Arrow_on_Wood'),
+    'arrow_break': ('bow', 'Arrow_Breaks'),
+    'bow_draw': ('bow', 'Bow_Start'),
+    'bow_release': ('bow', 'Bow_End'),
+    'bow_take_arrow': ('bow', 'Bow_TakeArrow'),
+    # Dual-dagger stealth backstab: blade impacts and muffled victim death gasps.
+    'backstab_stab': ('daggers', 'Daggers_Backstab'),
+    'backstab_voice_male': ('npc_sounds_guard', 'Guard_backstabbed'),
+    'backstab_voice_male_b': ('npc_sounds_villager_male', 'villager_male_backstabbed'),
+    'backstab_voice_female': ('npc_sounds_villager_female', 'villager_female_backstabbed'),
+    'backstab_voice_orc': ('npc_sounds_orc', 'Orc_backstabbed'),
 }
 MATERIALS = {
     'blood': 'effects/blood_part_001',
@@ -56,6 +85,7 @@ MATERIALS = {
     'blood_legacy_spray': 'sprites/bloodspray',
     'spark': 'effects/spark',
     'adrenaline_ready': 'hud/fullscreen_adrenaline',
+    'damage_vignette': 'hud/fullscreen_almost_dead',
 }
 
 def sha(data): return hashlib.sha256(data).hexdigest()
@@ -72,7 +102,8 @@ def keyvalues(text):
         while pos < len(tokens):
             key = tokens[pos]; pos += 1
             if key == '}':
-                if not nested: raise ValueError('Unexpected KeyValues closing brace')
+                # Source skips a stray top-level brace; npc_sounds_leanna.txt has one.
+                if not nested: continue
                 return result
             if pos >= len(tokens): raise ValueError('Missing KeyValues value')
             value = tokens[pos]; pos += 1
@@ -127,12 +158,14 @@ def main():
         dest = args.output/path; dest.parent.mkdir(parents=True, exist_ok=True); dest.write_bytes(data)
         outputs[path] = {'sha256':sha(data), 'bytes':len(data)}
     sound_data = {}; script_cache = {}
-    for category, (script, event) in SOUNDS.items():
-        source_script = f'mm/scripts/game_sounds_{script}.txt'
+    for category, (script, event, *chosen) in SOUNDS.items():
+        source_script = f'mm/scripts/{script if script.startswith("npc_sounds_") else "game_sounds_" + script}.txt'
         if script not in script_cache: script_cache[script] = dict(keyvalues(read(source_script).decode('cp1252')))
         tree = script_cache[script][event]
+        waves = leaves(tree, 'wave')
+        if chosen: waves = [waves[index] for index in chosen[0]]
         records = []
-        for i, reference in enumerate(leaves(tree, 'wave'), 1):
+        for i, reference in enumerate(waves, 1):
             relative = re.sub(r'^[*#@~!><^)+?]+', '', reference).replace('%language%', args.language)
             original = 'mm/sound/' + relative.replace('\\','/').lower()
             data = read(original)

@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <set>
 #include <utility>
 #include <vector>
@@ -85,6 +86,63 @@ namespace MWRender
                 loops.push_back(std::move(loop));
             }
         return 0;
+    }
+
+    // An open mesh (a pauldron rim, a skirt panel, armor built from separate
+    // shells) cuts into chains rather than rings. Join the nearest free ends of
+    // those chains when they are close, so the cross-section can still be capped.
+    // Returns false if the contour branches or a gap is wider than maxGap.
+    inline bool closeOpenCutChains(std::vector<CutSegment>& segments, float maxGap)
+    {
+        std::vector<osg::Vec3f> points;
+        std::vector<int> degree;
+        const auto weld = [&](const osg::Vec3f& p) {
+            for (std::size_t i = 0; i < points.size(); ++i)
+                if ((points[i] - p).length2() < .0001f)
+                    return int(i);
+            points.push_back(p);
+            degree.push_back(0);
+            return int(points.size() - 1);
+        };
+        std::set<std::pair<int, int>> edges;
+        for (const auto& [a, b] : segments)
+        {
+            const int x = weld(a), y = weld(b);
+            if (x != y && edges.emplace(std::min(x, y), std::max(x, y)).second)
+            {
+                ++degree[x];
+                ++degree[y];
+            }
+        }
+        if (points.size() > 4096)
+            return false;
+        std::vector<int> ends;
+        for (std::size_t i = 0; i < degree.size(); ++i)
+        {
+            if (degree[i] > 2)
+                return false;
+            if (degree[i] == 1)
+                ends.push_back(int(i));
+        }
+        if (ends.empty() || ends.size() % 2)
+            return false;
+        while (!ends.empty())
+        {
+            std::size_t bestA = 0, bestB = 1;
+            float best = std::numeric_limits<float>::max();
+            for (std::size_t a = 0; a < ends.size(); ++a)
+                for (std::size_t b = a + 1; b < ends.size(); ++b)
+                {
+                    const float d = (points[ends[a]] - points[ends[b]]).length2();
+                    if (d < best) { best = d; bestA = a; bestB = b; }
+                }
+            if (best > maxGap * maxGap)
+                return false;
+            segments.emplace_back(points[ends[bestA]], points[ends[bestB]]);
+            ends.erase(ends.begin() + bestB);
+            ends.erase(ends.begin() + bestA);
+        }
+        return true;
     }
 
     inline bool hasClosedCutContour(const std::vector<std::array<osg::Vec3f, 3>>& triangles,

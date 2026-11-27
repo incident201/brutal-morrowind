@@ -3,6 +3,7 @@
 #include <osg/BufferObject>
 #include <osgUtil/CullVisitor>
 
+#include <algorithm>
 #include <cmath>
 #include <utility>
 
@@ -23,12 +24,12 @@ namespace SceneUtil
         mPatches.reserve(maxPatches);
     }
 
-    bool SurfaceDecals::addPatch(
+    SurfaceDecals::PatchId SurfaceDecals::addPatch(
         const std::vector<Anchor>& vertices, osg::StateSet* state, osg::Node::NodeMask mask)
     {
         if (!mMaxPatches || !state || !mask || vertices.empty() || vertices.size() % 3 != 0
             || vertices.size() > mMaxVerticesPerPatch)
-            return false;
+            return 0;
         for (std::size_t i = 0; i < vertices.size(); ++i)
         {
             const Anchor& anchor = vertices[i];
@@ -37,10 +38,11 @@ namespace SceneUtil
                 || std::abs(sum - 1.f) > 1e-3f || anchor.weights.x() < -1e-4f
                 || anchor.weights.y() < -1e-4f || anchor.weights.z() < -1e-4f
                 || anchor.indices != vertices[i - i % 3].indices)
-                return false;
+                return 0;
         }
 
         Patch patch;
+        patch.id = mNextPatch++;
         patch.data = { vertices, state, mask };
         for (Anchor& anchor : patch.data.vertices)
             anchor.weights /= anchor.weights.x() + anchor.weights.y() + anchor.weights.z();
@@ -51,8 +53,9 @@ namespace SceneUtil
         uv->setVertexBufferObject(new osg::VertexBufferObject);
         osg::ref_ptr<osg::Vec4Array> color = new osg::Vec4Array;
         color->push_back(osg::Vec4f(1.f, 1.f, 1.f, 1.f));
-        for (auto& geometry : patch.geometry)
+        for (auto& buffer : patch.buffers)
         {
+            auto& geometry = buffer.geometry;
             geometry = new osg::Geometry;
             geometry->setName("Surface decal");
             geometry->setNodeMask(mask);
@@ -80,7 +83,21 @@ namespace SceneUtil
             ++mEvicted;
         }
         mPatches.push_back(std::move(patch));
-        return true;
+        return mPatches.back().id;
+    }
+
+    void SurfaceDecals::removePatch(PatchId id)
+    {
+        const auto patch = std::ranges::find(mPatches, id, &Patch::id);
+        if (patch != mPatches.end())
+            mPatches.erase(patch);
+    }
+
+    void SurfaceDecals::setPatchState(PatchId id, osg::StateSet* state)
+    {
+        const auto patch = std::ranges::find(mPatches, id, &Patch::id);
+        if (patch != mPatches.end())
+            patch->data.stateSet = state;
     }
 
     void SurfaceDecals::clear()
@@ -143,7 +160,13 @@ namespace SceneUtil
 
     void SurfaceDecals::cull(const osg::Geometry& current, osgUtil::CullVisitor& visitor)
     {
-        const unsigned int traversal = visitor.getTraversalNumber();
+        if (mPatches.empty())
+            return;
+        const unsigned int bufferIndex = visitor.getTraversalNumber() % 2;
+        const auto* vertices = current.getVertexArray();
+        const auto* normals = current.getNormalArray();
+        const Source source{ vertices, normals, vertices ? vertices->getModifiedCount() : 0u,
+            normals ? normals->getModifiedCount() : 0u, current.getNormalBinding() };
         // apply(source) has already popped the source's own StateSet; reproduce
         // it here beneath the patch's explicitly supplied material overrides.
         const osg::StateSet* sourceState = current.getStateSet();
@@ -151,25 +174,30 @@ namespace SceneUtil
             visitor.pushStateSet(sourceState);
         for (Patch& patch : mPatches)
         {
-            osg::Geometry& geometry = *patch.geometry[traversal % 2];
-            if (!visitor.validNodeMask(geometry))
+            auto& buffer = patch.buffers[bufferIndex];
+            osg::Geometry& geometry = *buffer.geometry;
+            if (!patch.data.stateSet || !visitor.validNodeMask(geometry))
                 continue;
-            if (!patch.initialized || patch.lastTraversal != traversal)
+            if (buffer.source != source)
             {
                 auto* positions = static_cast<osg::Vec3Array*>(geometry.getVertexArray());
-                auto* normals = static_cast<osg::Vec3Array*>(geometry.getNormalArray());
-                patch.valid = evaluate(current, patch.data, *positions, *normals);
-                patch.initialized = true;
-                patch.lastTraversal = traversal;
-                if (patch.valid)
+                auto* patchNormals = static_cast<osg::Vec3Array*>(geometry.getNormalArray());
+                buffer.valid = evaluate(current, patch.data, *positions, *patchNormals);
+                buffer.source = source;
+                ++mEvaluations;
+                if (buffer.valid)
                 {
                     positions->dirty();
-                    normals->dirty();
+                    patchNormals->dirty();
                     geometry.dirtyBound();
                 }
             }
-            if (patch.valid)
+            if (buffer.valid)
+            {
+                if (geometry.getStateSet() != patch.data.stateSet)
+                    geometry.setStateSet(patch.data.stateSet);
                 geometry.accept(visitor);
+            }
         }
         if (sourceState)
             visitor.popStateSet();

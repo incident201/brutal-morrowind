@@ -37,6 +37,7 @@ namespace MWRender
             const AnimBlendStateData& animState, const osg::ref_ptr<const SceneUtil::AnimBlendRules>& blendRules);
 
         bool getBlendTrigger() const { return mBlendTrigger; }
+        bool isBlending() const { return mBlendTrigger || mInterpActive; }
 
     protected:
         EasingFn mEasingFn;

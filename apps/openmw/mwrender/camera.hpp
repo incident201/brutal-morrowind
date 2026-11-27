@@ -5,6 +5,7 @@
 #include <string>
 
 #include <osg/Matrix>
+#include <osg/Quat>
 #include <osg/Vec3>
 #include <osg/Vec3d>
 #include <osg/ref_ptr>
@@ -87,6 +88,7 @@ namespace MWRender
         void processViewChange();
 
         void update(float duration, bool paused = false);
+        void setPlayerDeathTime(std::optional<float> elapsed);
 
         float getCameraDistance() const { return mCameraDistance; }
         void setPreferredCameraDistance(float v) { mPreferredCameraDistance = v; }
@@ -95,10 +97,12 @@ namespace MWRender
 
         osg::Vec3d getTrackedPosition() const { return mTrackedPosition; }
         const osg::Vec3d& getPosition() const { return mPosition; }
+        // Final eye position after this frame's first-person animation correction.
+        const osg::Vec3d& getViewPosition() const { return mViewPosition; }
         void setStaticPosition(const osg::Vec3d& pos);
 
         bool isVanityOrPreviewModeEnabled() const { return mMode == Mode::Vanity || mMode == Mode::Preview; }
-        Mode getMode() const { return mMode; }
+        Mode getMode() const { return mPlayerDeathView ? Mode::FirstPerson : mMode; }
         std::optional<Mode> getQueuedMode() const { return mQueuedMode; }
         void setMode(Mode mode, bool force = true);
 
@@ -146,8 +150,19 @@ namespace MWRender
         float mExtraPitch = 0, mExtraYaw = 0, mExtraRoll = 0;
         bool mLockPitch = false, mLockYaw = false;
         osg::Vec3d mPosition;
+        osg::Vec3d mViewPosition;
         osg::Matrixf mViewMatrix;
         osg::Matrixf mProjectionMatrix;
+
+        struct PlayerDeathView
+        {
+            osg::Quat orientationInHead;
+            osg::Quat orientation;
+            osg::Vec3d eyeInHead;
+            float pitchDrop = 0.f;
+            float elapsed = 0.f;
+        };
+        std::optional<PlayerDeathView> mPlayerDeathView;
 
         float mCameraDistance, mPreferredCameraDistance;
 
@@ -171,6 +186,7 @@ namespace MWRender
         osg::Vec3d getFocalPointOffset() const;
         void updateFocalPointOffset(float duration);
         void updatePosition();
+        void updatePlayerDeathView();
 
         osg::ref_ptr<osg::Callback> mUpdateCallback;
 

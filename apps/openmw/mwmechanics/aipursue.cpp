@@ -69,9 +69,10 @@ namespace MWMechanics
             if (!MWBase::Environment::get().getWorld()->getLOS(target, actor))
                 return false;
             // Keep pursuit and the bounty intact; only defer the automatic arrest
-            // conversation. Manual activation still uses the ordinary dialogue path.
+            // conversation during a clinch. An adrenaline-charged player who is fighting
+            // is engaged instead (Actors::updateCrimePursuit); one who is not is arrested.
             const auto& targetStats = target.getClass().getCreatureStats(target);
-            if (Settings::game().mBrutalEnabled && (targetStats.mBrutalAdrenalineEffectActive || targetStats.mBrutalClinchActive))
+            if (Settings::game().mBrutalEnabled && targetStats.mBrutalClinchActive)
                 return false;
             MWBase::Environment::get().getWindowManager()->pushGuiMode(
                 MWGui::GM_Dialogue, actor); // Arrest player when reached

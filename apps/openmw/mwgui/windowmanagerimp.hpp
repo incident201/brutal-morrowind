@@ -8,6 +8,7 @@
 **/
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include <osg/ref_ptr>
@@ -360,7 +361,8 @@ namespace MWGui
         /// Darken the screen to a specified percentage
         void setBlindness(const int percent) override;
 
-        void activateHitOverlay(bool interrupt) override;
+        void activateHitOverlay(float damage, bool interrupt = true) override;
+        void setPlayerDeathFade(std::optional<float> fade);
         void setWerewolfOverlay(bool set) override;
 
         void toggleConsole() override;
@@ -466,7 +468,13 @@ namespace MWGui
         ScreenFader* mWerewolfFader;
         ScreenFader* mBlindnessFader;
         ScreenFader* mHitFader;
+        ScreenFader* mDamageVignette = nullptr;
+        ScreenFader* mCriticalHealthVignette = nullptr;
+        float mDamageVignetteTime = 0.f;
         ScreenFader* mScreenFader;
+        bool mPlayerDeathFading = false;
+        bool useDarkMessiahDamageVignette() const;
+        void updateDamageVignettes(float duration, bool gameRunning);
         DebugWindow* mDebugWindow;
         PostProcessorHud* mPostProcessorHud;
         JailScreen* mJailScreen;

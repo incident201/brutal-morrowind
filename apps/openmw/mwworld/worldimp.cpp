@@ -23,6 +23,7 @@
 #include <components/esm3/loadench.hpp>
 #include <components/esm3/loadgmst.hpp>
 #include <components/esm3/loadlevlist.hpp>
+#include <components/esm3/loadligh.hpp>
 #include <components/esm3/loadmgef.hpp>
 #include <components/esm3/loadregn.hpp>
 #include <components/esm3/loadstat.hpp>
@@ -60,6 +61,7 @@
 #include <components/settings/values.hpp>
 
 #include "../mwbase/environment.hpp"
+#include "../mwbase/inputmanager.hpp"
 #include "../mwbase/luamanager.hpp"
 #include "../mwbase/mechanicsmanager.hpp"
 #include "../mwbase/scriptmanager.hpp"
@@ -93,6 +95,7 @@
 #include "../mwphysics/collisiontype.hpp"
 #include "../mwphysics/object.hpp"
 #include "../mwphysics/physicssystem.hpp"
+#include "../mwphysics/projectile.hpp"
 #include "../mwphysics/creaturerig.hpp"
 #include "../mwphysics/ragdoll.hpp"
 
@@ -115,6 +118,25 @@ namespace MWWorld
 {
     namespace
     {
+        osg::Matrixf shieldTransform(float scale, const osg::Quat& rotation, const osg::Vec3f& position)
+        {
+            return osg::Matrixf::scale(scale, scale, scale) * osg::Matrixf::rotate(rotation)
+                * osg::Matrixf::translate(position);
+        }
+
+        ESM::Position embeddedProjectilePose(const osg::Matrixf& transform)
+        {
+            ESM::Position pose;
+            const osg::Vec3f origin = transform.getTrans();
+            const auto angles = Misc::toEulerAnglesZYX(transform.getRotate());
+            for (int axis = 0; axis < 3; ++axis)
+            {
+                pose.pos[axis] = origin[axis];
+                pose.rot[axis] = angles[axis];
+            }
+            return pose;
+        }
+
         std::vector<std::pair<GlobalVariableName, ESM::Variant>> generateDefaultGlobals()
         {
             return {
@@ -358,6 +380,8 @@ namespace MWWorld
 
     void World::clear()
     {
+        clearHeldVisual();
+        mHeldThrow.reset();
         mRagdollDroppedItems.clear();
         mWeatherManager->clear();
         mRendering->clear();
@@ -511,11 +535,6 @@ namespace MWWorld
     void World::setRandomSeed(uint32_t seed)
     {
         mRandomSeed = seed;
-    }
-
-    void World::useDeathCamera()
-    {
-        mRendering->getCamera()->setMode(MWRender::Camera::Mode::ThirdPerson);
     }
 
     MWWorld::Player& World::getPlayer()
@@ -740,6 +759,8 @@ namespace MWWorld
                 if (mRendering->pagingEnableObject(type, reference, true))
                     mWorldScene->reloadTerrain();
             }
+            if (reference.getCellRef().getCount())
+                releaseShieldProjectiles(reference);
         }
     }
 
@@ -1366,7 +1387,7 @@ namespace MWWorld
         if (ptr.getClass().isActor())
         {
             const auto& stats = ptr.getClass().getCreatureStats(ptr);
-            if (!stats.mBrutalClinchOpponent.isEmpty() && !stats.mBrutalClinchApplyingLossDamage)
+            if (!stats.mBrutalClinchOpponent.ptrOrEmpty().isEmpty() && !stats.mBrutalClinchApplyingLossDamage)
                 return;
         }
         if (auto* actor = mPhysics->getActor(ptr); actor && actor->isActive() && actor->getCollisionMode())
@@ -1383,7 +1404,7 @@ namespace MWWorld
     {
         if (!Settings::game().mBrutalRagdoll) return false;
         const auto* rig = MWPhysics::findCreatureRig(ptr);
-        if ((ptr.getType() != ESM::REC_NPC_ && !rig) || ptr == getPlayerPtr() || !ptr.isInCell()
+        if ((ptr.getType() != ESM::REC_NPC_ && !rig) || !ptr.isInCell()
             || !ptr.getRefData().isEnabled() || !ptr.getRefData().getBaseNode())
             return false;
         const auto& stats = ptr.getClass().getCreatureStats(ptr);
@@ -1393,6 +1414,12 @@ namespace MWWorld
         auto* animation = getAnimation(ptr);
         if (!animation || animation->isRagdollPose())
             return false;
+        if (ptr == getPlayerPtr())
+        {
+            const auto* playerAnimation = dynamic_cast<const MWRender::NpcAnimation*>(animation);
+            if (!playerAnimation || !playerAnimation->hasPlayerDeathView())
+                return false;
+        }
         if (rig)
         {
             for (const auto& part : rig->mParts)
@@ -1491,12 +1518,12 @@ namespace MWWorld
             // this path; neither can produce another wound burst.
             try
             {
+                animation->startCutBloodFlow();
                 const auto surfaces = animation->getDecapitationSurfacesForAudit();
                 if (surfaces.count("lowerCenter") && surfaces.count("lowerNormal")
                     && surfaces.count("upperCenter") && surfaces.count("upperNormal"))
                     mRendering->spawnBrutalDecapitation(surfaces.at("lowerCenter"), surfaces.at("lowerNormal"),
                         surfaces.at("upperCenter"), surfaces.at("upperNormal"), cutVelocity);
-                animation->startCutBloodFlow();
             }
             catch (const std::exception& error)
             {
@@ -1556,11 +1583,11 @@ namespace MWWorld
         if (freshCut)
             try
             {
+                animation->startBisectionBloodFlow();
                 if (surfaces.count("lowerCenter") && surfaces.count("lowerNormal")
                     && surfaces.count("upperCenter") && surfaces.count("upperNormal"))
                     mRendering->spawnBrutalDecapitation(surfaces.at("lowerCenter"), surfaces.at("lowerNormal"),
                         surfaces.at("upperCenter"), surfaces.at("upperNormal"), velocity);
-                animation->startBisectionBloodFlow();
             }
             catch (const std::exception& error)
             { Log(Debug::Warning) << "Could not emit bisection blood: " << error.what(); }
@@ -1615,6 +1642,7 @@ namespace MWWorld
         if (fresh)
             try
             {
+                animation->startLimbSeveringBloodFlow();
                 const auto surfaces = animation->getLimbSeveringSurfacesForAudit();
                 for (const auto& [bit, prefix] : std::array<std::pair<unsigned, std::string>, 4>{{
                     {1u,"leftLeg"}, {2u,"rightLeg"}, {4u,"leftArm"}, {8u,"rightArm"}}})
@@ -1626,7 +1654,6 @@ namespace MWWorld
                             surfaces.at(prefix+"StumpNormal"), surfaces.at(prefix+"FragmentCenter"),
                             surfaces.at(prefix+"FragmentNormal"), velocity);
                 }
-                animation->startLimbSeveringBloodFlow();
             }
             catch (const std::exception& error)
             { Log(Debug::Warning) << "Could not emit severed-limb blood: " << error.what(); }
@@ -1636,14 +1663,14 @@ namespace MWWorld
     bool World::applyNpcKick(const Ptr& ptr, const osg::Vec3f& kick, const Ptr& attacker, bool knockDown, bool slideTrip)
     {
         if (!ptr.isEmpty() && ptr.getClass().isActor()
-            && !ptr.getClass().getCreatureStats(ptr).mBrutalClinchOpponent.isEmpty())
+            && !ptr.getClass().getCreatureStats(ptr).mBrutalClinchOpponent.ptrOrEmpty().isEmpty())
             return false;
         return mPhysics->applyNpcKick(ptr,kick,attacker,false,knockDown,slideTrip);
     }
     bool World::applyNpcSuperKick(const Ptr& ptr, const osg::Vec3f& kick, const Ptr& attacker, std::uint64_t kickId)
     {
         if (!ptr.isEmpty() && ptr.getClass().isActor()
-            && !ptr.getClass().getCreatureStats(ptr).mBrutalClinchOpponent.isEmpty())
+            && !ptr.getClass().getCreatureStats(ptr).mBrutalClinchOpponent.ptrOrEmpty().isEmpty())
             return false;
         return mPhysics->applyNpcSuperKick(ptr,kick,attacker,kickId);
     }
@@ -1651,6 +1678,9 @@ namespace MWWorld
     { return mPhysics->getNpcSuperKickState(ptr); }
     std::vector<osg::Vec3f> World::getNpcRagdollDynamics(const Ptr& ptr) const
     { return mPhysics->getNpcRagdollDynamics(ptr); }
+
+    bool World::isNpcGroundedRagdoll(const Ptr& ptr) const
+    { return mPhysics->isNpcGroundedRagdoll(ptr); }
 
     std::vector<osg::Vec3f> World::getNpcRagdollState(const Ptr& ptr) const
     {
@@ -1660,15 +1690,46 @@ namespace MWWorld
     std::map<std::string, double> World::getNpcRagdollEnhancementState(const Ptr& ptr) const
     { return mPhysics->getNpcRagdollEnhancementState(ptr); }
 
-    void World::releaseNpcRagdollEquipment(const Ptr& ptr)
+    void World::getLooseEquipmentInRange(const osg::Vec3f& center, float radius, std::vector<Ptr>& out)
     {
-        if (!Settings::game().mBrutalEquipmentPhysics) return;
-        if (ptr == getPlayerPtr() || !ptr.getClass().isNpc())
-            return;
+        const float radius2 = radius * radius;
+        const auto visit = [&](const Ptr& item) {
+            if (item.getCellRef().getCount() > 0 && item.getRefData().isEnabled()
+                && item.getRefData().getBaseNode()
+                && (item.getRefData().getPosition().asVec3() - center).length2() <= radius2)
+                out.push_back(item);
+            return true;
+        };
+        for (CellStore* cell : mWorldScene->getActiveCells())
+        {
+            cell->forEachType<ESM::Weapon>(visit);
+            cell->forEachType<ESM::Armor>(visit);
+        }
+    }
+
+    void World::releaseNpcRagdollEquipment(const Ptr& ptr, bool afterKnockdown)
+    {
+        releaseNpcEquipment(ptr, afterKnockdown, nullptr);
+    }
+
+    bool World::disarmNpcWeapon(const Ptr& ptr, const osg::Vec3f& velocity)
+    {
+        return releaseNpcEquipment(ptr, false, &velocity);
+    }
+
+    bool World::releaseNpcEquipment(const Ptr& ptr, bool afterKnockdown, const osg::Vec3f* disarmVelocity)
+    {
+        if (!Settings::game().mBrutalEquipmentPhysics || !ptr.getClass().isNpc())
+            return false;
+        const bool player = ptr == getPlayerPtr();
+        const bool dead = ptr.getClass().getCreatureStats(ptr).isDead();
+        if (disarmVelocity ? (player || dead) : (player && !dead))
+            return false;
         const auto* animation = dynamic_cast<const MWRender::NpcAnimation*>(getAnimation(ptr));
-        if (!animation || !animation->isRagdollPose())
-            return;
+        if (!animation || animation->isRagdollPose() == (disarmVelocity != nullptr))
+            return false;
         auto& inventory = ptr.getClass().getInventoryStore(ptr);
+        const float dropChance = Settings::game().mBrutalRagdollWeaponDrop.get();
         struct Candidate
         {
             Ptr item;
@@ -1678,8 +1739,10 @@ namespace MWWorld
             osg::Vec3f linear, angular;
             float error = 0.f;
             bool bound = false;
+            bool allowGroundFallback = false;
             ESM::RefNum sourceObjectId;
             std::shared_ptr<const ESM::ReleasedEquipmentState> snapshot;
+            osg::Matrixf shieldProjectilesToDropped;
         };
         std::vector<Candidate> candidates;
         // Snapshot both attachments before either inventory notification rebuilds
@@ -1687,65 +1750,104 @@ namespace MWWorld
         for (const int slot : { InventoryStore::Slot_CarriedRight, InventoryStore::Slot_CarriedLeft,
                  InventoryStore::Slot_Ammunition })
         {
+            if (disarmVelocity && slot != InventoryStore::Slot_CarriedRight)
+                break;
             const auto equipped = inventory.getSlot(slot);
             if (equipped == inventory.end())
                 continue;
             const Ptr item = *equipped;
+            if (disarmVelocity && item.getType() != ESM::Weapon::sRecordId)
+                continue;
             if (std::any_of(candidates.begin(), candidates.end(), [&](const auto& candidate) { return candidate.item == item; }))
                 continue;
+            const bool inLeftHand = slot == InventoryStore::Slot_CarriedLeft && animation->getCarriedLeftShown();
+            const bool shield = item.getType() == ESM::Armor::sRecordId
+                && item.get<ESM::Armor>()->mBase->mData.mType == ESM::Armor::Shield;
+            const bool carriedLight = dead && inLeftHand && item.getType() == ESM::Light::sRecordId;
+            bool heldWeapon = false;
             if (item.getType() == ESM::Weapon::sRecordId)
             {
                 const auto* type = MWMechanics::getWeaponType(item.get<ESM::Weapon>()->mBase->mData.mType);
-                if (type->mWeaponClass == ESM::WeaponType::Ammo && slot != InventoryStore::Slot_Ammunition)
-                    continue; // Quiver/loaded ammunition is not part of the released weapon's permanent model.
+                if (disarmVelocity && type->mWeaponClass != ESM::WeaponType::Melee)
+                    continue;
+                heldWeapon = type->mWeaponClass != ESM::WeaponType::Ammo;
+                if (!heldWeapon && slot != InventoryStore::Slot_Ammunition)
+                    continue; // An ammo reference in a hand is ineligible.
             }
-            else if (item.getType() != ESM::Armor::sRecordId
-                || item.get<ESM::Armor>()->mBase->mData.mType != ESM::Armor::Shield)
+            else if (!shield && !carriedLight)
                 continue;
+            const bool guaranteed = dead && (heldWeapon || (inLeftHand && shield) || carriedLight);
+            // Loaded NPC ammunition rolls once when the body first falls.
+            if (!disarmVelocity && !guaranteed
+                && (player || afterKnockdown || Misc::Rng::rollProbability(getPrng()) >= dropChance))
+                continue;
+            Candidate candidate;
+            candidate.item = item;
+            candidate.slot = slot;
+            // The equipped throwing-weapon stack is one real held item
+            // reference. Loaded ammunition releases only its visible unit.
+            candidate.releaseCount = slot == InventoryStore::Slot_Ammunition
+                ? 1 : item.getCellRef().getCount();
+            candidate.sourceObjectId = item.getCellRef().getRefNum();
+            candidate.bound = MWBase::Environment::get().getMechanicsManager()->isBoundItem(item);
+            candidate.allowGroundFallback = guaranteed && !player;
             try
             {
-                Candidate candidate;
-                candidate.item = item;
-                candidate.slot = slot;
-                // The equipped throwing-weapon stack is one real held item
-                // reference. Loaded ammunition releases only its visible unit.
-                candidate.releaseCount = slot == InventoryStore::Slot_Ammunition
-                    ? 1 : item.getCellRef().getCount();
-                candidate.sourceObjectId = item.getCellRef().getRefNum();
                 osg::Matrixf frame;
-                if (!mPhysics->getRagdollEquipmentFrame(ptr, animation->getReleasedEquipmentOwnerIsLeft(slot),
-                        frame, candidate.linear, candidate.angular))
-                    continue;
-                const auto angles = Misc::toEulerAnglesZYX(frame);
-                const auto origin = frame.getTrans();
-                for (int axis = 0; axis < 3; ++axis)
+                const bool leftHand = animation->getReleasedEquipmentOwnerIsLeft(slot);
+                bool hasFrame = false;
+                if (disarmVelocity)
                 {
-                    candidate.position.pos[axis] = origin[axis];
-                    candidate.position.rot[axis] = angles[axis];
+                    if (const auto hand = animation->getBoneWorldMatrix(leftHand ? "Bip01 L Hand" : "Bip01 R Hand"))
+                    {
+                        frame = *hand;
+                        candidate.linear = *disarmVelocity;
+                        candidate.angular.set(3.f, 5.f, 2.f);
+                        hasFrame = true;
+                    }
                 }
-                // Use the exact representable engine root from the outset. Race
-                // scale, attachment offsets, mirror and skinning stay in arrays.
-                const float scale = item.getCellRef().getScale();
-                const auto itemRoot = osg::Matrixf::scale(scale, scale, scale)
-                    * osg::Matrixf::rotate(Misc::Convert::makeOsgQuat(candidate.position))
-                    * osg::Matrixf::translate(origin);
-                // Inventory weight is a gameplay encumbrance value, not the
-                // anatomical body's native mass. Use a local modest proxy mass.
-                const float mass = std::clamp(item.getClass().getWeight(item) * .1f, .05f, 20.f);
-                candidate.snapshot = animation->captureReleasedEquipment(slot, itemRoot, mass, candidate.error);
-                if (!candidate.snapshot)
-                    continue; // Only currently visible carried attachments are released.
-                candidate.bound = MWBase::Environment::get().getMechanicsManager()->isBoundItem(item);
-                candidates.push_back(std::move(candidate));
+                else
+                    hasFrame = mPhysics->getRagdollEquipmentFrame(ptr, leftHand, frame, candidate.linear, candidate.angular);
+                if (hasFrame)
+                {
+                    const auto angles = Misc::toEulerAnglesZYX(frame);
+                    const auto origin = frame.getTrans();
+                    for (int axis = 0; axis < 3; ++axis)
+                    {
+                        candidate.position.pos[axis] = origin[axis];
+                        candidate.position.rot[axis] = angles[axis];
+                    }
+                    // Use the exact representable engine root from the outset. Race
+                    // scale, attachment offsets, mirror and skinning stay in arrays.
+                    const float scale = item.getCellRef().getScale();
+                    const auto itemRoot = shieldTransform(scale, Misc::Convert::makeOsgQuat(candidate.position), origin);
+                    // Inventory weight is a gameplay encumbrance value, not the
+                    // anatomical body's native mass. Use a local modest proxy mass.
+                    const float mass = std::clamp(item.getClass().getWeight(item) * .1f, .05f, 20.f);
+                    if (shield && inLeftHand
+                        && !item.getRefData().getAnimationState().mEquippedShieldProjectiles.empty())
+                        candidate.shieldProjectilesToDropped = animation->getShieldReleaseTransform(itemRoot);
+                    candidate.snapshot = animation->captureReleasedEquipment(slot, itemRoot, mass, candidate.error);
+                }
             }
             catch (const std::exception& error)
             {
-                Log(Debug::Warning) << "Ragdoll equipment release rejected for " << item.getCellRef().getRefId()
+                Log(Debug::Warning) << "Equipment release rejected for " << item.getCellRef().getRefId()
                     << ": " << error.what();
+                if (!candidate.allowGroundFallback)
+                    continue;
             }
+            if (!candidate.snapshot)
+            {
+                if (!guaranteed)
+                    continue;
+                // A missing or unsupported hand attachment still leaves a real item to drop.
+                candidate.position = getGroundDropPosition(ptr);
+                candidate.error = 0.f;
+            }
+            candidates.push_back(std::move(candidate));
         }
-        for (const auto& candidate : candidates)
-        {
+        const auto release = [&](const Candidate& candidate, bool& retryOnGround) {
             Ptr dropped;
             bool committed = false;
             bool published = false;
@@ -1794,16 +1896,22 @@ namespace MWWorld
                         || dropped.getCellRef().getSoul() != candidate.item.getCellRef().getSoul())
                         throw std::runtime_error("Released equipment instance data changed during copy");
                     dropped.getRefData().setReleasedEquipment(candidate.snapshot);
-                    initObjectInCell(dropped, *cell, false, false);
-                    if (!dropped.getRefData().getBaseNode() || !getAnimation(dropped)
-                        || mPhysics->getReleasedEquipmentState(dropped).size() < 4)
-                        throw std::runtime_error("Released equipment scene/physics preparation failed");
-                    mPhysics->initializeReleasedEquipment(dropped, ptr, candidate.linear, candidate.angular);
-                    // Test hook: exercise rollback only
-                    // after rendering, body creation and grip motion all exist.
-                    if (const char* failure = std::getenv("OPENMW_RAGDOLL_RELEASE_TEST_FAIL");
-                        failure && std::string_view(failure) == "prepared")
-                        throw std::runtime_error("Injected released equipment preparation failure");
+                    retryOnGround = candidate.allowGroundFallback && candidate.snapshot;
+                    initObjectInCell(dropped, *cell, !candidate.snapshot, false);
+                    if (!dropped.getRefData().getBaseNode())
+                        throw std::runtime_error("Released equipment scene preparation failed");
+                    if (candidate.snapshot)
+                    {
+                        if (!getAnimation(dropped) || mPhysics->getReleasedEquipmentState(dropped).size() < 4)
+                            throw std::runtime_error("Released equipment physics preparation failed");
+                        mPhysics->initializeReleasedEquipment(dropped, ptr, candidate.linear, candidate.angular);
+                        retryOnGround = false;
+                        // Test hook: exercise rollback only
+                        // after rendering, body creation and grip motion all exist.
+                        if (const char* failure = std::getenv("OPENMW_RAGDOLL_RELEASE_TEST_FAIL");
+                            failure && std::string_view(failure) == "prepared")
+                            throw std::runtime_error("Injected released equipment preparation failure");
+                    }
                 }
                 // Bound objects dissipate instead of becoming permanent loot:
                 // native bound expiry only searches the original inventory.
@@ -1823,10 +1931,12 @@ namespace MWWorld
                 publish();
                 if (!dropped.isEmpty())
                 {
-                    const auto dynamics = mPhysics->getReleasedEquipmentState(dropped);
+                    const auto dynamics = candidate.snapshot ? mPhysics->getReleasedEquipmentState(dropped)
+                                                             : std::vector<osg::Vec3f>();
                     auto& entries = mRagdollDroppedItems[ptr.getCellRef().getRefNum()];
                     entries.push_back({ SafePtr(dropped), candidate.item.getCellRef().getRefId(), candidate.slot,
-                        dynamics[1], dynamics[2], candidate.error,
+                        dynamics.size() > 2 ? dynamics[1] : osg::Vec3f(), dynamics.size() > 2 ? dynamics[2] : osg::Vec3f(),
+                        candidate.error,
                         float(candidate.item.getCellRef().getCharge()), float(dropped.getCellRef().getCharge()),
                         candidate.item.getCellRef().getEnchantmentCharge(), dropped.getCellRef().getEnchantmentCharge(), true,
                         candidate.sourceObjectId });
@@ -1883,10 +1993,30 @@ namespace MWWorld
                         mWorldModel.registerPtr(candidate.item);
                     }
                 }
-                Log(Debug::Warning) << "Ragdoll equipment release failed for " << candidate.item.getCellRef().getRefId()
+                Log(Debug::Warning) << "Equipment release failed for " << candidate.item.getCellRef().getRefId()
                     << ": " << error.what();
             }
+            if (committed && !dropped.isEmpty())
+                releaseShieldProjectiles(dropped, candidate.snapshot ? candidate.shieldProjectilesToDropped : osg::Matrixf());
+            return committed;
+        };
+        bool released = false;
+        for (auto& candidate : candidates)
+        {
+            bool retryOnGround = false;
+            bool committed = release(candidate, retryOnGround);
+            if (retryOnGround)
+            {
+                // The failed physical instance was rolled back. Use the ordinary
+                // world model when the captured geometry cannot be restored.
+                candidate.snapshot.reset();
+                candidate.position = getGroundDropPosition(ptr);
+                candidate.error = 0.f;
+                committed = release(candidate, retryOnGround);
+            }
+            released = released || committed;
         }
+        return released;
     }
 
     std::vector<RagdollDroppedItem> World::getNpcRagdollDroppedItems(const Ptr& ptr) const
@@ -1917,6 +2047,108 @@ namespace MWWorld
         mPhysics->applyObjectImpulse(ptr, impulse, mass);
     }
 
+    bool World::canHoldObject(const ConstPtr& ptr) const
+    {
+        return mPhysics && mPhysics->canHoldObject(ptr);
+    }
+
+    // Allow one unit for motion between the Lua targeting frame and the queued native pickup.
+    static constexpr float sGrabReach = 156.f;
+
+    std::pair<Ptr, unsigned> World::findDetachedGrabFragment(const Ptr& player,
+        const osg::Vec3f& from, const osg::Vec3f& to) const
+    {
+        if (!mPhysics || player != mPlayer->getPlayer() || (to - from).length2() > sGrabReach * sGrabReach)
+            return {};
+        return mPhysics->findDetachedGrabFragment(player, from, to);
+    }
+
+    static bool grabControlsEnabled()
+    {
+        const auto input = MWBase::Environment::get().getInputManager();
+        return input->getControlSwitch("playercontrols") && input->getControlSwitch("playerfighting");
+    }
+
+    bool World::holdObject(const Ptr& ptr, const Ptr& holder, MWPhysics::HeldObjectInfo* info, unsigned fragment)
+    {
+        if (!mPhysics || holder != getPlayerPtr() || mPhysics->hasHeldObject() || !grabControlsEnabled()
+            || !ptr.isInCell() || !holder.isInCell()
+            || ptr.getCell()->getCell()->getWorldSpace() != holder.getCell()->getCell()->getWorldSpace()
+            || !ptr.getRefData().getBaseNode() || !ptr.getRefData().isEnabled())
+            return false;
+        const auto* camera = mRendering->getCamera();
+        const osg::Vec3f eye(camera->getViewPosition());
+        if (fragment)
+        {
+            const auto* corpse = dynamic_cast<const MWRender::NpcAnimation*>(getAnimation(ptr));
+            const auto viewToWorld = osg::Matrixf::inverse(camera->getViewMatrix());
+            const osg::Vec3f end = osg::Vec3f(0, 0, -sGrabReach) * viewToWorld;
+            if (!corpse || corpse->getDetachedFragmentNodes(fragment).empty()
+                || mPhysics->findDetachedGrabFragment(holder, eye, end) != std::make_pair(ptr, fragment))
+                return false;
+        }
+        else
+        {
+            const auto bounds = mRendering->getCullSafeBoundingBox(ptr);
+            if (!bounds.valid())
+                return false;
+            osg::Vec3f closest;
+            for (unsigned axis = 0; axis < 3; ++axis)
+                closest[axis] = std::clamp(eye[axis], bounds._min[axis], bounds._max[axis]);
+            if ((closest - eye).length2() > sGrabReach * sGrabReach)
+                return false;
+        }
+        resolveHeldThrow(false);
+        return mPhysics->holdObject(ptr, holder, info, fragment);
+    }
+
+    bool World::releaseHeldObject(const Ptr& holder, const osg::Vec3f& eyePos, const osg::Vec3f& throwDir,
+        float throwSpeed, bool adrenaline, std::uint64_t throwId)
+    {
+        const auto rejectThrow = [&] {
+            if (throwId != 0)
+                MWBase::Environment::get().getLuaManager()->objectThrowResolved(holder, throwId, false);
+        };
+        if (!mPhysics || holder != getPlayerPtr() || !mPhysics->hasHeldObject())
+        {
+            rejectThrow();
+            return false;
+        }
+        resolveHeldThrow(false);
+        if (throwSpeed > 0.f && grabControlsEnabled() && Settings::game().mBrutalObjectGrab
+            && !holder.getClass().getCreatureStats(holder).isDead())
+        {
+            mHeldThrow = HeldThrow{ SafePtr(mPhysics->getHeldObject()), throwSpeed, adrenaline, throwId };
+            return true;
+        }
+        rejectThrow();
+        clearHeldVisual();
+        return mPhysics->releaseHeldObject(holder, eyePos, throwDir, 0.f, false);
+    }
+
+    Ptr World::getHeldObject() const
+    {
+        return mPhysics ? mPhysics->getHeldObject() : Ptr();
+    }
+
+    void World::processThrownObjects()
+    {
+        if (!mPhysics)
+            return;
+        auto lua = MWBase::Environment::get().getLuaManager();
+        for (const auto& hit : mPhysics->takeThrownObjectHits())
+        {
+            const auto res = mPhysics->applyNpcThrownHit(hit);
+            if (res.applied)
+                lua->thrownObjectHit(hit.attacker, hit.item, hit.victim, hit.hitPos, hit.hitNormal, hit.velocity,
+                    hit.mass, hit.adrenaline, res.headHit, res.knockedDown, res.reaction, res.damage);
+        }
+        const Ptr player = getPlayerPtr();
+        for (const auto& impact : mPhysics->takeDynamicImpacts())
+            if (!player.isEmpty())
+                lua->dynamicObjectImpact(player, impact.item, impact.position, impact.normal, impact.speed);
+    }
+
     void World::syncDynamicObject(const Ptr& ptr, const osg::Vec3f& position, const osg::Quat& rotation,
         const osg::Vec3f& renderedPosition, const osg::Quat& renderedRotation, bool authoritativeChanged)
     {
@@ -1937,6 +2169,35 @@ namespace MWWorld
         // physics step. Never feed this transform into RefData or Bullet.
         mRendering->moveObject(updated, renderedPosition);
         mRendering->rotateObject(updated, renderedRotation);
+        auto& links = updated.getRefData().getAnimationState().mShieldProjectiles;
+        if (!links.empty())
+        {
+            const float scale = updated.getCellRef().getScale();
+            const auto frame = shieldTransform(scale, rotation, position);
+            const auto renderedFrame = shieldTransform(scale, renderedRotation, renderedPosition);
+            std::erase_if(links, [&](const ESM::AnimationState::ShieldProjectile& link) {
+                Ptr missile = mWorldModel.getPtr(link.mReference);
+                if (missile.isEmpty())
+                    return false;
+                if (!missile.isInCell() || missile.mRef->isDeleted() || mPhysics->getObject(missile))
+                    return true;
+                const osg::Matrixf local(link.mTransform.data());
+                if (authoritativeChanged)
+                {
+                    const auto pose = embeddedProjectilePose(local * frame);
+                    if (missile.getCell() != updated.getCell())
+                        missile = moveObject(missile, updated.getCell(), pose.asVec3(), false);
+                    missile.getRefData().setPosition(pose);
+                }
+                if (missile.getRefData().getBaseNode())
+                {
+                    const auto visible = local * renderedFrame;
+                    mRendering->moveObject(missile, visible.getTrans());
+                    mRendering->rotateObject(missile, visible.getRotate());
+                }
+                return false;
+            });
+        }
         if (authoritativeChanged)
             if (const auto* object = mPhysics->getObject(updated))
                 updateNavigatorObject(*object);
@@ -1963,6 +2224,7 @@ namespace MWWorld
         mDiscardMovements = false;
         mPhysics->moveActors();
         mPhysics->moveDynamicObjects();
+        processThrownObjects();
         mPhysics->moveNpcRagdolls(duration);
     }
 
@@ -2185,6 +2447,118 @@ namespace MWWorld
     void World::sampleNpcRagdollAnimation(float duration)
     {
         mPhysics->sampleNpcRagdollAnimation(mTimeManager->isPaused() ? 0.f : duration);
+    }
+
+    void World::clearHeldVisual()
+    {
+        for (const auto& [node, mask] : mHeldVisuals)
+            if (node.valid())
+            {
+                node->setNodeMask(mask);
+                node->removeCullCallback(mHeldVisualCull);
+            }
+        mHeldVisuals.clear();
+        mHeldVisualCull = nullptr;
+    }
+
+    void World::resolveHeldThrow(bool released)
+    {
+        if (!mHeldThrow)
+            return;
+        const auto throwId = mHeldThrow->id;
+        mHeldThrow.reset();
+        if (throwId != 0)
+            MWBase::Environment::get().getLuaManager()->objectThrowResolved(getPlayerPtr(), throwId, released);
+    }
+
+    void World::samplePlayerObjectGrip(float duration, const osg::FrameStamp& frameStamp)
+    {
+        const Ptr item = mPhysics->getHeldObject();
+        if (item.isEmpty())
+        {
+            clearHeldVisual();
+            resolveHeldThrow(false);
+            return;
+        }
+        const Ptr player = getPlayerPtr();
+        auto* animation = dynamic_cast<MWRender::NpcAnimation*>(getAnimation(player));
+        const auto* camera = mRendering->getCamera();
+        auto* node = item.getRefData().getBaseNode();
+        const unsigned fragment = mPhysics->getHeldFragment();
+        auto* corpse = fragment ? dynamic_cast<MWRender::NpcAnimation*>(getAnimation(item)) : nullptr;
+        const auto nodes = fragment
+            ? (corpse ? corpse->getDetachedFragmentNodes(fragment) : std::vector<osg::Node*>())
+            : std::vector<osg::Node*>{ node };
+        if (!node || !item.getRefData().isEnabled() || !item.isInCell() || !player.isInCell()
+            || item.getCell()->getCell()->getWorldSpace() != player.getCell()->getCell()->getWorldSpace()
+            || !isFirstPerson() || nodes.empty() || !grabControlsEnabled() || !Settings::game().mBrutalObjectGrab
+            || player.getClass().getCreatureStats(player).isDead() || isSwimming(player))
+        {
+            clearHeldVisual();
+            resolveHeldThrow(false);
+            mPhysics->releaseHeldObject(player, camera->getPosition(), camera->getOrient() * osg::Vec3f(0, 1, 0), 0.f, false);
+            return;
+        }
+        if (animation)
+        {
+            osg::Vec3f position;
+            osg::Quat rotation;
+            bool lifted = false;
+            const osg::Vec3f eye(camera->getViewPosition());
+            const auto sweep = [&](const osg::Vec3f& from, const osg::Vec3f& to, const osg::Quat& orientation) {
+                return mPhysics->sweepHeldObject(from, to, orientation);
+            };
+            if (animation->fitHeldObjectGrip(mPhysics->getHeldGrip(), mPhysics->getHeldPickupTransform(),
+                    eye, camera->getOrient(), sweep, frameStamp, position, rotation, lifted))
+            {
+                mPhysics->placeHeldObject(position, rotation, mTimeManager->isPaused() ? 0.f : duration);
+                if (corpse)
+                    mPhysics->poseHeldFragment(*corpse);
+                else
+                {
+                    mRendering->moveObject(item, position);
+                    mRendering->rotateObject(item, rotation);
+                }
+                if (lifted && (mHeldVisuals.size() != nodes.size()
+                    || !std::equal(nodes.begin(), nodes.end(), mHeldVisuals.begin(),
+                        [](auto* current, const auto& tracked) { return current == tracked.first.get(); })))
+                {
+                    clearHeldVisual();
+                    mHeldVisualCull = animation->makeHeldObjectCullCallback();
+                    for (auto* visual : nodes)
+                    {
+                        mHeldVisuals.emplace_back(visual, visual->getNodeMask());
+                        visual->setNodeMask(MWRender::Mask_Player);
+                        visual->addCullCallback(mHeldVisualCull);
+                    }
+                }
+            }
+        }
+        if (!mHeldThrow || mHeldThrow->item.ptrOrEmpty() != item)
+        {
+            resolveHeldThrow(false);
+            return;
+        }
+        const std::string group = mPhysics->getHeldGrip().dual ? "brutal_throw_dual" : "brutal_throw_solo";
+        const float release = animation ? animation->getTextKeyTime(group + ": release") : -1.f;
+        const float time = animation ? animation->getCurrentTime(group) : -1.f;
+        const bool atRelease = release >= 0.f && time + .0001f >= release;
+        if (mTimeManager->isPaused())
+            return;
+        mHeldThrow->wait += duration;
+        if (release >= 0.f && !atRelease && mHeldThrow->wait < .45f)
+            return;
+        clearHeldVisual();
+        // Follow live player aim at release, without the throw animation's camera
+        // pitch/yaw/roll. Its downward follow-through must not steer the object
+        // into the floor. Use the same aim when the release-key fallback fires.
+        const auto aimOrientation = osg::Quat(camera->getPitch(), osg::Vec3f(1, 0, 0))
+            * osg::Quat(camera->getYaw(), osg::Vec3f(0, 0, 1));
+        const osg::Vec3f aim = aimOrientation * osg::Vec3f(0, 1, 0);
+        const osg::Vec3f eye(camera->getViewPosition());
+        const bool released
+            = mPhysics->releaseHeldObject(player, eye, aim, mHeldThrow->speed, mHeldThrow->adrenaline);
+        resolveHeldThrow(released);
     }
 
     void World::samplePlayerSwordWallContact(float duration, const osg::FrameStamp& frameStamp)
@@ -2591,8 +2965,40 @@ namespace MWWorld
         MWWorld::Ptr dropped = object.getClass().moveToCell(object, *cell, pos);
 
         initObjectInCell(dropped, *cell, adjustPos);
-
+        releaseShieldProjectiles(dropped);
         return dropped;
+    }
+
+    void World::releaseShieldProjectiles(const Ptr& shield, const osg::Matrixf& toDropped)
+    {
+        auto& animation = shield.getRefData().getAnimationState();
+        auto& carried = animation.mEquippedShieldProjectiles;
+        if (carried.empty())
+            return;
+        auto& released = animation.mShieldProjectiles;
+        released.reserve(std::min(ESM::AnimationState::MaxStuckProjectiles, released.size() + carried.size()));
+        const auto& pose = shield.getRefData().getPosition();
+        const auto frame = shieldTransform(shield.getCellRef().getScale(), Misc::Convert::makeOsgQuat(pose), pose.asVec3());
+        std::erase_if(carried, [&](const auto& entry) {
+            if (released.size() >= ESM::AnimationState::MaxStuckProjectiles)
+                return false;
+            try
+            {
+                ManualRef projectile(mStore, entry.mItem, 1);
+                const osg::Matrixf local = osg::Matrixf(entry.mTransform.data()) * toDropped;
+                const Ptr missile = placeObject(
+                    projectile.getPtr(), shield.getCell(), embeddedProjectilePose(local * frame));
+                auto& link = released.emplace_back();
+                link.mReference = missile.getCellRef().getRefNum();
+                std::copy_n(local.ptr(), link.mTransform.size(), link.mTransform.begin());
+                return true;
+            }
+            catch (const std::exception& error)
+            {
+                Log(Debug::Warning) << "Could not release embedded projectile " << entry.mItem << ": " << error.what();
+                return false;
+            }
+        });
     }
 
     void World::initObjectInCell(const Ptr& object, CellStore& cell, bool adjustPos, bool notifyScripts)
@@ -2624,20 +3030,22 @@ namespace MWWorld
                 ESM::Position pos = object.getRefData().getPosition();
                 bounds.set(bounds._min - pos.asVec3(), bounds._max - pos.asVec3());
 
-                osg::Vec3f adjust(
-                    (bounds.xMin() + bounds.xMax()) / 2, (bounds.yMin() + bounds.yMax()) / 2, bounds.zMin());
-                pos.pos[0] -= adjust.x();
-                pos.pos[1] -= adjust.y();
-                pos.pos[2] -= adjust.z();
+                // A staged drop stays in its planned cell until the inventory
+                // transfer commits. Repositioning it across a cell edge here
+                // could publish the new reference to scripts too early.
+                if (notifyScripts)
+                {
+                    pos.pos[0] -= (bounds.xMin() + bounds.xMax()) / 2;
+                    pos.pos[1] -= (bounds.yMin() + bounds.yMax()) / 2;
+                }
+                pos.pos[2] -= bounds.zMin();
                 moveObject(object, pos.asVec3());
             }
         }
     }
 
-    MWWorld::Ptr World::dropObjectOnGround(const Ptr& actor, const Ptr& object, int amount, bool copy)
+    ESM::Position World::getGroundDropPosition(const Ptr& actor) const
     {
-        MWWorld::CellStore* cell = actor.getCell();
-
         ESM::Position pos = actor.getRefData().getPosition();
         // We want only the Z part of the actor's rotation
         pos.rot[0] = 0;
@@ -2652,10 +3060,27 @@ namespace MWWorld
         MWRender::RenderingManager::RayResult result = mRendering->castRay(orig, orig + dir * len, true, true);
         if (result.mHit)
             pos.pos[2] = result.mHitPointWorld.z();
+        return pos;
+    }
+
+    MWWorld::Ptr World::dropObjectOnGround(const Ptr& actor, const Ptr& object, int amount, bool copy)
+    {
+        MWWorld::CellStore* cell = actor.getCell();
+        const ESM::Position pos = getGroundDropPosition(actor);
 
         // copy the object and set its count
         Ptr dropped
             = copy ? copyObjectToCell(object, cell, pos, amount, true) : moveObjectToCell(object, cell, pos, true);
+        // MWScript Drop copies a stack after removing it from the inventory, even when it transferred every item.
+        if (copy && object.getContainerStore() && object.getCellRef().getCount() == 0)
+        {
+            auto& source = object.getRefData().getAnimationState().mEquippedShieldProjectiles;
+            if (!source.empty())
+            {
+                dropped.getRefData().getAnimationState().mEquippedShieldProjectiles = std::exchange(source, {});
+                releaseShieldProjectiles(dropped);
+            }
+        }
 
         if (actor == mPlayer->getPlayer()) // Only call if dropped by player
             PCDropped(dropped);
@@ -3012,13 +3437,14 @@ namespace MWWorld
                 continue;
 
             MWMechanics::DynamicStat<float> health = stats.getHealth();
-            health.setCurrent(health.getCurrent() - healthPerSecond * MWBase::Environment::get().getFrameDuration());
+            const float damage = healthPerSecond * MWBase::Environment::get().getFrameDuration();
+            health.setCurrent(health.getCurrent() - damage);
             stats.setHealth(health);
 
             if (healthPerSecond > 0.0f)
             {
                 if (actor == getPlayerPtr())
-                    MWBase::Environment::get().getWindowManager()->activateHitOverlay(false);
+                    MWBase::Environment::get().getWindowManager()->activateHitOverlay(damage, false);
 
                 auto healthDamage = ESM::RefId::stringRefId("Health Damage");
                 if (!MWBase::Environment::get().getSoundManager()->getSoundPlaying(actor, healthDamage))
@@ -3046,13 +3472,14 @@ namespace MWWorld
                 continue;
 
             MWMechanics::DynamicStat<float> health = stats.getHealth();
-            health.setCurrent(health.getCurrent() - healthPerSecond * MWBase::Environment::get().getFrameDuration());
+            const float damage = healthPerSecond * MWBase::Environment::get().getFrameDuration();
+            health.setCurrent(health.getCurrent() - damage);
             stats.setHealth(health);
 
             if (healthPerSecond > 0.0f)
             {
                 if (actor == getPlayerPtr())
-                    MWBase::Environment::get().getWindowManager()->activateHitOverlay(false);
+                    MWBase::Environment::get().getWindowManager()->activateHitOverlay(damage, false);
 
                 auto healthDamage = ESM::RefId::stringRefId("Health Damage");
                 if (!MWBase::Environment::get().getSoundManager()->getSoundPlaying(actor, healthDamage))
@@ -3590,7 +4017,8 @@ namespace MWWorld
         // the projectile. So we cast a 1-yard-length ray from shooter to launch position and check if there are
         // collisions in this area.
         // TODO: as a better solutuon we should handle projectiles during physics update, not during world update.
-        const osg::Vec3f sourcePos = worldPos + orient * osg::Vec3f(0, -1, 0) * 64.f;
+        const osg::Vec3f forward = orient * osg::Vec3f(0, 1, 0);
+        const osg::Vec3f sourcePos = worldPos - forward * 64.f;
 
         // For AI actors, get combat targets to use in the ray cast. Only those targets will return a positive hit
         // result.
@@ -3601,10 +4029,28 @@ namespace MWWorld
         // Check for impact, if yes, handle hit
         MWPhysics::RayCastingResult result = mPhysics->castRay(
             sourcePos, worldPos, { actor }, targetActors, 0xff, MWPhysics::CollisionType_Projectile);
+        const bool shieldHit = mProjectileManager->checkLaunchShield(actor, sourcePos, worldPos, targetActors, result);
 
         if (result.mHit)
         {
-            MWMechanics::projectileHit(actor, result.mHitObject, bow, projectile, result.mHitPos, attackStrength);
+            // A close enemy can extend past the muzzle. Start a locked shot just before the contact
+            // on the clear part of the launch segment so its flight and slow motion still precede the hit.
+            if (!shieldHit && actor == MWMechanics::getPlayer() && !result.mHitObject.isEmpty()
+                && result.mHitObject.getClass().isActor())
+            {
+                const float lead = std::min(24.f, (result.mHitPos - sourcePos).length());
+                const osg::Vec3f clearPos = result.mHitPos - forward * lead;
+                if (!isUnderwater(actor.getCell(), clearPos)
+                    && mProjectileManager->launchProjectile(
+                        actor, projectile, clearPos, orient, bow, speed, attackStrength, result.mHitObject))
+                    return;
+            }
+            const auto hitType = shieldHit ? MWPhysics::ProjectileHitType::Shield
+                                           : MWPhysics::getProjectileHitType(result.mCollisionGroup);
+            if (hitType == MWPhysics::ProjectileHitType::Water)
+                mRendering->emitWaterRipple(result.mHitPos);
+            mProjectileManager->landProjectile(actor, result.mHitObject, bow, projectile, result.mHitPos,
+                result.mHitNormal, forward * speed, attackStrength, hitType);
             return;
         }
 

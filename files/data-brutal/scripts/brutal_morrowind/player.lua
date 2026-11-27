@@ -38,6 +38,9 @@ local function clinching()
     local s=I.BrutalClinch.status()
     return s.active or s.pending
 end
+local function carrying()
+    return I.BrutalObjectGrab and I.BrutalObjectGrab.status().active
+end
 
 local function chooseTarget()
     local origin = self.position + util.vector3(0, 0, 55)
@@ -64,19 +67,25 @@ local function chooseTarget()
     return target, forward
 end
 
+local function canKick()
+    local switches = types.Player.CONTROL_SWITCH
+    return types.Player.getControlSwitch(self, switches.Controls)
+        and types.Player.getControlSwitch(self, switches.Fighting) and not I.UI.getMode()
+        and not types.Actor.isDead(self) and types.Actor.canMove(self) and not types.Actor.isSwimming(self)
+end
+
 local function tryKick()
     if not settings.get('kickEnabled') then
         lastResult = 'disabled'
         return false, lastResult
     end
-    if I.UI.getMode() or types.Actor.isDead(self) or not types.Actor.canMove(self)
-        or types.Actor.isSwimming(self) then
+    if not canKick() then
         lastResult = 'unavailable'
         return false, lastResult
     end
     -- A kick interrupts any sword phase (the engine cancels its pending hit), but
     -- not an unfinished kick: its own animation is the kick's cooldown.
-    if bash or sliding() or clinching() or animation.getCompletion(self, 'brutal_kick') ~= nil
+    if bash or sliding() or clinching() or carrying() or animation.getCompletion(self, 'brutal_kick') ~= nil
         or animation.getCompletion(self, 'brutal_kick1h') ~= nil
         or animation.getCompletion(self, 'brutal_kick1h_low') ~= nil then
         lastResult = 'busy'
@@ -124,8 +133,8 @@ end
 
 -- Both a foot strike and slide contact use the same hit and native launch receipt.
 -- Only the slide requests an unconditional ordinary knockdown on level ground.
-local function strikeActor(target, direction, slide)
-    payKick(C.kickStaminaNpc)
+local function strikeActor(target, direction, slide, chargeStamina)
+    if not slide or chargeStamina then payKick(C.kickStaminaNpc) end
     local superKickId
     -- A slide only trips; its adrenaline is reserved for the sword finisher.
     if not slide and superKickAvailable and I.BrutalAdrenaline then
@@ -153,7 +162,8 @@ end
 local METAL = {'iron', 'steel', 'silver', 'ebony', 'dwemer', 'dwarven', 'daedric', 'adamantium', 'orcish'}
 local function shieldSound()
     local shield = types.Actor.getEquipment(self)[types.Actor.EQUIPMENT_SLOT.CarriedLeft]
-    local name = shield and (shield.recordId .. ' ' .. (types.Armor.record(shield).model or '')):lower() or ''
+    if not shield or not types.Armor.objectIsInstance(shield) then return nil end
+    local name = (shield.recordId .. ' ' .. (types.Armor.record(shield).model or '')):lower()
     for _, family in ipairs(METAL) do
         if name:find(family, 1, true) then return 'Brutal Shield Metal' end
     end
@@ -174,7 +184,7 @@ local function tryBash()
         if kind~=W.ShortBladeOneHand and kind~=W.LongBladeOneHand
             and kind~=W.BluntOneHand and kind~=W.AxeOneHand then return false end
     end
-    if bash or windup or sliding() or clinching() or I.UI.getMode() or not isBlockRaised or not isBlockRaised(self)
+    if bash or windup or sliding() or clinching() or carrying() or I.UI.getMode() or not isBlockRaised or not isBlockRaised(self)
         or not animation.hasGroup(self, 'brutal_shieldbash')
         or animation.getCompletion(self, 'brutal_kick') ~= nil
         or animation.getCompletion(self, 'brutal_kick1h') ~= nil
@@ -209,12 +219,12 @@ local function updateBash(dt, scale)
         damage = {health = C.bashHealthDamage, fatigue = C.bashFatigueDamage},
         hitPos = target.position + util.vector3(0, 0, 70),
     })
-    target:sendEvent('BrutalImpulse', {attacker = self, direction = direction, speed = C.bashPushSpeed})
+    target:sendEvent('BrutalImpulse', {attacker = self, direction = direction, speed = C.bashPushSpeed, bash = true})
 end
 
 local function updateBlock()
     if not hasShieldBlock or not setShieldBlock then return end
-    local held = (settings.get('activeBlockEnabled') or settings.get('parryEnabled')) and not I.UI.getMode() and not clinching() and input.isMouseButtonPressed(C.blockButton)
+    local held = (settings.get('activeBlockEnabled') or settings.get('parryEnabled')) and not I.UI.getMode() and not clinching() and not carrying() and input.isMouseButtonPressed(C.blockButton)
     -- Send changes only; the native controller decides whether the shield can rise.
     if held ~= blockHeld then
         blockHeld = held
@@ -262,7 +272,10 @@ local function update(dt)
         windup = windup - kickDt
         if windup <= 0 then
             windup = nil
-            if types.Actor.isDead(self) or not types.Actor.canMove(self) or types.Actor.isSwimming(self) then return end
+            if not canKick() or carrying() then
+                lastResult = 'unavailable'
+                return
+            end
             local target, direction = chooseTarget()
             if not target then
                 -- No living actor: the same kick can still strike a ragdoll corpse or head.
@@ -308,15 +321,20 @@ return {
         version = 1,
         kick = tryKick,
         bash = tryBash,
-        slideHit = function(target, direction)
+        slideHit = function(target, direction, chargeStamina)
             if not settings.get('slideEnabled') or not sliding() or not target or not target:isValid() or types.Actor.isDead(target)
                 or not types.Actor.objectIsInstance(target) or direction:length() < .01 then return false end
-            strikeActor(target, direction:normalize(), true)
+            chargeStamina = chargeStamina ~= false
+            if chargeStamina and settings.get('staminaEnabled') then
+                local fatigue = types.Actor.stats.dynamic.fatigue(self)
+                if fatigue.current < fatigue.base * C.kickStaminaNpc / C.staminaMax then return false end
+            end
+            strikeActor(target, direction:normalize(), true, chargeStamina)
             return true
         end,
         status = function() return {cooldown = cooldown, result = lastResult, strikes = strikes,
             physicsAvailable = physicsAvailable, superKickAvailable = superKickAvailable,
-            bashing = bash ~= nil, bashes = bashes, ragdollHits = ragdollHits} end,
+            kicking = windup ~= nil or activeKick ~= nil, bashing = bash ~= nil, bashes = bashes, ragdollHits = ragdollHits} end,
     },
     eventHandlers = {
         BrutalPhysicsAvailable = function(data)
@@ -332,8 +350,8 @@ return {
         -- The engine: this kick sent a living NPC over a ledge into a ragdoll.
         BrutalKickRagdoll = function()
             if not settings.get('kickEnabled') then return end
-            -- Reward the confirmed fall without changing simulation speed.
-            self:sendEvent('BrutalAdrenalineFill', {})
+            -- Reward the fall (a third of the gauge) without changing simulation speed.
+            self:sendEvent('BrutalAdrenalineBonus', {})
         end,
     },
     engineHandlers = {
@@ -341,6 +359,7 @@ return {
         -- Save only cooldown. A pending attack is intentionally cancelled on reload.
         onSave = function() return {cooldown = cooldown} end,
         onLoad = function(data)
+            core.sendGlobalEvent('BrutalPhysicsQuery', {player = self})
             cooldown = data and math.min(C.cooldown, math.max(0, data.cooldown or 0)) or 0
             windup, lastResult = nil, 'ready'
             bash, bashWindup = nil, nil

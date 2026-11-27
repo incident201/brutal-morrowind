@@ -40,6 +40,7 @@ namespace MWPhysics
 namespace MWMechanics
 {
     class NpcStats;
+    struct MeleeFollowThrough;
     struct Movement;
     class CreatureStats;
 }
@@ -134,13 +135,14 @@ namespace MWWorld
         /// (default implementation: throw an exception)
 
         virtual bool evaluateHit(const Ptr& ptr, Ptr& victim, osg::Vec3f& hitPosition, int* contactPart = nullptr,
-            std::string_view swing = {}) const;
+            std::string_view swing = {}, std::vector<MWMechanics::MeleeFollowThrough>* followThrough = nullptr) const;
         ///< Evaluate the victim of a melee hit produced by ptr in the current circumstances and return dice roll
         ///< success.
         /// (default implementation: throw an exception)
 
         virtual void hit(const Ptr& ptr, float attackStrength, int type = -1, const Ptr& victim = Ptr(),
-            const osg::Vec3f& hitPosition = osg::Vec3f(), bool success = false, int contactPart = -1) const;
+            const osg::Vec3f& hitPosition = osg::Vec3f(), bool success = false, int contactPart = -1,
+            bool groundFinisher = false, const Ptr* followThroughWeapon = nullptr) const;
         ///< Execute a melee hit on the victim at hitPosition, using the current weapon. If the hit was successful,
         ///< apply damage and process corresponding events.
         /// \param attackStrength how long the attack was charged for, a value in 0-1 range.
@@ -149,7 +151,8 @@ namespace MWWorld
         /// (default implementation: throw an exception)
 
         virtual void onHit(const MWWorld::Ptr& ptr, const std::map<std::string, float>& damages, ESM::RefId object,
-            const MWWorld::Ptr& attacker, bool successful, const MWMechanics::DamageSourceType sourceType) const;
+            const MWWorld::Ptr& attacker, bool successful, MWMechanics::DamageSourceType sourceType,
+            bool charged = false) const;
         ///< Alerts \a ptr that it's being hit for \a damages by \a object (sword, arrow, etc). \a attacker specifies
         ///< the
         /// actor responsible for the attack. \a successful specifies if the hit is

@@ -8,6 +8,7 @@
 
 #include <components/detournavigator/agentbounds.hpp>
 #include <components/lua/luastate.hpp>
+#include <components/lua/serialization.hpp>
 #include <components/misc/finitevalues.hpp>
 #include <components/settings/values.hpp>
 
@@ -17,13 +18,16 @@
 #include "apps/openmw/mwbase/world.hpp"
 #include "apps/openmw/mwmechanics/actorutil.hpp"
 #include "apps/openmw/mwmechanics/brutaloptions.hpp"
+#include "apps/openmw/mwmechanics/combat.hpp"
 #include "apps/openmw/mwmechanics/weapontype.hpp"
 #include "apps/openmw/mwmechanics/creaturestats.hpp"
 #include "apps/openmw/mwmechanics/drawstate.hpp"
 #include "apps/openmw/mwphysics/raycasting.hpp"
 #include "apps/openmw/mwrender/animation.hpp"
+#include "apps/openmw/mwrender/brutalblood.hpp"
 #include "apps/openmw/mwrender/camera.hpp"
 #include "apps/openmw/mwrender/npcanimation.hpp"
+#include "apps/openmw/mwrender/npcblood.hpp"
 #include "apps/openmw/mwworld/class.hpp"
 #include "apps/openmw/mwworld/inventorystore.hpp"
 #include "apps/openmw/mwworld/worldmodel.hpp"
@@ -478,31 +482,56 @@ namespace MWLua
                 {"classicNpcAnimations", g.mBrutalClassicNpcAnimations}, {"firstPersonBody", g.mBrutalFirstPersonBody},
                 {"dismemberment", g.mBrutalDismemberment}, {"npcCombatTweaks", g.mDarkMessiahNpcCombat},
                 {"guaranteedHits", g.mMeleeContactAlwaysHits}, {"ragdoll", g.mBrutalRagdoll},
+                {"playerDeathScene", g.mBrutalPlayerDeathScene}, {"damageFlash", g.mBrutalDamageFlash},
+                {"lowHealthVignette", g.mBrutalLowHealthVignette},
+                {"groundFinisher", g.mBrutalGroundFinisher}, {"backstab", g.mBrutalBackstab},
                 {"ragdollEnhancements", g.mRagdollEnhancement}, {"npcStandup", g.mDarkMessiahStandUp},
                 {"ragdollSoftStops", g.mRagdollSoftStops}, {"ragdollNeutralPose", g.mRagdollNeutralPose},
                 {"ragdollLimbResponse", g.mRagdollLimbResponse}, {"ragdollSelfCollision", g.mRagdollSelfCollision}, {"dynamicProps", g.mBrutalDynamicProps},
                 {"equipmentPhysics", g.mBrutalEquipmentPhysics}, {"meleeGeometry", g.mBrutalMeleeGeometry},
                 {"impactEffects", g.mBrutalImpactEffects}, {"bloodDecals", g.mNpcBloodDecals},
+                {"weaponBlood", g.mBrutalWeaponBlood}, {"worldBlood", g.mBrutalWorldBlood},
                 {"kineticMovement", g.mKineticPlayerMovement}, {"activeBlocking", g.mPlayerActiveShieldBlock},
                 {"swordParry", g.mDarkMessiahSwordParry}, {"comboAttacks", g.mDarkMessiahComboAttacks},
                 {"npcStagger", g.mNpcHurtHealthFraction > 0.f}, {"hitRecovery", !g.mPlayerHitRecovery},
+                {"woundedNpcs", g.mBrutalWoundedNpcs}, {"npcFlee", g.mBrutalNpcFlee},
+                {"npcWeaponPickup", g.mBrutalNpcWeaponPickup},
                 {"stamina", g.mBrutalStamina}, {"wallBounce", g.mBrutalWallBounce},
                 {"controlsEnabled", g.mBrutalControlsEnabled}, {"slide", g.mBrutalSlide}, {"clinch", g.mBrutalClinch}, {"fastAttacks", g.mBrutalFastAttacks},
-                {"combatSounds", g.mBrutalCombatSounds}, {"bloodEffects", g.mBrutalBloodEffects},
-                {"sparkEffects", g.mBrutalSparkEffects}, {"kickAlwaysRagdoll", g.mBrutalKickAlwaysRagdoll}
+                {"combatSounds", g.mBrutalCombatSounds}, {"heroVoice", g.mBrutalHeroVoice}, {"bloodEffects", g.mBrutalBloodEffects},
+                {"sparkEffects", g.mBrutalSparkEffects}, {"kickAlwaysRagdoll", g.mBrutalKickAlwaysRagdoll},
+                {"objectGrab", g.mBrutalObjectGrab}
             };
+        };
+        actor["setBrutalRagdollWeaponDrop"] = [context](const SelfObject& self, float chance) {
+            if (self.ptr() != MWMechanics::getPlayer())
+                throw std::runtime_error("Brutal options require player SELF");
+            context.mLuaManager->addAction(
+                [chance] { Settings::game().mBrutalRagdollWeaponDrop.set(std::clamp(chance, 0.f, 1.f)); });
+        };
+        actor["getBrutalRagdollWeaponDrop"] = [] { return Settings::game().mBrutalRagdollWeaponDrop.get(); };
+        actor["setBrutalGroundFinisherHealth"] = [context](const SelfObject& self, int percentage) {
+            if (self.ptr() != MWMechanics::getPlayer())
+                throw std::runtime_error("Brutal options require player SELF");
+            context.mLuaManager->addAction(
+                [percentage] { Settings::game().mBrutalGroundFinisherHealth.set(percentage); });
         };
         actor["getBrutalOption"] = [initialiseOptions](std::string name) -> bool {
             initialiseOptions();
+            if (name == "physicalProjectiles")
+                name = "dynamicProps";
             if (!brutalOptions.contains(name)) throw std::runtime_error("Unknown Brutal option: " + name);
             if (name == "enabled") return brutalOptions.at(name);
             if (!brutalOptions.at("enabled")) return name == "classicFirstPerson" || name == "classicNpcAnimations";
-            if (name == "kickAlwaysRagdoll") return brutalOptions.at("ragdoll") && brutalOptions.at(name);
+            if (name == "kickAlwaysRagdoll" || name == "dismemberment")
+                return brutalOptions.at("ragdoll") && brutalOptions.at(name);
             return brutalOptions.at(name);
         };
         actor["setBrutalOption"] = [context, initialiseOptions](const SelfObject& self, std::string name, bool value) {
             if (self.ptr() != MWMechanics::getPlayer())
                 throw std::runtime_error("Brutal options require player SELF");
+            if (name == "physicalProjectiles")
+                name = "dynamicProps";
             context.mLuaManager->addAction([name=std::move(name), value, initialiseOptions] {
                 initialiseOptions();
                 if (!brutalOptions.contains(name)) throw std::runtime_error("Unknown Brutal option: " + name);
@@ -532,6 +561,11 @@ namespace MWLua
                 g.mDarkMessiahNpcCombat.set(on("npcCombatTweaks"));
                 g.mMeleeContactAlwaysHits.set(on("guaranteedHits"));
                 g.mBrutalRagdoll.set(on("ragdoll"));
+                g.mBrutalPlayerDeathScene.set(on("playerDeathScene"));
+                g.mBrutalDamageFlash.set(on("damageFlash"));
+                g.mBrutalLowHealthVignette.set(on("lowHealthVignette"));
+                g.mBrutalGroundFinisher.set(on("groundFinisher"));
+                g.mBrutalBackstab.set(on("backstab"));
                 g.mRagdollEnhancement.set(on("ragdoll") && on("ragdollEnhancements"));
                 g.mBrutalKickAlwaysRagdoll.set(on("kickAlwaysRagdoll") && on("ragdoll"));
                 g.mDarkMessiahStandUp.set(on("npcStandup") && on("ragdoll") && !g.mBrutalClassicNpcAnimations);
@@ -540,18 +574,24 @@ namespace MWLua
                 g.mRagdollLimbResponse.set(on("ragdollLimbResponse"));
                 g.mRagdollSelfCollision.set(on("ragdollSelfCollision"));
                 g.mBrutalDynamicProps.set(on("dynamicProps"));
+                g.mBrutalObjectGrab.set(on("objectGrab"));
                 g.mBrutalEquipmentPhysics.set(on("equipmentPhysics"));
                 g.mBrutalMeleeGeometry.set(on("meleeGeometry"));
                 g.mBrutalImpactEffects.set(on("impactEffects"));
                 g.mBrutalBloodEffects.set(on("bloodEffects"));
                 g.mBrutalSparkEffects.set(on("sparkEffects"));
                 g.mNpcBloodDecals.set(on("bloodDecals"));
+                g.mBrutalWeaponBlood.set(on("weaponBlood"));
+                g.mBrutalWorldBlood.set(on("worldBlood"));
                 g.mKineticPlayerMovement.set(on("kineticMovement"));
                 g.mPlayerActiveShieldBlock.set(on("activeBlocking"));
                 g.mDarkMessiahSwordParry.set(on("swordParry"));
                 g.mDarkMessiahComboAttacks.set(on("comboAttacks"));
                 g.mNpcHurtHealthFraction.set(on("npcStagger") ? .001f : 0.f);
                 g.mPlayerHitRecovery.set(!on("hitRecovery"));
+                g.mBrutalWoundedNpcs.set(on("woundedNpcs"));
+                g.mBrutalNpcFlee.set(on("npcFlee"));
+                g.mBrutalNpcWeaponPickup.set(on("npcWeaponPickup"));
                 g.mBrutalStamina.set(on("stamina"));
                 g.mPlayerFatigueRegenFraction.set(on("stamina") ? 1.f/18.f : 0.f);
                 g.mBrutalWallBounce.set(on("wallBounce"));
@@ -560,6 +600,7 @@ namespace MWLua
                 g.mBrutalClinch.set(on("clinch"));
                 g.mBrutalFastAttacks.set(on("fastAttacks"));
                 g.mBrutalCombatSounds.set(on("combatSounds"));
+                g.mBrutalHeroVoice.set(on("heroVoice") && on("combatSounds"));
                 MWBase::World* world = MWBase::Environment::get().getWorld();
                 const auto player = MWMechanics::getPlayer();
                 const auto mechanics = MWBase::Environment::get().getMechanicsManager();
@@ -605,6 +646,35 @@ namespace MWLua
                 }
             }, "SetBrutalOption");
         };
+        actor["canHoldObject"] = [](const Object& object) {
+            const auto ptr = object.ptrOrEmpty();
+            return !ptr.isEmpty() && MWBase::Environment::get().getWorld()->canHoldObject(ptr);
+        };
+        actor["findDetachedGrabFragment"] = [](const SelfObject& self, Misc::FiniteVec3f from, Misc::FiniteVec3f to)
+            -> std::tuple<sol::optional<LObject>, unsigned> {
+            const auto [corpse, fragment]
+                = MWBase::Environment::get().getWorld()->findDetachedGrabFragment(self.ptr(), from, to);
+            if (corpse.isEmpty())
+                return { sol::nullopt, 0 };
+            return { LObject(corpse), fragment };
+        };
+        actor["setBrutalCarryingObject"] = [context](const SelfObject& self, bool carrying) {
+            if (self.ptr() != MWMechanics::getPlayer())
+                throw std::runtime_error("setBrutalCarryingObject requires player SELF");
+            context.mLuaManager->addAction([object = Object(self), carrying] {
+                const auto ptr = object.ptrOrEmpty();
+                if (ptr.isEmpty() || !ptr.getClass().isActor())
+                    return;
+                auto& stats = ptr.getClass().getCreatureStats(ptr);
+                stats.mBrutalCarryingObject = carrying;
+                if (carrying)
+                {
+                    stats.setDrawState(MWMechanics::DrawState::Nothing);
+                    stats.mBrutalBlockRequested = stats.mBrutalBlockRaised = stats.mBrutalParry = false;
+                }
+                MWBase::Environment::get().getMechanicsManager()->forceStateUpdate(ptr);
+            }, "SetBrutalCarryingObject");
+        };
         actor["armPowerStrike"] = [context](const SelfObject& self, std::string token,
             sol::optional<Misc::FiniteFloat> multiplier, sol::optional<Misc::FiniteFloat> minimumStrength) {
             if (self.ptr() != MWMechanics::getPlayer())
@@ -620,12 +690,13 @@ namespace MWLua
                 const auto it = inv.getSlot(MWWorld::InventoryStore::Slot_CarriedRight);
                 if (it == inv.end() || it->getType() != ESM::Weapon::sRecordId) return;
                 const int type = it->get<ESM::Weapon>()->mBase->mData.mType;
-                // Finishers work with every melee weapon, one- and two-handed.
-                if (MWMechanics::getWeaponType(type)->mWeaponClass != ESM::WeaponType::Melee) return;
+                if (MWMechanics::getWeaponType(type)->mWeaponClass != ESM::WeaponType::Melee
+                    && !(MWMechanics::physicalProjectiles() && MWMechanics::supportsRangedFinisher(type)))
+                    return;
                 auto& armed = ptr.getClass().getCreatureStats(ptr).mPowerStrike;
                 if (ptr.getClass().getCreatureStats(ptr).mLastConsumedPowerStrikeToken != token
                     && (armed.token.empty() || armed.token == token))
-                    armed = { token, *it, mult, minimum };
+                    armed = { token, MWWorld::SafePtr(*it), mult, minimum };
             }, "ArmPowerStrike");
         };
         actor["cancelPowerStrike"] = [context](const SelfObject& self, std::string token) {
@@ -637,10 +708,11 @@ namespace MWLua
                 if (armed.token == token) armed = {};
             }, "CancelPowerStrike");
         };
-        actor["getPowerStrikeToken"] = [](const SelfObject& self) {
-            if (self.ptr() != MWMechanics::getPlayer()) throw std::runtime_error("Power strike requires player SELF");
-            const auto& armed = self.ptr().getClass().getCreatureStats(self.ptr()).mPowerStrike;
-            return armed.token;
+        actor["getPowerStrikeToken"] = [](const SelfObject& self, sol::optional<bool> consumed) {
+            if (self.ptr() != MWMechanics::getPlayer())
+                throw std::runtime_error("Power strike requires player SELF");
+            const auto& stats = self.ptr().getClass().getCreatureStats(self.ptr());
+            return consumed.value_or(false) ? stats.mLastConsumedPowerStrikeToken : stats.mPowerStrike.token;
         };
 
         actor["stagger"] = [context](const SelfObject& self) {
@@ -682,10 +754,12 @@ namespace MWLua
         };
         actor["getSwordClinchState"] = [lua = context.mLua](const Object& object) {
             const auto& ptr = object.ptr();
+            if (!ptr.getClass().isActor())
+                throw std::runtime_error("getSwordClinchState requires an actor");
             const auto& stats = ptr.getClass().getCreatureStats(ptr);
             sol::table result(lua->unsafeState(), sol::create);
             result["active"] = stats.mBrutalClinchActive;
-            result["pending"] = !stats.mBrutalClinchActive && !stats.mBrutalClinchOpponent.isEmpty();
+            result["pending"] = !stats.mBrutalClinchActive && !stats.mBrutalClinchOpponent.ptrOrEmpty().isEmpty();
             result["id"] = stats.mBrutalClinchId;
             static constexpr std::array<std::string_view, 5> phases{ "idle", "align", "contest", "win", "lose" };
             result["phase"] = phases.at(stats.mBrutalClinchPhase);
@@ -698,7 +772,7 @@ namespace MWLua
             result["group"] = stats.mBrutalClinchPhase == 3 ? "brutal_clinch_win"
                 : stats.mBrutalClinchPhase == 4 ? "brutal_clinch_lose"
                 : stats.mBrutalClinchActive ? "brutal_clinch" : "";
-            if (!stats.mBrutalClinchOpponent.isEmpty()) result["opponent"] = LObject(stats.mBrutalClinchOpponent);
+            if (!stats.mBrutalClinchOpponent.ptrOrEmpty().isEmpty()) result["opponent"] = LObject(stats.mBrutalClinchOpponent.ptrOrEmpty());
             result["lastResultId"] = stats.mBrutalClinchLastResultId;
             result["lastResult"] = stats.mBrutalClinchLastResult;
             result["lastReason"] = stats.mBrutalClinchLastReason;
@@ -724,6 +798,7 @@ namespace MWLua
             result["rawGap"] = a.rawGap;
             result["finalGap"] = a.finalGap;
             result["cameraError"] = a.cameraError;
+            result["exposureScale"] = a.exposureScale;
             result["correction"] = a.correction;
             result["requestedCorrection"] = a.requestedCorrection;
             result["playerHilt"] = a.playerHilt;
@@ -822,7 +897,10 @@ namespace MWLua
             return true; // Request queued; the action revalidates current contact conditions.
         };
         actor["getKineticSlide"] = [context](const Object& object) {
-            const auto& stats = object.ptr().getClass().getCreatureStats(object.ptr());
+            const auto& ptr = object.ptr();
+            if (!ptr.getClass().isActor())
+                throw std::runtime_error("getKineticSlide requires an actor");
+            const auto& stats = ptr.getClass().getCreatureStats(ptr);
             sol::table result(context.mLua->unsafeState(), sol::create);
             result["phase"] = stats.mBrutalSlidePhase;
             result["moving"] = stats.mBrutalSliding;
@@ -860,6 +938,34 @@ namespace MWLua
             const auto* animation = dynamic_cast<const MWRender::NpcAnimation*>(
                 MWBase::Environment::get().getWorld()->getAnimation(ptr));
             return animation && animation->isTorsoSevered();
+        };
+        actor["_getDeathCameraClearanceForAudit"] = [lua = context.mLua](const SelfObject& self, const osg::Vec3f& eye,
+                                                     const osg::Vec3f& forward, const osg::Vec3f& right) {
+            if (self.ptr() != MWMechanics::getPlayer())
+                throw std::runtime_error("_getDeathCameraClearanceForAudit requires player SELF");
+            const auto* animation = dynamic_cast<const MWRender::NpcAnimation*>(
+                MWBase::Environment::get().getWorld()->getAnimation(self.ptr()));
+            sol::table state(lua->unsafeState(), sol::create);
+            if (animation)
+            {
+                for (const auto& [name, value] : animation->getDeathCameraClearanceForAudit(eye))
+                    state[name] = value;
+                if (const auto head = animation->getBoneWorldMatrix("Bip01 Head"))
+                {
+                    osg::Vec3f position, scale;
+                    osg::Quat orientation, stretch;
+                    head->decompose(position, orientation, scale, stretch);
+                    state["forwardInHead"] = orientation.inverse() * forward;
+                    state["rightInHead"] = orientation.inverse() * right;
+                }
+                if (const auto neck = animation->getBoneWorldMatrix("Bip01 Neck"))
+                {
+                    osg::Vec3f towardNeck = osg::Vec3f(neck->getTrans()) - eye;
+                    if (towardNeck.normalize() > .001f)
+                        state["neckAngle"] = osg::RadiansToDegrees(std::acos(std::clamp(towardNeck * forward, -1.f, 1.f)));
+                }
+            }
+            return state;
         };
         actor["_getHeightStateForAudit"] = [lua = context.mLua](const Object& object) {
             const auto& ptr = object.ptr();
@@ -943,6 +1049,7 @@ namespace MWLua
             result["models"] = std::move(models);
             result["roots"] = std::move(roots);
             result["triangles"] = std::move(triangles);
+            result["leftItemVisible"] = snapshot.leftItemVisible;
             return result;
         };
 
@@ -978,21 +1085,23 @@ namespace MWLua
                         pose["z"] = osg::Matrixf::transform3x3(osg::Vec3f(0, 0, 1), *matrix);
                         bones[name] = std::move(pose);
                     }
-                for (int finger = 0; finger < 5; ++finger)
-                    for (int joint = 0; joint < 3; ++joint)
-                    {
-                        const std::string suffix = std::to_string(finger)
-                            + (joint ? std::to_string(joint) : "");
-                        if (const auto matrix = animation->getBoneWorldMatrix("Bip01 L Finger" + suffix))
+                for (const auto& [side, prefix] : { std::pair{ "left", "Bip01 L Finger" },
+                         std::pair{ "right", "Bip01 R Finger" } })
+                    for (int finger = 0; finger < 5; ++finger)
+                        for (int joint = 0; joint < 3; ++joint)
                         {
-                            sol::table pose(lua->unsafeState(), sol::create);
-                            pose["position"] = osg::Vec3f(matrix->getTrans());
-                            pose["x"] = osg::Matrixf::transform3x3(osg::Vec3f(1, 0, 0), *matrix);
-                            pose["y"] = osg::Matrixf::transform3x3(osg::Vec3f(0, 1, 0), *matrix);
-                            pose["z"] = osg::Matrixf::transform3x3(osg::Vec3f(0, 0, 1), *matrix);
-                            bones["leftFinger" + suffix] = std::move(pose);
+                            const std::string suffix = std::to_string(finger)
+                                + (joint ? std::to_string(joint) : "");
+                            if (const auto matrix = animation->getBoneWorldMatrix(prefix + suffix))
+                            {
+                                sol::table pose(lua->unsafeState(), sol::create);
+                                pose["position"] = osg::Vec3f(matrix->getTrans());
+                                pose["x"] = osg::Matrixf::transform3x3(osg::Vec3f(1, 0, 0), *matrix);
+                                pose["y"] = osg::Matrixf::transform3x3(osg::Vec3f(0, 1, 0), *matrix);
+                                pose["z"] = osg::Matrixf::transform3x3(osg::Vec3f(0, 0, 1), *matrix);
+                                bones[std::string(side) + "Finger" + suffix] = std::move(pose);
+                            }
                         }
-                    }
                 state["weaponCycleBones"] = std::move(bones);
                 const auto& audit = animation->getWeaponCycleForAudit();
                 sol::table cycle(lua->unsafeState(), sol::create);
@@ -1086,6 +1195,10 @@ namespace MWLua
                     state["bodyPelvisPosition"] = osg::Vec3f(pelvis->getTrans());
                 if (const auto spine = body->getBoneWorldMatrix("Bip01 Spine2"))
                     state["bodySpinePosition"] = osg::Vec3f(spine->getTrans());
+                if (const auto neck = animation->getBodyNeckPositionForAudit())
+                    state["bodyNeckPosition"] = *neck;
+                state["bodyEyeFollowActive"] = animation->hasBodyEyeFollow();
+                state["bodyEyeFollow"] = animation->getBodyEyeFollow();
                 for (const auto& [key, bone] : { std::pair{ "leftHip", "Bip01 L Thigh" },
                          std::pair{ "rightHip", "Bip01 R Thigh" }, std::pair{ "leftKnee", "Bip01 L Calf" },
                          std::pair{ "rightKnee", "Bip01 R Calf" } })
@@ -1114,6 +1227,259 @@ namespace MWLua
             const auto& ptr = object.ptr();
             return ptr.getClass().isActor() && ptr.getClass().getCreatureStats(ptr).mBrutalBlockRaised;
         };
+        actor["_getBrutalCombatStateForAudit"] = [lua = context.mLua](const Object& object) {
+            const auto& ptr = object.ptr();
+            if (!ptr.getClass().isActor())
+                throw std::runtime_error("_getBrutalCombatStateForAudit requires an actor");
+            const auto& stats = ptr.getClass().getCreatureStats(ptr);
+            sol::table result(lua->unsafeState(), sol::create);
+            result["blockRequested"] = stats.mBrutalBlockRequested;
+            result["blockRaised"] = stats.mBrutalBlockRaised;
+            result["parry"] = stats.mBrutalParry;
+            result["blockRaisedAt"] = stats.mBrutalBlockRaisedAt;
+            result["blockLoweredAt"] = stats.mBrutalBlockLoweredAt;
+            result["fastStrike"] = stats.mBrutalFastStrike;
+            result["attacking"] = stats.getAttackingOrSpell();
+            result["hitRecovery"] = stats.getHitRecovery();
+            result["inCombat"] = stats.getAiSequence().isInCombat();
+            result["knockedDown"] = stats.getKnockedDown();
+            result["fatigue"] = stats.getFatigue().getCurrent();
+            result["maximumFatigue"] = stats.getFatigue().getModified();
+            result["fastPressure"] = stats.mBrutalFastPressure;
+            result["guardRequested"] = stats.mBrutalNpcGuardRequested;
+            result["guardUntil"] = stats.mBrutalGuardUntil;
+            result["guardCooldownUntil"] = stats.mBrutalGuardCooldownUntil;
+            result["guardBrokenUntil"] = stats.mBrutalGuardBrokenUntil;
+            result["guardBreakingAttack"] = stats.mBrutalGuardBreakingAttack;
+            result["guardBlocks"] = stats.mBrutalGuardBlocks;
+            result["pickupPhase"] = stats.mBrutalPickupPhase;
+            result["pickupTarget"] = stats.mBrutalPickupTarget.serializeText();
+            result["pickups"] = stats.mBrutalPickups;
+            result["pickupTable"] = stats.mBrutalPickupTable;
+            result["backstabPhase"] = stats.mBrutalBackstabPhase;
+            result["backstabVictim"] = stats.mBrutalBackstabVictim;
+            result["silentBackstab"] = stats.mBrutalSilentBackstab;
+            result["backstabLastDamage"] = stats.mBrutalBackstabLastDamage;
+            result["backstabKills"] = stats.mBrutalBackstabKills;
+            result["attackKind"] = stats.mBrutalAttackKind;
+            result["wounded"] = MWMechanics::isBrutalWoundedNpc(ptr);
+            const MWRender::Animation* animation = MWBase::Environment::get().getWorld()->getAnimation(ptr);
+            result["weaponsShown"] = animation && animation->getWeaponsShown();
+            result["carriedLeftShown"] = animation && animation->getCarriedLeftShown();
+            if (const auto* npc = dynamic_cast<const MWRender::NpcAnimation*>(animation))
+                result["weaponAttached"] = npc->getPartNode(ESM::PRT_Weapon) != nullptr;
+            result["woundedClips"] = animation && animation->isBrutalWounded();
+            result["fleeing"] = stats.getAiSequence().isFleeing();
+            result["brutalFleeing"] = stats.getAiSequence().isBrutalFleeing();
+            return result;
+        };
+        actor["_getNpcGuardGeometryForAudit"] = [lua = context.mLua](const Object& object) {
+            sol::table result(lua->unsafeState(), sol::create);
+            const auto* npc = dynamic_cast<const MWRender::NpcAnimation*>(
+                MWBase::Environment::get().getWorld()->getAnimation(object.ptr()));
+            if (!npc)
+                return result;
+            const auto& a = npc->getNpcGuardGeometryForAudit();
+            result["enabled"] = a.enabled;
+            result["active"] = a.active;
+            result["shield"] = a.shield;
+            result["fitted"] = a.fitted;
+            result["clamped"] = a.clamped;
+            result["jointLimited"] = a.jointLimited;
+            result["releasing"] = a.releasing;
+            result["recovering"] = a.recovering;
+            result["cacheUsed"] = a.cacheUsed;
+            result["cacheNegative"] = a.cacheNegative;
+            result["fullSearch"] = a.fullSearch;
+            result["meshAvailable"] = a.meshAvailable;
+            result["sourceGroupMatches"] = a.sourceGroupMatches;
+            result["sourceBlendActive"] = a.sourceBlendActive;
+            result["sourceHoldReached"] = a.sourceHoldReached;
+            result["referenceReady"] = a.referenceReady;
+            result["sourceTime"] = a.sourceTime;
+            result["sourceHoldTime"] = a.sourceHoldTime;
+            result["searchCandidates"] = a.searchCandidates;
+            result["frame"] = a.frame;
+            result["weight"] = a.weight;
+            result["contactError"] = a.contactError;
+            result["reachClamp"] = a.reachClamp;
+            result["shoulderError"] = a.shoulderError;
+            result["gripError"] = a.gripError;
+            result["wristSwingDegrees"] = a.wristSwingDegrees;
+            result["wristTwistDegrees"] = a.wristTwistDegrees;
+            result["palmFlexDegrees"] = a.palmFlexDegrees;
+            result["palmSideDegrees"] = a.palmSideDegrees;
+            result["forearmTwistDegrees"] = a.forearmTwistDegrees;
+            result["upperSwingDegrees"] = a.upperSwingDegrees;
+            result["upperTwistDegrees"] = a.upperTwistDegrees;
+            result["signedElbowFlexDegrees"] = a.signedElbowFlexDegrees;
+            result["elbowHingeErrorDegrees"] = a.elbowHingeErrorDegrees;
+            result["totalPronationDegrees"] = a.totalPronationDegrees;
+            result["releaseTimeLeft"] = a.releaseTimeLeft;
+            result["overlayCorrectionDegrees"] = a.overlayCorrectionDegrees;
+            result["goalNatural"] = a.goalNatural;
+            result["goalWorking"] = a.goalWorking;
+            result["goalFromSafe"] = a.goalFromSafe;
+            result["pathAccepted"] = a.pathAccepted;
+            result["goalContactError"] = a.goalContactError;
+            result["goalTargetError"] = a.goalTargetError;
+            result["goalReachClamp"] = a.goalReachClamp;
+            result["pathFraction"] = a.pathFraction;
+            result["goalWristSwingDegrees"] = a.goalWristSwingDegrees;
+            result["goalWristTwistDegrees"] = a.goalWristTwistDegrees;
+            result["goalPalmFlexDegrees"] = a.goalPalmFlexDegrees;
+            result["goalPalmSideDegrees"] = a.goalPalmSideDegrees;
+            result["goalForearmTwistDegrees"] = a.goalForearmTwistDegrees;
+            result["goalUpperSwingDegrees"] = a.goalUpperSwingDegrees;
+            result["goalUpperTwistDegrees"] = a.goalUpperTwistDegrees;
+            result["goalSignedElbowFlexDegrees"] = a.goalSignedElbowFlexDegrees;
+            result["goalElbowHingeErrorDegrees"] = a.goalElbowHingeErrorDegrees;
+            result["goalBodyClearance"] = a.goalBodyClearance;
+            result["goalInwardError"] = a.goalInwardError;
+            result["goalStanceMargin"] = a.goalStanceMargin;
+            result["goalWrist"] = a.goalWrist;
+            result["goalContact"] = a.goalContact;
+            result["elbowFlexDegrees"] = a.elbowFlexDegrees;
+            result["upperLocalOrthoError"] = a.upperLocalOrthoError;
+            result["foreLocalOrthoError"] = a.foreLocalOrthoError;
+            result["handLocalOrthoError"] = a.handLocalOrthoError;
+            result["shieldCenterAbovePelvis"] = a.shieldCenterAbovePelvis;
+            result["shieldForwardDistance"] = a.shieldForwardDistance;
+            result["shieldTiltDegrees"] = a.shieldTiltDegrees;
+            result["sourceUpperLengthUnscaled"] = a.sourceUpperLengthUnscaled;
+            result["sourceForeLengthUnscaled"] = a.sourceForeLengthUnscaled;
+            result["finalUpperLengthUnscaled"] = a.finalUpperLengthUnscaled;
+            result["finalForeLengthUnscaled"] = a.finalForeLengthUnscaled;
+            result["maxLocalOrthoError"] = a.maxLocalOrthoError;
+            result["maxLocalTranslationError"] = a.maxLocalTranslationError;
+            result["bodyClearance"] = a.bodyClearance;
+            result["sourceUpperLength"] = a.sourceUpperLength;
+            result["sourceForeLength"] = a.sourceForeLength;
+            result["finalUpperLength"] = a.finalUpperLength;
+            result["finalForeLength"] = a.finalForeLength;
+            result["requestedTarget"] = a.requestedTarget;
+            result["interceptPoint"] = a.interceptPoint;
+            result["sourceContact"] = a.sourceContact;
+            result["itemContact"] = a.itemContact;
+            result["itemAxis"] = a.itemAxis;
+            result["requestedAxis"] = a.requestedAxis;
+            result["materialPoint"] = a.materialPoint;
+            result["palmForward"] = a.palmForward;
+            result["palmLateral"] = a.palmLateral;
+            result["palmNormal"] = a.palmNormal;
+            result["skeletonShoulder"] = a.skeletonShoulder;
+            result["skeletonElbow"] = a.skeletonElbow;
+            result["skeletonWrist"] = a.skeletonWrist;
+            result["shieldCenter"] = a.shieldCenter;
+            result["guardPelvis"] = a.guardPelvis;
+            result["guardTorso"] = a.guardTorso;
+            result["shieldBottom"] = a.shieldBottom;
+            result["shieldTop"] = a.shieldTop;
+            result["shieldBackPoint"] = a.shieldBackPoint;
+            result["shieldFrontPoint"] = a.shieldFrontPoint;
+            result["handTarget"] = a.handTarget;
+            result["sourceWrist"] = a.sourceWrist;
+            result["wrist"] = a.wrist;
+            result["shoulder"] = a.shoulder;
+            result["elbow"] = a.elbow;
+            result["renderActorOrigin"] = a.renderActorOrigin;
+            result["renderActorRight"] = a.renderActorRight;
+            result["renderActorForward"] = a.renderActorForward;
+            result["renderActorUp"] = a.renderActorUp;
+            result["twoHanded"] = a.twoHanded;
+            result["leftNatural"] = a.leftNatural;
+            result["leftGripError"] = a.leftGripError;
+            result["leftShoulderError"] = a.leftShoulderError;
+            result["leftSourceUpperLengthUnscaled"] = a.leftSourceUpperLengthUnscaled;
+            result["leftSourceForeLengthUnscaled"] = a.leftSourceForeLengthUnscaled;
+            result["leftFinalUpperLengthUnscaled"] = a.leftFinalUpperLengthUnscaled;
+            result["leftFinalForeLengthUnscaled"] = a.leftFinalForeLengthUnscaled;
+            result["leftMaxLocalOrthoError"] = a.leftMaxLocalOrthoError;
+            result["leftMaxLocalTranslationError"] = a.leftMaxLocalTranslationError;
+            result["leftWristSwingDegrees"] = a.leftWristSwingDegrees;
+            result["leftWristTwistDegrees"] = a.leftWristTwistDegrees;
+            result["leftPalmFlexDegrees"] = a.leftPalmFlexDegrees;
+            result["leftPalmSideDegrees"] = a.leftPalmSideDegrees;
+            result["leftForearmTwistDegrees"] = a.leftForearmTwistDegrees;
+            result["leftUpperSwingDegrees"] = a.leftUpperSwingDegrees;
+            result["leftUpperTwistDegrees"] = a.leftUpperTwistDegrees;
+            result["leftSignedElbowFlexDegrees"] = a.leftSignedElbowFlexDegrees;
+            result["leftElbowHingeErrorDegrees"] = a.leftElbowHingeErrorDegrees;
+            result["leftBodyClearance"] = a.leftBodyClearance;
+            result["leftSourceWrist"] = a.leftSourceWrist;
+            result["leftShoulder"] = a.leftShoulder;
+            result["leftElbow"] = a.leftElbow;
+            result["leftWrist"] = a.leftWrist;
+            return result;
+        };
+        actor["_requestNpcGuardRigForAudit"] = [](const Object& object) {
+            auto* npc = dynamic_cast<MWRender::NpcAnimation*>(
+                MWBase::Environment::get().getWorld()->getAnimation(object.ptr()));
+            if (!npc)
+                return false;
+            npc->requestNpcGuardRigAudit();
+            return true;
+        };
+        actor["_getNpcGuardRigForAudit"] = [lua = context.mLua](const Object& object) {
+            sol::table result(lua->unsafeState(), sol::create);
+            result["valid"] = false;
+            const auto* npc = dynamic_cast<const MWRender::NpcAnimation*>(
+                MWBase::Environment::get().getWorld()->getAnimation(object.ptr()));
+            if (!npc)
+                return result;
+            const auto snapshot = npc->getNpcGuardRigForAudit();
+            if (!snapshot)
+                return result;
+            sol::table matrices(lua->unsafeState(), sol::create);
+            for (const auto& [name, matrix] : snapshot->matrices)
+            {
+                sol::table values(lua->unsafeState(), sol::create);
+                for (unsigned i = 0; i < 16; ++i)
+                    values[i + 1] = matrix.ptr()[i];
+                matrices[name] = values;
+            }
+            sol::table vectors(lua->unsafeState(), sol::create);
+            for (const auto& [name, value] : snapshot->vectors)
+                vectors[name] = value;
+            sol::table scalars(lua->unsafeState(), sol::create);
+            for (const auto& [name, value] : snapshot->scalars)
+                scalars[name] = value;
+            result["valid"] = true;
+            result["frame"] = snapshot->frame;
+            result["matrixLayout"] = "row-major";
+            result["vectorConvention"] = "row-vector";
+            result["matrices"] = matrices;
+            result["vectors"] = vectors;
+            result["scalars"] = scalars;
+            return result;
+        };
+        actor["_traceNpcGuardMeshForAudit"] = [lua = context.mLua](
+                                                  const Object& object, Misc::FiniteVec3f origin, Misc::FiniteVec3f end) {
+            sol::table result(lua->unsafeState(), sol::create);
+            result["valid"] = false;
+            const auto* npc = dynamic_cast<const MWRender::NpcAnimation*>(
+                MWBase::Environment::get().getWorld()->getAnimation(object.ptr()));
+            if (npc)
+                if (const auto trace = npc->traceNpcGuardMeshForAudit(origin, end))
+                {
+                    result["valid"] = true;
+                    result["frame"] = trace->frame;
+                    result["hit"] = trace->hit;
+                    result["gap"] = trace->gap;
+                    result["point"] = trace->point;
+                }
+            return result;
+        };
+        actor["_getMeleeAimForAudit"] = [lua = context.mLua](const Object& object) {
+            const auto& ptr = object.ptr();
+            if (!ptr.getClass().isActor())
+                throw std::runtime_error("_getMeleeAimForAudit requires an actor");
+            const auto [origin, direction] = MWMechanics::getMeleeAim(ptr);
+            sol::table result(lua->unsafeState(), sol::create);
+            result["origin"] = origin;
+            result["direction"] = direction;
+            return result;
+        };
 
         actor["addExternalVelocity"] = [context](const SelfObject& self, Misc::FiniteVec3f value) {
             const osg::Vec3f delta = value;
@@ -1128,6 +1494,8 @@ namespace MWLua
                 MWBase::Environment::get().getWorld()->addActorExternalVelocity(ptr, delta);
             }, "AddExternalVelocity");
         };
+
+        actor["_mergeBloodDecalData"] = &MWRender::mergeNpcBloodDecalData;
 
         actor["_onHit"] = [context](const SelfObject& self, const sol::table& options) {
             std::optional<osg::Vec3f> lethalVelocity;
@@ -1158,6 +1526,17 @@ namespace MWLua
                 sourceType = MWMechanics::DamageSourceType::Ranged;
             else if (sourceTypeStr == "magic")
                 sourceType = MWMechanics::DamageSourceType::Magical;
+            const bool physical = sourceType == MWMechanics::DamageSourceType::Melee
+                || sourceType == MWMechanics::DamageSourceType::Ranged;
+            const auto kind = options.get_or<std::string_view>("brutalAttackType", {});
+            using Impact = MWRender::BrutalBlood::Impact;
+            const Impact impact = sourceType == MWMechanics::DamageSourceType::Ranged || kind == "thrust"
+                ? Impact::Puncture : kind == "slash" ? Impact::Slash : Impact::Chop;
+            osg::Vec3f impactDirection;
+            if (const auto value = options.get<sol::optional<Misc::FiniteVec3f>>("brutalImpactDirection"))
+                impactDirection = *value;
+            else if (const auto aim = options.get<sol::optional<Misc::FiniteVec3f>>("brutalAimDirection"))
+                impactDirection = *aim;
             std::string_view ammoId = options.get_or<std::string_view>("ammo", {});
             ESM::RefId weaponId = ESM::RefId::deserializeText(ammoId);
             if (weaponId.empty())
@@ -1170,14 +1549,29 @@ namespace MWLua
                 }
             }
 
+            const auto attackId = options.get_or<uint64_t>("brutalAttackId", 0);
+            LuaUtil::BinaryData receiptAttack;
+            if (attackId != 0 && physical)
+            {
+                // Save the input to the receipt along with its result. A quicksave can
+                // apply this action before the resulting Lua event has been delivered.
+                sol::table attack = context.sol().create_table();
+                for (const char* field : { "attacker", "weapon", "sourceType", "successful", "brutalAttackId",
+                         "brutalGroundFinisher", "brutalPowered", "brutalBlocked", "brutalAttackType",
+                         "brutalShieldRush", "brutalHeadHit", "brutalWaistHit", "brutalSlideAttack", "brutalLegHit",
+                         "brutalLegsAllowed", "brutalClosestArm", "brutalImpactDirection", "brutalAimDirection" })
+                    attack[field] = options.get<sol::object>(field);
+                receiptAttack = LuaUtil::serialize(attack, context.mSerializer);
+            }
             context.mLuaManager->addAction(
                 [self = Object(self), damages = std::move(damageCpp),
                     attacker = options.get<sol::optional<Object>>("attacker"), weaponId,
                     successful = options.get<bool>("successful"), sourceType = sourceType, lethalVelocity, lethalPoint,
-                    attackId = options.get_or<uint64_t>("brutalAttackId", 0),
-                    lua = context.mLua, manager = context.mLuaManager] {
+                    worldBlood = physical && !options.get_or("brutalBlocked", false), impact, impactDirection,
+                    powered = options.get_or("brutalPowered", false),
+                    attackId, charged = options.get_or("brutalCharged", false), receiptAttack = std::move(receiptAttack),
+                    serializer = context.mSerializer, lua = context.mLua, manager = context.mLuaManager] {
                     MWWorld::Ptr attackerPtr;
-                    MWWorld::Ptr weaponPtr;
                     if (attacker)
                         attackerPtr = attacker->ptrOrEmpty();
                     const auto target = self.ptrOrEmpty();
@@ -1185,9 +1579,20 @@ namespace MWLua
                     const auto& stats = target.getClass().getCreatureStats(target);
                     const bool aliveBefore = !stats.isDead();
                     const float healthBefore = stats.getHealth().getCurrent();
-                    target.getClass().onHit(target, damages, weaponId, attackerPtr, successful, sourceType);
-                    if (lethalVelocity && aliveBefore && stats.isDead()
-                        && healthBefore > stats.getHealth().getCurrent()
+                    const float maximumHealth = stats.getHealth().getModified();
+                    target.getClass().onHit(target, damages, weaponId, attackerPtr, successful, sourceType, charged);
+                    const float healthDamage = std::max(0.f, healthBefore - stats.getHealth().getCurrent());
+                    if (worldBlood && successful && aliveBefore && healthDamage > 0.f)
+                    {
+                        if (auto* blood = MWRender::BrutalBlood::get())
+                        {
+                            const auto point = lethalPoint.value_or(
+                                target.getRefData().getPosition().asVec3() + osg::Vec3f(0.f, 0.f, 50.f));
+                            blood->hit(target, attackerPtr, point, impactDirection, impact, powered, stats.isDead(),
+                                healthDamage);
+                        }
+                    }
+                    if (lethalVelocity && aliveBefore && stats.isDead() && healthDamage > 0.f
                         && (target.getType() == ESM::REC_NPC_ || MWPhysics::findCreatureRig(target))
                         && target != MWMechanics::getPlayer())
                     {
@@ -1221,7 +1626,11 @@ namespace MWLua
                             receipt["attackId"] = attackId;
                             receipt["aliveBefore"] = aliveBefore;
                             receipt["deadAfter"] = stats.isDead();
-                            receipt["actualHealthDamage"] = std::max(0.f, healthBefore-stats.getHealth().getCurrent());
+                            receipt["actualHealthDamage"] = healthDamage;
+                            receipt["healthBefore"] = healthBefore;
+                            receipt["maximumHealth"] = maximumHealth;
+                            if (!receiptAttack.empty())
+                                receipt["attack"] = LuaUtil::deserialize(view.sol(), receiptAttack, serializer);
                             manager->sendLocalEvent(target, "BrutalHitApplied", receipt);
                         });
                 },

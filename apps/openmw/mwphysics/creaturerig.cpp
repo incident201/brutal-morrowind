@@ -53,6 +53,14 @@ namespace MWPhysics
             part.mSwing1 = std::stof(fields[11]);
             part.mSwing2 = std::stof(fields[12]);
             part.mTwist = std::stof(fields[13]);
+            const auto finiteVector = [](const osg::Vec3f& value) {
+                return std::isfinite(value.x()) && std::isfinite(value.y()) && std::isfinite(value.z());
+            };
+            if (!finiteVector(part.mCenter) || !finiteVector(part.mAxis)
+                || !std::isfinite(part.mHalfLength) || !std::isfinite(part.mRadius) || !std::isfinite(part.mMass)
+                || !std::isfinite(part.mSwing1) || !std::isfinite(part.mSwing2) || !std::isfinite(part.mTwist)
+                || part.mHalfLength < 0.f || !std::isfinite(part.mAxis.length()))
+                throw std::runtime_error("non-finite or invalid dimensions for part " + part.mBone);
             if ((index == 0) != (part.mParent < 0) || part.mParent >= static_cast<int>(index) || part.mMass <= 0.f
                 || part.mRadius <= 0.f || part.mAxis.normalize() < 1e-3f)
                 throw std::runtime_error("invalid part " + part.mBone);

@@ -61,6 +61,7 @@ namespace MWRender
 
     private:
         void prewarmBrutalImpacts();
+        void updateBrutalParticleBatches(float dt);
         // Immutable render templates only. Each spawned particle owns its colors.
         osg::ref_ptr<osg::Billboard> mBrutalImpactTemplates[6];
         std::vector<osg::ref_ptr<osg::StateSet>> mCutSprayFrames;
@@ -72,16 +73,21 @@ namespace MWRender
         osg::ref_ptr<osg::PositionAttitudeTransform> mBrutalWarmTransform;
         struct BrutalParticle
         {
-            osg::ref_ptr<osg::PositionAttitudeTransform> transform;
-            osg::ref_ptr<osg::Vec4Array> colors;
-            osg::ref_ptr<osg::Billboard> animatedBillboard;
             osg::Vec3f position, velocity;
             float age = 0.f, life = 0.5f, size = 1.f;
             bool spark = false;
             float opacity = 1.f;
-            int animationFrame = -1;
+            int variant = 0;
         };
         std::vector<BrutalParticle> mBrutalParticles;
+        struct ParticleBatch
+        {
+            osg::ref_ptr<osg::Group> node;
+            float idle = 0.f;
+            bool attached = false;
+        };
+        std::map<std::pair<int, int>, ParticleBatch> mBrutalParticleBatches;
+        std::uint64_t mBrutalBatchBuilds = 0;
         struct CutBloodRequest
         {
             std::string kind;

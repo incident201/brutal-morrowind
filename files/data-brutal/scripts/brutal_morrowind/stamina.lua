@@ -1,7 +1,6 @@
 local settings=require('scripts.brutal_morrowind.settings')
--- Dark Messiah gait and stamina for the player. Default is the run, Alt walks and
--- The assigned sprint button sprints while stamina allows it. The engine owns the speeds; regeneration is
--- the engine's `player fatigue regen fraction` (0.06 per 0.12 s of 9 = 1/18 per second).
+-- Dark Messiah gait selection for the player. Alt and overencumbrance select
+-- walking. The engine owns the speeds and applies sprint fatigue and recovery.
 local self = require('openmw.self')
 local types = require('openmw.types')
 local input = require('openmw.input')
@@ -16,10 +15,10 @@ local scripted -- when set, {shift=, alt=} replaces the keyboard state
 
 local function fatigueFraction()
     local fatigue = types.Actor.stats.dynamic.fatigue(self)
-    return fatigue.base > 0 and fatigue.current / fatigue.base or 0, fatigue
+    return fatigue.base > 0 and fatigue.current / fatigue.base or 0
 end
 
-local function update(dt)
+local function update()
     if not setGait then return end
     if not settings.get('movementEnabled') then
         if gait~=nil then setGait(self,0) end
@@ -33,21 +32,19 @@ local function update(dt)
         shift, alt = input.getBooleanActionValue('BrutalSprint'), input.isAltPressed()
     end
     if I.BrutalClinch and I.BrutalClinch.status().active then shift,alt=false,false end
-    local forward = self.controls.movement > 0.3 and math.abs(self.controls.sideMovement) <= 0.3
-    local fraction, fatigue = fatigueFraction()
+    local fraction = fatigueFraction()
+    local staminaEnabled = settings.get('staminaEnabled')
+    local overloaded = types.Actor.getEncumbrance(self) > types.Actor.getCapacity(self)
     local needed = C.sprintStaminaNeeded / C.staminaMax
     -- The reserve is needed only to start. An active sprint can use all remaining
     -- stamina; once exhausted, the sprint button must be released to start again.
-    if shift and not shiftWasDown and (not settings.get('staminaEnabled') or fraction >= needed) then sprinting = true end
-    if not shift or (settings.get('staminaEnabled') and fraction <= 0) or types.Actor.isSwimming(self) then sprinting = false end
-    shiftWasDown = shift
-    if settings.get('staminaEnabled') and sprinting and forward and dt > 0 then
-        fatigue.current = math.max(0, fatigue.current
-            - fatigue.base * C.sprintStaminaPerSecond / C.staminaMax * dt)
-        -- Stop on the depleted frame, before regeneration can hide zero next frame.
-        if fatigue.current <= 0 then sprinting = false end
+    if not shift or overloaded or (staminaEnabled and fraction <= 0) or types.Actor.isSwimming(self) then
+        sprinting = false
+    elseif not shiftWasDown and (not staminaEnabled or fraction >= needed) then
+        sprinting = true
     end
-    local wanted = sprinting and SPRINT or (alt and WALK or RUN)
+    shiftWasDown = shift
+    local wanted = sprinting and SPRINT or ((alt or overloaded) and WALK or RUN)
     if wanted ~= gait then
         gait = wanted
         setGait(self, gait)
@@ -59,7 +56,7 @@ return {
     interface = {
         version = 1,
         status = function()
-            return {gait = gait, sprinting = sprinting, fraction = (fatigueFraction())}
+            return {gait = gait, sprinting = sprinting, fraction = fatigueFraction()}
         end,
         setScriptedInput = function(keys) scripted = keys end,
     },

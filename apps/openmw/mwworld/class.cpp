@@ -113,19 +113,20 @@ namespace MWWorld
         throw std::runtime_error("class does not have item health");
     }
 
-    bool Class::evaluateHit(const Ptr& ptr, Ptr& victim, osg::Vec3f& hitPosition, int* contactPart, std::string_view swing) const
+    bool Class::evaluateHit(const Ptr& ptr, Ptr& victim, osg::Vec3f& hitPosition, int* contactPart,
+        std::string_view swing, std::vector<MWMechanics::MeleeFollowThrough>*) const
     {
         throw std::runtime_error("class cannot hit");
     }
 
     void Class::hit(const Ptr& ptr, float attackStrength, int type, const Ptr& victim, const osg::Vec3f& hitPosition,
-        bool success, int contactPart) const
+        bool success, int contactPart, bool groundFinisher, const Ptr*) const
     {
         throw std::runtime_error("class cannot hit");
     }
 
     void Class::onHit(const Ptr& ptr, const std::map<std::string, float>& damages, ESM::RefId object,
-        const Ptr& attacker, bool successful, const MWMechanics::DamageSourceType sourceType) const
+        const Ptr& attacker, bool successful, const MWMechanics::DamageSourceType sourceType, bool) const
     {
         throw std::runtime_error("class cannot be hit");
     }
@@ -384,6 +385,9 @@ namespace MWWorld
         newPtr.getCellRef().unsetRefNum(); // This RefNum is only valid within the original cell of the reference
         newPtr.getCellRef().setCount(count);
         newPtr.getRefData().setLuaScripts(nullptr);
+        auto& animation = newPtr.getRefData().getAnimationState();
+        animation.mShieldProjectiles.clear();
+        animation.mEquippedShieldProjectiles.clear();
         MWBase::Environment::get().getWorldModel()->registerPtr(newPtr);
         return newPtr;
     }

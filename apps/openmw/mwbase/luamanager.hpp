@@ -1,6 +1,7 @@
 #ifndef GAME_MWBASE_LUAMANAGER_H
 #define GAME_MWBASE_LUAMANAGER_H
 
+#include <cstdint>
 #include <filesystem>
 #include <map>
 #include <string>
@@ -87,18 +88,32 @@ namespace MWBase
         virtual void skillUse(const MWWorld::Ptr& actor, ESM::RefId skillId, int useType, float scale) = 0;
         virtual void onHit(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, const MWWorld::Ptr& weapon,
             const MWWorld::Ptr& ammo, int attackType, float attackStrength, float damage, bool isHealth,
-            const osg::Vec3f& hitPos, bool successful, MWMechanics::DamageSourceType,
-            uint64_t brutalAttackId = 0, bool brutalPowered = false, bool brutalBlocked = false, int contactPart = -1)
-            = 0;
+            const osg::Vec3f& hitPos, bool successful, MWMechanics::DamageSourceType, uint64_t brutalAttackId = 0,
+            bool brutalPowered = false, bool brutalBlocked = false, int contactPart = -1,
+            bool brutalGroundFinisher = false, const osg::Vec3f* contactNormal = nullptr, bool brutalCharged = false) = 0;
         virtual void meleeResolved(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, const MWWorld::Ptr& weapon,
             uint64_t attackId, const std::string& token, bool powered, bool successful, bool blocked,
             float damage, float strength, const osg::Vec3f& hitPos) = 0;
+        virtual void storeNpcBloodDecals(const MWWorld::Ptr& actor, const std::string& data) = 0;
+
         virtual void swordClinchResolved(const MWWorld::Ptr& player, const MWWorld::Ptr& opponent,
             uint64_t id, std::string_view result, std::string_view reason, int clicks, int requiredClicks) = 0;
         virtual void actorExternalImpact(const MWWorld::Ptr& actor, const MWWorld::Ptr& hitObject,
             const osg::Vec3f& position, const osg::Vec3f& normal, float speed) = 0;
         // A kick sent a living NPC over a ledge into a ragdoll; the kicker receives BrutalKickRagdoll.
         virtual void npcKickRagdoll(const MWWorld::Ptr& attacker, const MWWorld::Ptr& target) = 0;
+        virtual void missileLanded(const MWWorld::Ptr& caster, const MWWorld::Ptr& target, const MWWorld::Ptr& item,
+            const ESM::RefId& missile, std::string_view outcome, std::string_view material, const osg::Vec3f& position)
+            = 0;
+        virtual void projectileFinisher(const MWWorld::Ptr& player, const MWWorld::Ptr& target, std::uint64_t attackId,
+            std::string_view phase, std::string_view token = {}) = 0;
+        virtual void objectThrowResolved(const MWWorld::Ptr& player, std::uint64_t throwId, bool released) = 0;
+        virtual void thrownObjectHit(const MWWorld::Ptr& attacker, const MWWorld::Ptr& item,
+            const MWWorld::Ptr& victim, const osg::Vec3f& hitPos, const osg::Vec3f& normal,
+            const osg::Vec3f& velocity, float mass, bool adrenaline, bool headHit, bool knockedDown,
+            std::string_view reaction, float damage) = 0;
+        virtual void dynamicObjectImpact(const MWWorld::Ptr& player, const MWWorld::Ptr& item,
+            const osg::Vec3f& position, const osg::Vec3f& normal, float speed) = 0;
         virtual void exteriorCreated(MWWorld::CellStore& cell) = 0;
         virtual void actorDied(const MWWorld::Ptr& actor) = 0;
         virtual void onDialogueResponse(

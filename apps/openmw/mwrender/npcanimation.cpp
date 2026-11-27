@@ -1,8 +1,10 @@
 #include "npcanimation.hpp"
+#include "griparms.hpp"
 #include "npcblood.hpp"
 #include "decapitation.hpp"
 #include "bisection.hpp"
 #include "limbsevering.hpp"
+#include "../mwphysics/ragdoll.hpp"
 #include "releasedequipmentcapture.hpp"
 #include "decapitationplane.hpp"
 #include "renderprewarm.hpp"
@@ -15,6 +17,7 @@
 #include <mutex>
 #include <set>
 #include <tuple>
+#include <utility>
 #include <atomic>
 #include <cstdlib>
 #include <filesystem>
@@ -29,11 +32,13 @@
 #include <osgUtil/IncrementalCompileOperation>
 
 #include <osg/Depth>
+#include <osg/ComputeBoundsVisitor>
 #include <osg/MatrixTransform>
 #include <osg/UserDataContainer>
 
 #include <osgUtil/CullVisitor>
 #include <osgUtil/RenderBin>
+#include <osgUtil/UpdateVisitor>
 
 #include <components/debug/debuglog.hpp>
 
@@ -52,9 +57,11 @@
 #include <components/sceneutil/hemcoverage.hpp>
 #include <components/sceneutil/lightcommon.hpp>
 #include <components/sceneutil/positionattitudetransform.hpp>
+#include <components/sceneutil/skeleton.hpp>
 #include <components/sceneutil/visitor.hpp>
 #include <components/settings/values.hpp>
 
+#include <components/files/istreamptr.hpp>
 #include <components/vfs/manager.hpp>
 
 #include "../mwmechanics/brutaloptions.hpp"
@@ -975,18 +982,21 @@ namespace MWRender
 
     NpcAnimation::~NpcAnimation()
     {
+        clearNpcGuardPose();
+        clearNpcTwoHandGuardPose();
         clearCutBloodFlow();
         mBisection.reset();
         mLimbSevering.reset();
         clearRagdollGarmentCoverage();
         mGarmentAudit.reset();
         resetBodyAwareness();
+        resetPlayerShadow();
         mAmmunition.reset();
     }
 
     NpcAnimation::NpcAnimation(const MWWorld::Ptr& ptr, osg::ref_ptr<osg::Group> parentNode,
         Resource::ResourceSystem* resourceSystem, bool disableSounds, ViewMode viewMode, float firstPersonFieldOfView,
-        bool bodyAwareness)
+        FirstPersonBody body)
         : ActorAnimation(ptr, std::move(parentNode), resourceSystem)
         , mViewMode(viewMode)
         , mShowWeapons(false)
@@ -994,7 +1004,8 @@ namespace MWRender
         , mNpcType(getNpcType(ptr))
         , mFirstPersonFieldOfView(firstPersonFieldOfView)
         , mSoundsDisabled(disableSounds)
-        , mBodyAwareness(bodyAwareness)
+        , mBodyAwareness(body != FirstPersonBody::None)
+        , mShadowOnly(body == FirstPersonBody::Shadow)
         , mAccurateAiming(false)
         , mAimingFactor(0.f)
     {
@@ -1023,6 +1034,13 @@ namespace MWRender
     void NpcAnimation::setViewMode(NpcAnimation::ViewMode viewMode)
     {
         assert(viewMode != VM_HeadOnly);
+        if (mPlayerDeathView && viewMode != VM_Normal)
+        {
+            // Scaling refreshes the camera synchronously. Keep its requested
+            // view for resurrection while the full death rig is being built.
+            mPlayerDeathView = viewMode;
+            return;
+        }
         if (mViewMode == viewMode)
             return;
         // FIXME: sheathing state must be consistent if the third person skeleton doesn't have the necessary node, but
@@ -1041,6 +1059,129 @@ namespace MWRender
             int weaptype = ESM::Weapon::None;
             MWMechanics::getActiveWeapon(mPtr, &weaptype);
             showCarriedLeft(updateCarriedLeftVisible(weaptype));
+        }
+    }
+
+    std::optional<osg::Matrixf> NpcAnimation::getLeftWeaponGrip() const
+    {
+        const auto hand = getBoneWorldMatrix("Bip01 L Hand");
+        const auto mount = getBoneWorldMatrix(sBrutalLeftWeaponBone);
+        if (hand && mount)
+            return *mount * osg::Matrixf::inverse(*hand);
+        return std::nullopt;
+    }
+
+    void NpcAnimation::attachLeftWeaponMount(const osg::Matrixf& grip)
+    {
+        if (getNode(sBrutalLeftWeaponBone))
+            return;
+        if (const auto hand = getNodeMap().find("Bip01 L Hand"); hand != getNodeMap().end())
+        {
+            osg::ref_ptr<osg::MatrixTransform> mount = new osg::MatrixTransform(grip);
+            mount->setName(std::string(sBrutalLeftWeaponBone));
+            hand->second->addChild(mount);
+            mNodeMap.emplace(mount->getName(), mount);
+        }
+    }
+
+    void NpcAnimation::preparePlayerDeathPose()
+    {
+        if (mPlayerDeathView)
+            return;
+        const ViewMode previous = mViewMode;
+        if (previous == VM_Normal)
+        {
+            mPlayerDeathView = previous;
+            for (auto part : { ESM::PRT_Head, ESM::PRT_Hair })
+                removeIndividualPart(part);
+            updateParts();
+            return;
+        }
+
+        // Arms projected with their own field of view and the separate body
+        // have different shoulder anchors. Copy the world body's local pose,
+        // then pose the two full-length arm chains along the visible directions.
+        constexpr std::array<std::array<std::string_view, 3>, 2> arms{
+            std::array<std::string_view, 3>{ "Bip01 L UpperArm", "Bip01 L Forearm", "Bip01 L Hand" },
+            std::array<std::string_view, 3>{ "Bip01 R UpperArm", "Bip01 R Forearm", "Bip01 R Hand" },
+        };
+        const bool fullBody = useFullBodyFirstPerson();
+        const auto* body = fullBody ? this : mBodyAwarenessAnimation.get();
+        std::optional<osg::Matrixf> leftWeaponGrip;
+        if (mShowCarriedLeft && carriesLeftWeapon())
+            leftWeaponGrip = getLeftWeaponGrip();
+        std::map<std::string, osg::Matrixf, std::less<>> localPose;
+        if (body)
+            for (const auto& [bone, node] : body->getNodeMap())
+                localPose.emplace(bone, node->getMatrix());
+
+        std::array<std::array<osg::Vec3f, 2>, 2> armDirections{};
+        if (!fullBody)
+            for (std::size_t side = 0; side < arms.size(); ++side)
+                for (std::size_t joint = 0; joint < armDirections[side].size(); ++joint)
+                {
+                    const auto start = getBoneWorldMatrix(arms[side][joint]);
+                    const auto end = getBoneWorldMatrix(arms[side][joint + 1]);
+                    if (start && end)
+                        armDirections[side][joint] = end->getTrans() - start->getTrans();
+                }
+
+        mPlayerDeathView = previous;
+        setViewMode(VM_Normal);
+        if (localPose.empty())
+        {
+            // The body can be hidden altogether in first person. Evaluate an
+            // idle once to seed the exposed torso and legs in that mode.
+            play("idle", AnimPriority(0), BlendMask_All, false, 0.f, "start", "stop", 0.f, 0, false);
+            runAnimation(0.f);
+            osgUtil::UpdateVisitor update;
+            update.setFrameStamp(new osg::FrameStamp);
+            update.setNodeMaskOverride(~0u);
+            mObjectRoot->accept(update);
+        }
+        else
+            for (const auto& [bone, node] : getNodeMap())
+                if (const auto found = localPose.find(bone); found != localPose.end())
+                    node->setMatrix(found->second);
+
+        for (std::size_t side = 0; side < arms.size(); ++side)
+            for (std::size_t joint = 0; joint < armDirections[side].size(); ++joint)
+            {
+                const osg::Vec3f direction = armDirections[side][joint];
+                if (!(direction.length2() > .001f))
+                    continue;
+                const auto start = getBoneWorldMatrix(arms[side][joint]);
+                const auto end = getBoneWorldMatrix(arms[side][joint + 1]);
+                if (!start || !end)
+                    continue;
+                const auto pivot = start->getTrans();
+                const osg::Vec3f along(end->getTrans() - pivot);
+                if (!(along.length2() > .001f))
+                    continue;
+                osg::Quat swing;
+                swing.makeRotate(along, direction);
+                setBoneWorldMatrix(arms[side][joint], *start * osg::Matrixf::translate(-pivot)
+                    * osg::Matrixf::rotate(swing) * osg::Matrixf::translate(pivot));
+            }
+
+        // The imported dagger rig owns an off-hand attachment that is absent
+        // from the regular body. Carry its grip to the physical left hand so
+        // the drop starts at the palm with the arm's linear and angular motion.
+        if (leftWeaponGrip)
+        {
+            attachLeftWeaponMount(*leftWeaponGrip);
+            showCarriedLeft(true);
+        }
+    }
+
+    void NpcAnimation::restorePlayerDeathView()
+    {
+        if (const auto previous = std::exchange(mPlayerDeathView, std::nullopt))
+        {
+            if (*previous == mViewMode)
+                updateParts();
+            else
+                setViewMode(*previous);
         }
     }
 
@@ -1096,15 +1237,19 @@ namespace MWRender
         osg::ref_ptr<osg::StateSet> mStateSet;
     };
 
-    class BodyAwarenessClinchCullCallback : public osg::NodeCallback
+    class FirstPersonBodyCullCallback : public osg::NodeCallback
     {
         osg::observer_ptr<NpcAnimation> mOwner;
+        bool mBodyAwareness;
     public:
-        explicit BodyAwarenessClinchCullCallback(NpcAnimation* owner) : mOwner(owner) {}
+        FirstPersonBodyCullCallback(NpcAnimation* owner, bool bodyAwareness)
+            : mOwner(owner), mBodyAwareness(bodyAwareness) {}
         void operator()(osg::Node* node, osg::NodeVisitor* visitor) override
         {
             osg::ref_ptr<NpcAnimation> owner;
-            if (mOwner.lock(owner) && owner->isBodyAwarenessHiddenForClinch())
+            if (mOwner.lock(owner) && ((mBodyAwareness
+                    && (owner->isBodyAwarenessHiddenForClinch() || owner->isPlayingGroundFinisher()))
+                    || (owner->hasPlayerShadowBody() && (visitor->getTraversalMask() & Mask_PlayerShadow))))
                 return;
             traverse(node, visitor);
         }
@@ -1115,21 +1260,48 @@ namespace MWRender
     class OverrideFieldOfViewCallback : public osg::NodeCallback
     {
     public:
-        OverrideFieldOfViewCallback(float fov, RenderingManager* renderingManager)
+        OverrideFieldOfViewCallback(float fov, RenderingManager* renderingManager, bool heldObject = false,
+            NpcAnimation* actor = nullptr)
             : mFov(fov)
             , mRenderingManager(renderingManager)
+            , mActor(actor)
         {
+            if (heldObject)
+            {
+                mHeldState = new osg::StateSet;
+                mHeldState->setRenderBinDetails(
+                    RenderBin_FirstPerson, "DepthClear", osg::StateSet::OVERRIDE_RENDERBIN_DETAILS);
+            }
         }
 
         void operator()(osg::Node* node, osg::NodeVisitor* nv) override
         {
             osgUtil::CullVisitor* cv = static_cast<osgUtil::CullVisitor*>(nv);
+            if (mHeldState && !(cv->getTraversalMask() & Mask_FirstPerson))
+                return;
+            if (mHeldState)
+                cv->pushStateSet(mHeldState);
             float fov, aspect, zNear, zFar;
-            if (cv->getProjectionMatrix()->getPerspective(fov, aspect, zNear, zFar) && std::abs(fov - mFov) > 0.001)
+            const bool perspective = cv->getProjectionMatrix()->getPerspective(fov, aspect, zNear, zFar);
+            float targetFov = mFov;
+            osg::ref_ptr<NpcAnimation> actor;
+            if (perspective && mActor.lock(actor))
             {
-                fov = mFov;
+                const std::string_view execution
+                    = actor->isPlayingGroundFinisher() ? "brutal_ground_finisher" : "brutal_backstab_out";
+                if (actor->isPlaying(execution))
+                {
+                    // Match the viewmodel projection to the actual contact, easing in and out of the player's FOV.
+                    const float time = actor->getCurrentTime(execution);
+                    const float end = actor->getTextKeyTime(std::string(execution) + ": stop");
+                    const float progress = std::clamp(std::min(time, end - time) / .22f, 0.f, 1.f);
+                    targetFov = std::lerp(mFov, fov, progress * progress * (3.f - 2.f * progress));
+                }
+            }
+            if (perspective && std::abs(fov - targetFov) > 0.001)
+            {
                 osg::ref_ptr<osg::RefMatrix> newProjectionMatrix = new osg::RefMatrix();
-                newProjectionMatrix->makePerspective(fov, aspect, zNear, zFar);
+                newProjectionMatrix->makePerspective(targetFov, aspect, zNear, zFar);
 
                 osg::Vec2f offset = mRenderingManager->getProjectionOffset();
 
@@ -1150,16 +1322,39 @@ namespace MWRender
             }
             else
                 traverse(node, nv);
+            if (mHeldState)
+                cv->popStateSet();
         }
 
     private:
         float mFov;
         RenderingManager* mRenderingManager;
+        osg::ref_ptr<osg::StateSet> mHeldState;
+        osg::observer_ptr<NpcAnimation> mActor;
     };
+
+    osg::ref_ptr<osg::Callback> NpcAnimation::makeHeldObjectCullCallback() const
+    {
+        return new OverrideFieldOfViewCallback(
+            mFirstPersonFieldOfView, MWBase::Environment::get().getWorld()->getRenderingManager(),
+            !useFullBodyFirstPerson());
+    }
+
+    std::vector<osg::Node*> NpcAnimation::getDetachedFragmentNodes(unsigned fragment) const
+    {
+        if (fragment == MWPhysics::Ragdoll::HeadFragment && mDecapitation)
+            return { mDecapitation->upper.get() };
+        if (mLimbSevering)
+            for (std::size_t i = 0; i < mLimbSevering->cuts.size(); ++i)
+                if (mLimbSevering->cuts[i].bit == fragment)
+                    return { mLimbSevering->regions[i + 1].get(), mLimbSevering->cuts[i].caps[1].get() };
+        return {};
+    }
 
     void NpcAnimation::setRenderBin()
     {
-        if (mViewMode == VM_FirstPerson && !useFullBodyFirstPerson())
+        if (mViewMode == VM_FirstPerson && !useFullBodyFirstPerson() && !isPlaying("brutal_backstab_out")
+            && !isPlayingGroundFinisher())
         {
             [[maybe_unused]] static const bool prototypeAdded = [&] {
                 osg::ref_ptr<osgUtil::RenderBin> depthClearBin(new osgUtil::RenderBin);
@@ -1201,8 +1396,11 @@ namespace MWRender
 
     void NpcAnimation::updateNpcBase()
     {
+        clearNpcGuardPose();
+        clearNpcTwoHandGuardPose();
         clearRagdollGarmentCoverage();
         resetBodyAwareness();
+        resetPlayerShadow();
         clearAnimSources();
         for (size_t i = 0; i < ESM::PRT_Count; i++)
             removeIndividualPart((ESM::PartReferenceType)i);
@@ -1244,6 +1442,7 @@ namespace MWRender
 
         bool is1stPerson = mViewMode == VM_FirstPerson && !useFullBodyFirstPerson();
         bool isBeast = (race->mData.mFlags & ESM::Race::Beast) != 0;
+        mBeastRace = isBeast && !isWerewolf;
 
         std::string_view base;
         if (!isWerewolf)
@@ -1297,17 +1496,31 @@ namespace MWRender
             loadAdditionalAnimations(VFS::Path::NormalizedView("meshes/brutal_fp.nif"), smodel);
             if (mViewmodelSet == BrutalViewmodel_Shield)
                 loadAdditionalAnimations(VFS::Path::NormalizedView("meshes/brutal_fp_shield.nif"), smodel);
-            else if (mViewmodelSet == BrutalViewmodel_Staff)
+            else if (hasPolearmViewmodel())
+            {
                 loadAdditionalAnimations(VFS::Path::NormalizedView("meshes/brutal_fp_staff.nif"), smodel);
+                if (mViewmodelSet == BrutalViewmodel_Spear)
+                    loadAdditionalAnimations(VFS::Path::NormalizedView("meshes/brutal_fp_spear.nif"), smodel);
+            }
             else if (mViewmodelSet == BrutalViewmodel_Dagger)
                 loadAdditionalAnimations(VFS::Path::NormalizedView("meshes/brutal_fp_dagger.nif"), smodel);
+            else if (mViewmodelSet == BrutalViewmodel_Paired)
+                loadAdditionalAnimations(VFS::Path::NormalizedView("meshes/brutal_fp_paired.nif"), smodel);
+            else if (mViewmodelSet == BrutalViewmodel_PairedBlunt)
+                loadAdditionalAnimations(VFS::Path::NormalizedView("meshes/brutal_fp_paired_blunt.nif"), smodel);
+            else if (mViewmodelSet == BrutalViewmodel_Bow)
+            {
+                loadAdditionalAnimations(VFS::Path::NormalizedView("meshes/brutal_fp_bow.nif"), smodel);
+                loadArrowMount();
+            }
+            loadAdditionalAnimations(VFS::Path::NormalizedView("meshes/brutal_fp_thrown.nif"), smodel);
         }
 
         if (is1stPerson)
         {
             mObjectRoot->setNodeMask(Mask_FirstPerson);
             mObjectRoot->addCullCallback(new OverrideFieldOfViewCallback(
-                mFirstPersonFieldOfView, MWBase::Environment::get().getWorld()->getRenderingManager()));
+                mFirstPersonFieldOfView, MWBase::Environment::get().getWorld()->getRenderingManager(), false, this));
         }
 
         // Separate player and NPC paths keep their last-priority overrides isolated.
@@ -1316,14 +1529,40 @@ namespace MWRender
             loadAdditionalAnimations(VFS::Path::NormalizedView("meshes/brutal_firstperson.nif"), smodel);
         else if (!isWerewolf && mPtr != MWMechanics::getPlayer() && Settings::game().mUseAdditionalAnimSources
             && !Settings::game().mBrutalClassicNpcAnimations)
+        {
             loadAdditionalAnimations(VFS::Path::NormalizedView("meshes/brutal_npc.nif"), smodel);
+            // Dark Messiah's wounded guard: used only while the NPC is wounded.
+            loadAdditionalAnimations(VFS::Path::NormalizedView("meshes/brutal_npc_wounded.nif"), smodel);
+        }
 
         mWeaponAnimationTime->updateStartTime();
         updateBodyAwareness();
+        updatePlayerShadow();
+    }
+
+    bool NpcAnimation::skipAdditionalAnimation(const VFS::Path::Normalized& kf) const
+    {
+        // Dark Messiah's human legs do not fit digitigrade beast anatomy. Beast NPCs
+        // and a beast player's visible body keep Morrowind's idle stance, walk, run,
+        // sneak and (as the run) sprint; combat, kicks, clinch and recovery stay Dark Messiah.
+        // A wounded beast likewise keeps its stance and walk and fights with the wounded attacks.
+        if (!mBeastRace)
+            return false;
+        const std::string_view path = kf.value();
+        const bool dmBody = path.starts_with("animations/brutal_npc/") || path.starts_with("animations/brutal_npc_wounded/")
+            || path.starts_with("animations/brutal_firstperson/");
+        if (!dmBody)
+            return false;
+        const std::string_view stem = path.substr(path.find_last_of('/') + 1);
+        for (std::string_view prefix : { "idle", "walk", "run", "sneak", "brutal_sprint" })
+            if (stem.starts_with(prefix))
+                return true;
+        return false;
     }
 
     void NpcAnimation::resetBodyAwareness()
     {
+        resetBodyEyeFollow();
         mBodyAwarenessHiddenForClinch = false;
         mBodyAwarenessAnimation = nullptr;
         if (mBodyAwarenessRoot)
@@ -1348,13 +1587,71 @@ namespace MWRender
 
         mBodyAwarenessRoot = new osg::MatrixTransform;
         mBodyAwarenessRoot->setName("First Person Body Awareness");
-        mBodyAwarenessRoot->setNodeMask(Mask_Player);
-        mBodyAwarenessRoot->addCullCallback(new BodyAwarenessClinchCullCallback(this));
-        mInsert->addChild(mBodyAwarenessRoot);
+        // This torso-only model belongs to the primary first-person camera.
+        mBodyAwarenessRoot->setNodeMask(Mask_FirstPerson);
+        mBodyAwarenessRoot->addCullCallback(new FirstPersonBodyCullCallback(this, true));
+        // Traversed before the arm rig, so the eye can read this frame's torso pose.
+        mInsert->insertChild(0, mBodyAwarenessRoot);
         mBodyAwarenessAnimation = new NpcAnimation(mPtr, mBodyAwarenessRoot, mResourceSystem,
-            true, VM_Normal, mFirstPersonFieldOfView, true);
+            true, VM_Normal, mFirstPersonFieldOfView, FirstPersonBody::Visible);
         mBodyAwarenessAnimation->enableHeadAnimation(false);
         mBodyAwarenessAnimation->setActive(2);
+        if (MWMechanics::brutalDmFirstPerson() && mBodyAwarenessAnimation->hasAnimation("idle"))
+        {
+            // Sample a standing pose before mirroring the player's state. A body
+            // created while already crouching cannot wait for a standing idle
+            // to establish where its eye belongs.
+            mBodyAwarenessRoot->setMatrix(osg::Matrixd::translate(
+                0., -Settings::game().mFirstPersonBodyForward.get(), 0.));
+            auto& body = *mBodyAwarenessAnimation;
+            body.play("idle", Animation::AnimPriority(0), BlendMask_All, false, 0.f, "start", "stop", 0.f, 0);
+            body.runAnimation(0.f);
+            osgUtil::UpdateVisitor update;
+            update.setFrameStamp(new osg::FrameStamp);
+            update.setNodeMaskOverride(~0u);
+            mBodyAwarenessRoot->accept(update);
+            if (body.getActiveGroup(BoneGroup_Torso) == "idle")
+                if (const auto reference = bodyNeckLocal())
+                {
+                    mBodyEyeReference = *reference;
+                    mBodyEyeReferenceValid = true;
+                }
+            body.stopAllAnimations();
+        }
+    }
+
+    void NpcAnimation::resetPlayerShadow()
+    {
+        mPlayerShadowAnimation = nullptr;
+        if (mPlayerShadowRoot)
+            mInsert->removeChild(mPlayerShadowRoot);
+        mPlayerShadowRoot = nullptr;
+    }
+
+    void NpcAnimation::updatePlayerShadow()
+    {
+        const auto& shadows = Settings::shadows();
+        if (mBodyAwareness || mViewMode != VM_FirstPerson || mPtr != MWMechanics::getPlayer()
+            || !shadows.mEnableShadows || !shadows.mPlayerShadows)
+            return;
+
+        mPlayerShadowRoot = new osg::MatrixTransform;
+        mPlayerShadowRoot->setName("First Person Player Shadow");
+        mPlayerShadowRoot->setNodeMask(Mask_PlayerShadow);
+        mInsert->addChild(mPlayerShadowRoot);
+        mPlayerShadowAnimation = new NpcAnimation(mPtr, mPlayerShadowRoot, mResourceSystem, true, VM_Normal,
+            mFirstPersonFieldOfView, FirstPersonBody::Shadow);
+        mPlayerShadowAnimation->enableHeadAnimation(false);
+        mPlayerShadowAnimation->setActive(2);
+        if (const auto grip = getLeftWeaponGrip(); grip && (carriesLeftWeapon() || mViewmodelSet == BrutalViewmodel_Bow))
+        {
+            mPlayerShadowAnimation->attachLeftWeaponMount(*grip);
+            mPlayerShadowAnimation->mViewmodelSet = mViewmodelSet;
+        }
+        mPlayerShadowAnimation->showWeapons(mShowWeapons);
+        mPlayerShadowAnimation->showCarriedLeft(mShowCarriedLeft);
+        if (useFullBodyFirstPerson())
+            mObjectRoot->addCullCallback(new FirstPersonBodyCullCallback(this, false));
     }
 
     void NpcAnimation::alignBodyAwareness(float duration)
@@ -1563,14 +1860,193 @@ namespace MWRender
             && MWBase::Environment::get().getWorld()->isFirstPerson();
     }
 
+    std::string NpcAnimation::bodyAwarenessGroup(const NpcAnimation& body, const std::string& group, bool sneaking) const
+    {
+        // The paired arms reuse the matching sword clock. The visible body has
+        // no arms or weapon, so it can use the same imported lower-body motion.
+        if (hasPairedViewmodel())
+        {
+            if (group == "weapontwohand" || group == "blunttwohand")
+                return "weapononehand";
+            if (group.ends_with("2b") || group.ends_with("2c"))
+            {
+                const std::string mapped = group.substr(0, group.size() - 2) + "1h";
+                if (body.hasAnimation(mapped))
+                    return mapped;
+            }
+        }
+        // The arms keep their own stance (stock spell, fist, bow or probe arms have no
+        // imported crouch), but the visible legs and torso must crouch whenever the
+        // player sneaks. The body has no arms, head or items, so the imported crouch
+        // and sneak walk fit every stance; armed stances use the armed variant.
+        if (!sneaking || group.starts_with("idlesneak") || group.starts_with("idleswim"))
+            return group;
+        std::string base;
+        std::string_view suffix;
+        if (group.starts_with("idle"))
+        {
+            base = "idlesneak";
+            suffix = std::string_view(group).substr(4);
+        }
+        else
+        {
+            for (std::string_view direction : { "sneakforward", "sneakback", "sneakleft", "sneakright" })
+                if (group.starts_with(direction))
+                {
+                    base = direction;
+                    suffix = std::string_view(group).substr(direction.size());
+                    break;
+                }
+        }
+        if (base.empty())
+            return group;
+        const bool armed = !suffix.empty() && suffix != "hh" && suffix != "spell";
+        if (armed && body.hasAnimation(base + "1h"))
+            return base + "1h";
+        if (body.hasAnimation(base))
+            return base;
+        return group;
+    }
+
+    void NpcAnimation::resetBodyEyeFollow()
+    {
+        mBodyEyeReference = mBodyEyeHeld = mBodyEyeOutput = mBodyEyeBlendFrom = osg::Vec3f();
+        mBodyEyeStandingTime = 0.f;
+        mBodyEyeBlendTime = -1.f;
+        mBodyEyeReferenceValid = false;
+        mBodyEyePassive = true;
+        mBodyEyeLive = false;
+    }
+
+    std::optional<osg::Vec3f> NpcAnimation::bodyNeckLocal() const
+    {
+        if (!mBodyAwarenessAnimation)
+            return std::nullopt;
+        const auto neck = mBodyAwarenessAnimation->getBoneWorldMatrix("Bip01 Neck");
+        const auto paths = mInsert->getParentalNodePaths();
+        if (!neck || paths.empty())
+            return std::nullopt;
+        return osg::Vec3f(neck->getTrans() * osg::Matrixf::inverse(osg::computeLocalToWorld(paths.front())));
+    }
+
+    osg::Vec3f NpcAnimation::liveBodyEyeOffset() const
+    {
+        // Called by the arm rig's neck controller during the update traversal. The body
+        // rig is traversed first, so its neck is already in this frame's pose: the eye
+        // and arms move with the torso in the same frame.
+        if (!hasBodyEyeFollow())
+            return osg::Vec3f();
+        const float weight = std::clamp(mBodyEyeWeight, 0.f, 1.f);
+        if (mBodyEyeLive)
+            if (const auto local = bodyNeckLocal())
+                return (*local - mBodyEyeReference) * weight;
+        return mBodyEyeOutput * weight;
+    }
+
+    bool NpcAnimation::hasBodyEyeFollow() const
+    {
+        return mBodyAwarenessAnimation && mBodyEyeReferenceValid && mViewMode == VM_FirstPerson
+            && !useFullBodyFirstPerson() && MWMechanics::brutalDmFirstPerson();
+    }
+
+    std::optional<osg::Vec3f> NpcAnimation::getBodyNeckPositionForAudit() const
+    {
+        if (!mBodyAwarenessAnimation)
+            return std::nullopt;
+        const auto neck = mBodyAwarenessAnimation->getBoneWorldMatrix("Bip01 Neck");
+        if (!neck)
+            return std::nullopt;
+        return osg::Vec3f(neck->getTrans());
+    }
+
+    void NpcAnimation::updateBodyEyeFollow(float duration)
+    {
+        // Dark Messiah's eye is its body's eye attachment. The imported arm rig keeps a
+        // fixed eye, so without this the view stays standing over a crouched torso and
+        // floats over the visible body while it walks, runs or sprints.
+        const auto neckLocal = bodyNeckLocal();
+        if (!neckLocal)
+            return;
+        const osg::Vec3f local = *neckLocal;
+
+        // Only stance and locomotion move the eye with the torso. Actions already carry
+        // their authored eye motion in the arm rig's camera carrier, so the body's action
+        // pose is held rather than added a second time.
+        const auto passive = [](std::string_view group) {
+            if (group.empty())
+                return true;
+            for (std::string_view prefix : { "idle", "walk", "run", "sneak", "brutal_sprint", "turn", "swim" })
+                if (group.starts_with(prefix))
+                    return true;
+            return false;
+        };
+        const std::string_view lower = mBodyAwarenessAnimation->getActiveGroup(BoneGroup_LowerBody);
+        const std::string_view torso = mBodyAwarenessAnimation->getActiveGroup(BoneGroup_Torso);
+        const auto& stats = mPtr.getClass().getCreatureStats(mPtr);
+        const bool sliding = stats.mBrutalSlidePhase != 0 || stats.mBrutalSlideBlocked || stats.mBrutalSlideBlend > 0.f;
+        const bool isPassive = passive(lower) && passive(torso) && !sliding && !stats.isDead();
+
+        // The reference is the settled standing pose of whatever the player holds, so
+        // standing still keeps exactly the authored eye. A stance change must settle
+        // for longer than any crouch blend before it may become the new reference.
+        const bool standing = isPassive && lower.starts_with("idle") && !lower.starts_with("idlesneak")
+            && !lower.starts_with("idleswim") && !stats.getStance(MWMechanics::CreatureStats::Stance_Sneak)
+            && MWBase::Environment::get().getWorld()->isOnGround(mPtr);
+        mBodyEyeStandingTime = standing ? mBodyEyeStandingTime + duration : 0.f;
+        if (mBodyEyeStandingTime > .6f)
+        {
+            if (!mBodyEyeReferenceValid)
+                mBodyEyeReference = local;
+            else
+                mBodyEyeReference += (local - mBodyEyeReference) * (1.f - std::exp(-duration / .3f));
+            mBodyEyeReferenceValid = true;
+        }
+        if (!mBodyEyeReferenceValid)
+            return;
+
+        if (isPassive)
+            mBodyEyeHeld = local - mBodyEyeReference;
+        if (isPassive != mBodyEyePassive)
+        {
+            // Entering or leaving an action: ease between the held and live torso.
+            mBodyEyeBlendFrom = mBodyEyeOutput;
+            mBodyEyeBlendTime = 0.f;
+            mBodyEyePassive = isPassive;
+        }
+        osg::Vec3f target = mBodyEyeHeld;
+        if (mBodyEyeBlendTime >= 0.f)
+        {
+            mBodyEyeBlendTime += duration;
+            float w = std::clamp(mBodyEyeBlendTime / .2f, 0.f, 1.f);
+            w = w * w * (3.f - 2.f * w);
+            target = mBodyEyeBlendFrom + (target - mBodyEyeBlendFrom) * w;
+            if (mBodyEyeBlendTime >= .2f)
+                mBodyEyeBlendTime = -1.f;
+        }
+        mBodyEyeOutput = target;
+        mBodyEyeLive = isPassive && mBodyEyeBlendTime < 0.f;
+    }
+
     void NpcAnimation::syncBodyAwareness(float duration)
     {
         updateBodyAwarenessClinchVisibility();
-        if (!mBodyAwarenessAnimation)
-            return;
+        if (mBodyAwarenessAnimation)
+        {
+            alignBodyAwareness(duration);
+            syncFirstPersonBodyPose(*mBodyAwarenessAnimation, duration);
+            updateBodyEyeFollow(duration);
+        }
+        if (mPlayerShadowAnimation)
+        {
+            if (mBodyAwarenessRoot)
+                mPlayerShadowRoot->setMatrix(mBodyAwarenessRoot->getMatrix());
+            mPlayerShadowAnimation->setPitchFactor(mPitchFactor);
+            syncFirstPersonBodyPose(*mPlayerShadowAnimation, duration);
+        }
+    }
 
-        alignBodyAwareness(duration);
-        NpcAnimation& body = *mBodyAwarenessAnimation;
+    void NpcAnimation::syncFirstPersonBodyPose(NpcAnimation& body, float duration)
+    {
         if (body.mAlpha != mAlpha)
             body.setAlpha(mAlpha);
         body.mLegsYawRadians = mLegsYawRadians;
@@ -1578,9 +2054,27 @@ namespace MWRender
         body.mBodyPitchRadians = mBodyPitchRadians;
 
         bool reset = false;
+        const auto& stats = mPtr.getClass().getCreatureStats(mPtr);
+        MWBase::World* world = MWBase::Environment::get().getWorld();
+        const bool sneaking = MWMechanics::brutalDmFirstPerson() && stats.getStance(MWMechanics::CreatureStats::Stance_Sneak)
+            && !world->isSwimming(mPtr) && !world->isFlying(mPtr);
+        std::vector<std::pair<std::string, const AnimState*>> sources;
+        std::set<std::string, std::less<>> wanted;
+        for (const auto& [group, source] : mStates)
+        {
+            if (mViewmodelSet == BrutalViewmodel_Spear && group == "weapononehand"
+                && source.mStartKey.starts_with("faststrafe"))
+                continue; // Keep the lateral step instead of overlaying forward thrust footwork.
+            const bool spearStep = mViewmodelSet == BrutalViewmodel_Spear && group == "weapononehand"
+                && (source.mStartKey.starts_with("fast") || source.mStartKey.starts_with("thrust "))
+                && body.hasAnimation("brutal_spear_step");
+            std::string target = spearStep ? "brutal_spear_step" : bodyAwarenessGroup(body, group, sneaking);
+            if (wanted.insert(target).second)
+                sources.emplace_back(std::move(target), &source);
+        }
         std::vector<std::string> obsolete;
         for (const auto& [group, state] : body.mStates)
-            if (!mStates.contains(group))
+            if (!wanted.contains(group))
                 obsolete.push_back(group);
         for (const std::string& group : obsolete)
         {
@@ -1593,8 +2087,9 @@ namespace MWRender
         body.mDeferActiveGroupReset = true;
         try
         {
-            for (const auto& [group, source] : mStates)
+            for (const auto& [group, sourceState] : sources)
             {
+                const AnimState& source = *sourceState;
                 if (!body.hasAnimation(group))
                     continue;
                 auto found = body.mStates.find(group);
@@ -1677,7 +2172,9 @@ namespace MWRender
             ? Mask_FirstPerson : ~0u;
         mObjectRoot->setNodeMask(visible ? mask : 0u);
         if (mBodyAwarenessRoot)
-            mBodyAwarenessRoot->setNodeMask(visible ? Mask_Player : 0u);
+            mBodyAwarenessRoot->setNodeMask(visible ? Mask_FirstPerson : 0u);
+        if (mPlayerShadowRoot)
+            mPlayerShadowRoot->setNodeMask(visible ? Mask_PlayerShadow : 0u);
     }
 
     std::string NpcAnimation::getSheathedShieldMesh(const MWWorld::ConstPtr& shield) const
@@ -1711,8 +2208,22 @@ namespace MWRender
             ? weapon->get<ESM::Weapon>()->mBase->mData.mType : ESM::Weapon::None;
         // OpenMW keeps a shield equipped while a two-handed weapon hides it. Its
         // inventory slot must not override the weapon's animation set.
+        if (type == ESM::Weapon::SpearTwoWide
+            && mResourceSystem->getVFS()->exists(VFS::Path::NormalizedView("animations/brutal_fp_spear/weapononehand.kf")))
+            return BrutalViewmodel_Spear;
         if (MWMechanics::brutalStaffWeapon(type))
             return BrutalViewmodel_Staff;
+        if (MWMechanics::brutalPairedWeapon(type))
+        {
+            const bool sword = type == ESM::Weapon::LongBladeTwoHand;
+            const VFS::Path::NormalizedView clips(sword ? "animations/brutal_fp_paired/weapontwohand.kf"
+                                                        : "animations/brutal_fp_paired_blunt/blunttwohand.kf");
+            if (mResourceSystem->getVFS()->exists(clips))
+                return sword ? BrutalViewmodel_Paired : BrutalViewmodel_PairedBlunt;
+        }
+        if (type == ESM::Weapon::MarksmanBow
+            && mResourceSystem->getVFS()->exists(VFS::Path::NormalizedView("animations/brutal_fp_bow/bowandarrow.kf")))
+            return BrutalViewmodel_Bow;
         if (MWMechanics::getWeaponType(type)->mFlags & ESM::WeaponType::TwoHanded)
             return BrutalViewmodel_Default;
         if (carriesShield())
@@ -1729,7 +2240,7 @@ namespace MWRender
 
     bool NpcAnimation::useBrutalStaffSet() const
     {
-        return mViewMode == VM_FirstPerson && !mBodyAwareness && mViewmodelSet == BrutalViewmodel_Staff
+        return mViewMode == VM_FirstPerson && !mBodyAwareness && hasPolearmViewmodel()
             && getNode(sBrutalLeftWeaponBone) != nullptr;
     }
 
@@ -1869,7 +2380,7 @@ namespace MWRender
                 const ESM::Light* light = part.get<ESM::Light>()->mBase;
                 addOrReplaceIndividualPart(ESM::PRT_Shield, MWWorld::InventoryStore::Slot_CarriedLeft, 1,
                     Misc::ResourceHelpers::correctMeshPath(VFS::Path::Normalized(light->mModel)), false, nullptr, true);
-                if (mObjectParts[ESM::PRT_Shield])
+                if (!mShadowOnly && mObjectParts[ESM::PRT_Shield])
                     addExtraLight(mObjectParts[ESM::PRT_Shield]->getNode()->asGroup(), SceneUtil::LightCommon(*light));
             }
         }
@@ -1910,10 +2421,13 @@ namespace MWRender
             attachArrow();
         if (mBodyAwarenessAnimation)
             mBodyAwarenessAnimation->updateParts();
-        prewarmDecapitationMaterial();
+        if (mPlayerShadowAnimation)
+            mPlayerShadowAnimation->updateParts();
         prewarmBloodDecals();
         rebuildBloodDecals();
-        if (!mDecapitation && !mBisection && !mLimbSevering)
+        const auto& game = Settings::game();
+        if (game.mBrutalEnabled && game.mBrutalRagdoll && game.mBrutalDismemberment
+            && !mDecapitation && !mBisection && !mLimbSevering && prewarmDecapitationMaterial())
         {
             // Compile the actual split exterior/cap layouts and material paths during
             // scene/equipment setup; preparation performs no visible scene mutation.
@@ -1975,11 +2489,215 @@ namespace MWRender
         return std::make_unique<PartHolder>(std::move(attached));
     }
 
+    void NpcAnimation::fitBackstabPose(osg::NodeVisitor& visitor)
+    {
+        mBackstabBlade.reset();
+        if (mViewMode != VM_FirstPerson || useFullBodyFirstPerson() || mBodyAwareness
+            || mViewmodelSet != BrutalViewmodel_Dagger || !visitor.getFrameStamp())
+            return;
+
+        constexpr std::string_view execution = "brutal_backstab_out";
+        const auto blend = [](float t) {
+            t = std::clamp(t, 0.f, 1.f);
+            return t * t * (3.f - 2.f * t);
+        };
+        const auto setPose = [this](osg::MatrixTransform* bone, const osg::Matrixf& pose) {
+            mBackstabSourcePose.emplace_back(bone, bone->getMatrix());
+            bone->setMatrix(pose);
+        };
+        const auto updateBounds = [&](NpcAnimation& actor) {
+            if (!actor.mSkeleton)
+                return;
+            actor.mSkeleton->markDirty();
+            osg::NodeVisitor bounds(osg::NodeVisitor::TRAVERSE_ALL_CHILDREN);
+            bounds.setVisitorType(osg::NodeVisitor::UPDATE_VISITOR);
+            bounds.setTraversalNumber(visitor.getTraversalNumber());
+            bounds.setFrameStamp(new osg::FrameStamp(*visitor.getFrameStamp()));
+            bounds.setNodeMaskOverride(~0u);
+            actor.mObjectRoot->accept(bounds);
+        };
+        const auto applyArm = [&](const GripArm& arm) {
+            if (arm.clavicle)
+                setPose(arm.clavicle, arm.clavicleResult);
+            for (unsigned joint = 0; joint < arm.bones.size(); ++joint)
+                setPose(arm.bones[joint], arm.result[joint]);
+        };
+        const auto shiftLeftClavicle = [&](const osg::Vec3f& delta) {
+            const auto found = getNodeMap().find("Bip01 L Clavicle");
+            if (found == getNodeMap().end())
+                return false;
+            auto* clavicle = found->second.get();
+            const auto paths = clavicle->getParentalNodePaths();
+            if (paths.empty())
+                return false;
+            auto parent = paths.front();
+            parent.pop_back();
+            auto pose = osg::Matrixf(clavicle->getMatrix());
+            pose.setTrans(pose.getTrans() + osg::Matrixf::transform3x3(delta,
+                osg::Matrixf::inverse(osg::computeLocalToWorld(parent))));
+            setPose(clavicle, pose);
+            return true;
+        };
+        const auto dipOffhand = [&](std::string_view group, std::string_view event) {
+            if (!isPlaying(group))
+                return;
+            const float marker = getTextKeyTime(event);
+            if (marker < 0.f)
+                return;
+            const float relative = getCurrentTime(group) - marker;
+            const float dip = blend((relative + .16f) / .13f) * (1.f - blend((relative - .025f) / .17f));
+            if (dip > 0.f)
+                shiftLeftClavicle({ 0.f, 0.f, -72.f * dip });
+        };
+        const auto lowerVictimWeapon = [&](NpcAnimation& victim, const osg::Vec3f& shoulder,
+                                           const osg::Vec3f& side, const osg::Vec3f& forward, const osg::Vec3f& up,
+                                           float weight) {
+            if (weight <= 0.f || !victim.mPtr.getClass().getCreatureStats(victim.mPtr).mBrutalBackstabVictim)
+                return;
+            const auto& inventory = victim.mPtr.getClass().getInventoryStore(victim.mPtr);
+            const auto item = inventory.getSlot(MWWorld::InventoryStore::Slot_CarriedRight);
+            if (item == inventory.end() || item->getType() != ESM::Weapon::sRecordId)
+                return;
+            const auto* type = MWMechanics::getWeaponType(item->get<ESM::Weapon>()->mBase->mData.mType);
+            if (type->mWeaponClass != ESM::WeaponType::Melee || !(type->mFlags & ESM::WeaponType::TwoHanded))
+                return;
+            const auto weapon = victim.getWeaponBladeForBlood();
+            const auto hand = victim.getBoneWorldMatrix("Bip01 R Hand");
+            if (!hand || !weapon || (weapon->second - weapon->first).length2() < 1.f)
+                return;
+            // Let the victim's weapon arm sag out to their right as they recoil.
+            const osg::Vec3f grip = shoulder + side * 9.f + forward * 6.f - up * 13.f;
+            const osg::Vec3f wrist = hand->getTrans();
+            osg::Quat lower, turn;
+            lower.makeRotate(weapon->second - weapon->first, forward * .8f + side * .45f - up * .65f);
+            turn.slerp(weight, osg::Quat(), lower);
+            const osg::Matrixf correction = osg::Matrixf::translate(-wrist) * osg::Matrixf::rotate(turn)
+                * osg::Matrixf::translate(wrist + (grip - wrist) * weight);
+            std::array<GripArm, 2> arms;
+            float clamp = 0.f;
+            if (solveGripArms(victim.getNodeMap(), correction,
+                    [](osg::MatrixTransform* bone) { return bone->getMatrix(); }, arms, clamp, {}, nullptr, 1))
+            {
+                applyArm(arms[0]);
+                updateBounds(victim);
+            }
+        };
+        dipOffhand("brutal_backstab_in", "brutal_backstab_in: hide offhand");
+        dipOffhand("brutal_backstab_cancel", "brutal_backstab_cancel: show offhand");
+        dipOffhand(execution, "brutal_backstab_out: show offhand");
+
+        const float t = getCurrentTime(execution);
+        if (isPlaying(execution))
+        {
+            const float align = getTextKeyTime("brutal_backstab_out: align");
+            const float first = getTextKeyTime("brutal_backstab_out: stab1");
+            const float second = getTextKeyTime("brutal_backstab_out: stab2");
+            const float rightWeight = blend((t - align) / std::max(first - align - .025f, .05f))
+                * (1.f - blend((t - second - .09f) / .22f));
+            const float leftWeight = blend((t - align + .045f) / .14f) * (1.f - blend((t - 1.30f) / .26f));
+            const auto& stats = mPtr.getClass().getCreatureStats(mPtr);
+            if (!stats.mBrutalBackstabTarget.ptrOrEmpty().isEmpty())
+            {
+                auto* victim = dynamic_cast<NpcAnimation*>(
+                    MWBase::Environment::get().getWorld()->getAnimation(stats.mBrutalBackstabTarget.ptrOrEmpty()));
+                const auto neck = victim ? victim->getBoneWorldMatrix("Bip01 Neck") : std::nullopt;
+                const auto leftShoulder = victim ? victim->getBoneWorldMatrix("Bip01 L UpperArm") : std::nullopt;
+                const auto rightShoulder = victim ? victim->getBoneWorldMatrix("Bip01 R UpperArm") : std::nullopt;
+                const auto waist = victim ? victim->getBoneWorldMatrix("Bip01 Spine1") : std::nullopt;
+                const auto palm = getBoneWorldMatrix("Bip01 L Hand");
+                const auto knuckle = getBoneWorldMatrix("Bip01 L Finger2");
+                if (neck && leftShoulder && rightShoulder && waist)
+                {
+                    const osg::Vec3f throat = neck->getTrans();
+                    osg::Vec3f up = throat - waist->getTrans();
+                    osg::Vec3f side = rightShoulder->getTrans() - leftShoulder->getTrans();
+                    up.normalize();
+                    side -= up * (side * up);
+                    const float shoulderWidth = side.normalize();
+                    const osg::Vec3f forward = up ^ side;
+                    if (shoulderWidth > 1.f)
+                        lowerVictimWeapon(*victim, rightShoulder->getTrans(), side, forward, up,
+                            blend((t - align + .055f) / .16f));
+                    const auto blade = leftWeight > 0.f ? getWeaponBladeForBlood() : std::nullopt;
+                    if (palm && knuckle && blade)
+                    {
+                        const float collar = std::clamp(shoulderWidth * .45f, 9.5f, 14.f);
+                        // Clear the top of the left shoulder before turning the hand in toward the neck.
+                        const float wrap = blend((t - first + .015f) / .25f);
+                        const float back = std::clamp(shoulderWidth * .54f, 11.f, 16.f);
+                        const float around = std::sin(osg::PIf * wrap);
+                        const osg::Vec3f knuckles = knuckle->getTrans();
+                        const osg::Vec3f leftGrip = throat
+                            - side * (std::lerp(.60f, 1.f, wrap) + .50f * around) * collar
+                            + forward * std::lerp(-back, 4.f, wrap) + up * (std::lerp(4.f, 6.f, wrap) + 3.f * around);
+                        osg::Vec3f fingers = forward * (.30f + .38f * wrap) + side * .82f - up * .15f;
+                        fingers.normalize();
+                        osg::Quat gripTurn, gripAlign;
+                        gripAlign.makeRotate(knuckles - osg::Vec3f(palm->getTrans()), fingers);
+                        gripTurn.slerp(.80f * leftWeight, osg::Quat(), gripAlign);
+
+                        osg::Vec3f bladeAxis = blade->second - blade->first;
+                        const float length = bladeAxis.normalize();
+                        const float cut = blend((t - first - .11f) / std::max(second - first - .15f, .05f));
+                        osg::Vec3f direction = -side * (.72f + .20f * cut)
+                            - up * (.52f - .26f * cut) + forward * (.46f - .28f * cut);
+                        direction.normalize();
+                        osg::Quat alignBlade, turn;
+                        alignBlade.makeRotate(bladeAxis, direction);
+                        turn.slerp(rightWeight, osg::Quat(), alignBlade);
+                        const osg::Vec3f entry = throat + forward * 2.5f - up * 1.5f;
+                        const osg::Vec3f hilt = entry - direction * std::max(3.f, length - 5.f);
+                        std::array<osg::Matrixf, 2> correction{
+                            osg::Matrixf::translate(-blade->first) * osg::Matrixf::rotate(turn)
+                                * osg::Matrixf::translate(blade->first + (hilt - blade->first) * rightWeight),
+                            osg::Matrixf::translate(-knuckles) * osg::Matrixf::rotate(gripTurn)
+                                * osg::Matrixf::translate(knuckles + (leftGrip - knuckles) * leftWeight),
+                        };
+                        const auto upperArm = getBoneWorldMatrix("Bip01 L UpperArm");
+                        const auto forearm = getBoneWorldMatrix("Bip01 L Forearm");
+                        if (upperArm && forearm)
+                        {
+                            const osg::Vec3f wrist = palm->getTrans();
+                            const float reach = (upperArm->getTrans() - forearm->getTrans()).length()
+                                + (forearm->getTrans() - wrist).length();
+                            osg::Vec3f towardGrip = wrist * correction[1] - upperArm->getTrans();
+                            const float distance = towardGrip.normalize();
+                            // Lean into broad-shouldered targets so the reaching arm retains an elbow bend.
+                            const osg::Vec3f lean = towardGrip * (leftWeight * std::clamp(distance - reach + 3.f, 0.f, 12.f));
+                            if (lean.length2() > .001f && shiftLeftClavicle(lean))
+                                correction[1] = osg::Matrixf::translate(-lean) * correction[1];
+                        }
+                        std::array<GripArm, 2> arms;
+                        GripArmLimits limits;
+                        limits.clavicleTurn = .4f;
+                        limits.minElbowBend = .12f;
+                        limits.elbows[1] = { -side - forward * .35f + up * .55f, 2.6f * leftWeight };
+                        float clamp = 0.f;
+                        if (shoulderWidth > 1.f && length > 3.f
+                            && solveGripArms(getNodeMap(), osg::Matrixf(),
+                                [](osg::MatrixTransform* bone) { return bone->getMatrix(); }, arms, clamp, limits, &correction))
+                        {
+                            for (const auto& arm : arms)
+                                applyArm(arm);
+                            const auto& right = arms[0];
+                            const osg::Matrixf fit = osg::Matrixf::inverse(right.world[2])
+                                * right.result[2] * right.result[1] * right.result[0] * right.parent;
+                            mBackstabBlade = std::pair{ blade->first * fit, blade->second * fit };
+                        }
+                    }
+                }
+            }
+        }
+
+        if (!mBackstabSourcePose.empty())
+            updateBounds(*this);
+    }
+
     osg::Vec3f NpcAnimation::runAnimation(float timepassed)
     {
         restoreTransientPose();
-        prewarmBloodDecals();
         updateCutBloodFlow(timepassed);
+        updateWeaponBlood(timepassed);
         if(mDecapitationRenderPrewarm)
         {
             mDecapitationRenderPrewarm->update();
@@ -1995,6 +2713,15 @@ namespace MWRender
         if(mLimbSevering && (!Settings::game().mBrutalDismemberment || !Settings::game().mBrutalRagdoll || !mPtr.getClass().getNpcStats(mPtr).isDead()))
             setLimbsSevered(0);
         osg::Vec3f ret = Animation::runAnimation(timepassed);
+        if (mViewMode == VM_FirstPerson && !useFullBodyFirstPerson())
+        {
+            const auto* state = mObjectRoot->getStateSet();
+            const bool overlay = state && state->useRenderBinDetails() && state->getBinName() == "DepthClear";
+            if (overlay == (isPlaying("brutal_backstab_out") || isPlayingGroundFinisher()))
+                setRenderBin();
+        }
+        updateNpcGuardPose(timepassed);
+        updateNpcTwoHandGuardPose(timepassed);
 
         mHeadAnimationTime->update(timepassed);
 
@@ -2010,8 +2737,8 @@ namespace MWRender
                 : 0.75f + 0.25f * mAimingFactor;
 
             mFirstPersonNeckController->setRotate(
-                osg::Quat(mPtr.getRefData().getPosition().rot[0] * rotateFactor, osg::Vec3f(-1, 0, 0)));
-            mFirstPersonNeckController->setOffset(useFullBodyFirstPerson() ? osg::Vec3f() : mFirstPersonOffset);
+                osg::Quat(mGroundFinisherPitch.value_or(mPtr.getRefData().getPosition().rot[0] * rotateFactor),
+                    osg::Vec3f(-1, 0, 0)));
             if (useFullBodyFirstPerson())
                 mFirstPersonNeckController->setRotationPivot(
                     osg::Vec3f(0.f, Settings::game().mFirstPersonBodyForward.get(), 124.f + mFirstPersonOffset.z()));
@@ -2024,9 +2751,33 @@ namespace MWRender
             }
         }
 
-        if (!mBodyAwareness)
+        if (!mBodyAwareness || mShadowOnly)
             WeaponAnimation::configureControllers(mPtr.getRefData().getPosition().rot[0] + getBodyPitchRadians());
         syncBodyAwareness(timepassed);
+        if (mFirstPersonNeckController)
+        {
+            // The eye and the arms move together with the visible torso.
+            // (liveBodyEyeOffset() is added by the controller itself during traversal.)
+            auto offset = mFirstPersonOffset;
+            offset.z() += mPtr.getClass().getCreatureStats(mPtr).mBrutalBackstabEyeLift;
+            offset.z() -= mGroundFinisherLowering;
+            mFirstPersonNeckController->setOffset(useFullBodyFirstPerson() ? osg::Vec3f() : offset);
+        }
+        if (mViewMode == VM_FirstPerson && !mBodyAwareness && mObjectParts[ESM::PRT_Shield] && carriesLeftWeapon())
+        {
+            // Hide the equipped offhand mesh while the open left hand reaches
+            // for the NPC. The mount and inventory slot stay active.
+            const auto past = [this](std::string_view group, std::string_view key) {
+                const float marker = getTextKeyTime(key);
+                return marker >= 0.f && getCurrentTime(group) >= marker;
+            };
+            const bool hidden = isPlaying("brutal_backstab_idle")
+                || past("brutal_backstab_in", "brutal_backstab_in: hide offhand")
+                || (isPlaying("brutal_backstab_out") && !past("brutal_backstab_out", "brutal_backstab_out: show offhand"))
+                || (isPlaying("brutal_backstab_cancel")
+                    && !past("brutal_backstab_cancel", "brutal_backstab_cancel: show offhand"));
+            mObjectParts[ESM::PRT_Shield]->getNode()->setNodeMask(hidden ? 0u : ~0u);
+        }
 
         updateRagdollGarmentCoverage(timepassed);
         updateRagdollGarmentAudit(timepassed);
@@ -2042,6 +2793,13 @@ namespace MWRender
         if(mBodyAwarenessAnimation)
             return mBodyAwarenessAnimation->getPartForNodePath(path);
         return -1;
+    }
+
+    osg::Node* NpcAnimation::getPartNode(ESM::PartReferenceType part) const
+    {
+        if (part < 0 || part >= ESM::PRT_Count || !mObjectParts[part])
+            return nullptr;
+        return mObjectParts[part]->getNode().get();
     }
 
     std::map<std::string, osg::Vec3f> NpcAnimation::getFootGeometryForAudit(const osg::Vec3f& normal) const
@@ -2090,6 +2848,22 @@ namespace MWRender
     NpcAnimation::WeaponGripGeometry NpcAnimation::getWeaponGripGeometryForAudit() const
     {
         WeaponGripGeometry result;
+        const auto* leftItem = mObjectParts[ESM::PRT_Shield].get();
+        result.leftItemVisible = leftItem && leftItem->getNode()->getNodeMask() != 0u;
+        if (mViewmodelSet == BrutalViewmodel_Bow && mArrowMount && mAmmunition)
+        {
+            const auto arrow = mAmmunition->getNode();
+            const auto paths = arrow->getParentalNodePaths();
+            const auto right = getBoneWorldMatrix("Bip01 R Hand");
+            const auto left = getBoneWorldMatrix("Bip01 L Hand");
+            if (!paths.empty() && right && left)
+            {
+                const osg::Matrixf arrowWorld = osg::computeLocalToWorld(paths.front());
+                result.roots["arrowNock"] = osg::Matrixf::translate(0.f, mNockedArrowBack, 0.f) * arrowWorld;
+                result.roots["bowNock"] = osg::Matrixf::translate(mArrowMount->mNock * *right);
+                result.roots["bowRest"] = osg::Matrixf::translate(mArrowMount->mRest * *left);
+            }
+        }
         const std::function<std::optional<osg::Matrixf>(std::string_view)> boneWorld
             = [&](std::string_view name) { return getBoneWorldMatrix(name); };
         for (const auto& [name, part] : { std::pair{ "leftHand", ESM::PRT_LHand },
@@ -2129,6 +2903,86 @@ namespace MWRender
             }
         }
         return result;
+    }
+
+    namespace
+    {
+        // A point-to-triangle query with the eye translated to the origin.
+        double eyeDistanceSquared(const osg::Vec3d& a, const osg::Vec3d& b, const osg::Vec3d& c)
+        {
+            const osg::Vec3d normal = (b - a) ^ (c - a);
+            const double areaSquared = normal.length2();
+            if (areaSquared > 1e-12 && (((b - a) ^ -a) * normal) >= 0.
+                && (((c - b) ^ -b) * normal) >= 0. && (((a - c) ^ -c) * normal) >= 0.)
+            {
+                const double plane = a * normal;
+                return plane * plane / areaSquared;
+            }
+            const auto edgeDistance = [](const osg::Vec3d& start, const osg::Vec3d& end) {
+                const osg::Vec3d edge = end - start;
+                const double along = std::clamp(-(start * edge) / std::max(edge.length2(), 1e-12), 0., 1.);
+                return (start + edge * along).length2();
+            };
+            return std::min({ edgeDistance(a, b), edgeDistance(b, c), edgeDistance(c, a) });
+        }
+
+        double eyeSolidAngle(const osg::Vec3d& a, const osg::Vec3d& b, const osg::Vec3d& c)
+        {
+            const double la = a.length(), lb = b.length(), lc = c.length();
+            return 2. * std::atan2(a * (b ^ c), la * lb * lc + (a * b) * lc + (b * c) * la + (c * a) * lb);
+        }
+    }
+
+    std::map<std::string, double> NpcAnimation::getDeathCameraClearanceForAudit(const osg::Vec3f& eye) const
+    {
+        if (!mPlayerDeathView)
+            return {};
+
+        double closest = std::numeric_limits<double>::infinity();
+        int nearestPart = -1;
+        std::size_t triangles = 0, insideParts = 0, unsupported = 0;
+        const std::function<std::optional<osg::Matrixf>(std::string_view)> bones
+            = [this](std::string_view name) { return getBoneWorldMatrix(name); };
+        for (std::size_t index = 0; index < std::size(mObjectParts); ++index)
+        {
+            const auto& part = mObjectParts[index];
+            if (!part || !part->getNode()->getNodeMask())
+                continue;
+            std::vector<DecapitationGeometry::Snapshot> snapshots;
+            DecapitationGeometry::SnapshotVisitor visitor(snapshots, bones, osg::Matrixf(), false);
+            visitor.setNodeMaskOverride(0u);
+            visitor.snapshot(part->getNode());
+            unsupported += visitor.failed;
+            double solidAngle = 0.;
+            for (const auto& snapshot : snapshots)
+            {
+                const auto* vertices = dynamic_cast<const osg::Vec3Array*>(snapshot.geometry->getVertexArray());
+                if (!vertices)
+                {
+                    ++unsupported;
+                    continue;
+                }
+                osg::TriangleIndexFunctor<DecapitationGeometry::TriangleList> faces;
+                snapshot.geometry->accept(faces);
+                for (const auto& face : faces.triangles)
+                {
+                    const osg::Vec3d a = osg::Vec3d((*vertices)[face[0]]) - osg::Vec3d(eye);
+                    const osg::Vec3d b = osg::Vec3d((*vertices)[face[1]]) - osg::Vec3d(eye);
+                    const osg::Vec3d c = osg::Vec3d((*vertices)[face[2]]) - osg::Vec3d(eye);
+                    const double distance = eyeDistanceSquared(a, b, c);
+                    if (distance < closest)
+                    {
+                        closest = distance;
+                        nearestPart = static_cast<int>(index);
+                    }
+                    solidAngle += eyeSolidAngle(a, b, c);
+                    ++triangles;
+                }
+            }
+            insideParts += std::abs(solidAngle) > 2. * osg::PI;
+        }
+        return { { "surfaceDistance", std::sqrt(closest) }, { "nearestPart", nearestPart },
+            { "triangles", triangles }, { "insideParts", insideParts }, { "unsupported", unsupported } };
     }
 
     std::map<std::string, osg::Vec3f> NpcAnimation::getShieldGeometryForAudit() const
@@ -2175,15 +3029,13 @@ namespace MWRender
         const auto* root = ammunition ? mAmmunition.get() : mObjectParts[part].get();
         if (!root || (!ammunition && mPartModels[part].empty()))
             return {};
+        const auto& inventory = mPtr.getClass().getInventoryStore(mPtr);
+        const auto item = inventory.getSlot(slot);
+        if (item == inventory.end())
+            return {};
         auto saved = std::make_shared<ESM::ReleasedEquipmentState>();
         if (ammunition)
-        {
-            const auto& inventory = mPtr.getClass().getInventoryStore(mPtr);
-            const auto item = inventory.getSlot(slot);
-            if (item == inventory.end())
-                return {};
             saved->mModel = item->getClass().getCorrectedModel(*item).value();
-        }
         else
             saved->mModel = mPartModels[part];
         saved->mMass = mass;
@@ -2200,7 +3052,12 @@ namespace MWRender
             };
         ReleasedEquipmentCapture capture(*saved, root->getNode(),
             !ammunition && mAmmunition ? mAmmunition->getNode().get() : nullptr, itemRoot, bones,
-            mPtr.getRefData().getBaseNode());
+            mPtr.getRefData().getBaseNode(), item->getType() == ESM::Light::sRecordId);
+        // The dropped shield is restored from its own model. Projectiles stuck
+        // to the actor's shield are separate visual attachments.
+        if (left)
+            for (const auto& stuck : mStuckProjectiles)
+                capture.excludeAttachment(stuck.mNode.get());
         capture.snapshot();
         maxWorldVertexError = capture.maxWorldVertexError;
         if (!saved->valid())
@@ -2209,6 +3066,15 @@ namespace MWRender
             throw std::runtime_error("Equipped item continuity error " + std::to_string(maxWorldVertexError)
                 + " exceeds 0.001 world units");
         return saved;
+    }
+
+    osg::Matrixf NpcAnimation::getShieldReleaseTransform(const osg::Matrixf& releasedRoot) const
+    {
+        const auto* shield = mObjectParts[ESM::PRT_Shield].get();
+        if (!shield)
+            return {};
+        return osg::computeLocalToWorld(releasedEquipmentPath(shield->getNode(), mPtr.getRefData().getBaseNode()))
+            * osg::Matrixd::inverse(osg::Matrixd(releasedRoot));
     }
 
     bool NpcAnimation::getReleasedEquipmentOwnerIsLeft(int slot) const
@@ -3327,7 +4193,7 @@ namespace MWRender
     bool NpcAnimation::addOrReplaceIndividualPart(ESM::PartReferenceType type, int group, int priority,
         VFS::Path::NormalizedView mesh, bool enchantedGlow, osg::Vec4f* glowColor, bool isLight)
     {
-        if (mBodyAwareness)
+        if (mBodyAwareness && !mShadowOnly)
         {
             // Keep the actual worn torso/leg records. Arms, head and carried equipment
             // belong exclusively to the primary viewmodel, including during a kick.
@@ -3342,11 +4208,13 @@ namespace MWRender
                     return false;
             }
         }
-        // Hide only the camera's enclosing geometry; torso and equipment keep their actual race/body records.
-        if (Settings::game().mFirstPersonFullBody && mPtr == MWMechanics::getPlayer()
-            && (type == ESM::PRT_Head || type == ESM::PRT_Hair || type == ESM::PRT_Neck))
-            return false;
-        if ((Settings::game().mFirstPersonFullBody || MWMechanics::brutalDmFirstPerson())
+        if ((mPlayerDeathView || useFullBodyFirstPerson()) && mPtr == MWMechanics::getPlayer())
+        {
+            // A death pose can expose the collar. Keep its neck surface in place.
+            if (type == ESM::PRT_Head || type == ESM::PRT_Hair || (type == ESM::PRT_Neck && !mPlayerDeathView))
+                return false;
+        }
+        if (!mShadowOnly && !mPlayerDeathView && (Settings::game().mFirstPersonFullBody || MWMechanics::brutalDmFirstPerson())
             && mPtr == MWMechanics::getPlayer() && (type == ESM::PRT_LPauldron || type == ESM::PRT_RPauldron))
             return false;
         if (priority <= mPartPriorities[type])
@@ -3360,7 +4228,12 @@ namespace MWRender
             std::string_view bonename = sPartList.at(type);
             if (type == ESM::PRT_Shield && carriesLeftWeapon())
                 bonename = sBrutalLeftWeaponBone;
-            if (type == ESM::PRT_Weapon)
+            // The Dark Messiah bow set holds the bow in the left hand's own mount.
+            const bool leftBow = type == ESM::PRT_Weapon && (mViewMode == VM_FirstPerson || mShadowOnly)
+                && mViewmodelSet == BrutalViewmodel_Bow && getNode(sBrutalLeftWeaponBone);
+            if (leftBow)
+                bonename = sBrutalLeftWeaponBone;
+            else if (type == ESM::PRT_Weapon)
             {
                 const MWWorld::InventoryStore& inv = mPtr.getClass().getInventoryStore(mPtr);
                 MWWorld::ConstContainerStoreIterator weapon = inv.getSlot(MWWorld::InventoryStore::Slot_CarriedRight);
@@ -3382,10 +4255,10 @@ namespace MWRender
             // PRT_Hair seems to be the only type that breaks consistency and uses a filter that's different from the
             // attachment bone
             const std::string_view bonefilter = (type == ESM::PRT_Hair) ? std::string_view{ "hair" } : bonename;
-            mObjectParts[type] = insertBoundedPart(mesh, bonename, bonefilter, enchantedGlow, glowColor, isLight);
+            mObjectParts[type] = insertBoundedPart(mesh, bonename, bonefilter, enchantedGlow && !mShadowOnly, glowColor, isLight);
             mPartModels[type] = mesh.value();
             if (group == MWWorld::InventoryStore::Slot_Robe && mPtr == MWMechanics::getPlayer()
-                && (mBodyAwareness || (mViewMode == VM_FirstPerson && !useFullBodyFirstPerson())))
+                && !mShadowOnly && (mBodyAwareness || (mViewMode == VM_FirstPerson && !useFullBodyFirstPerson())))
                 fitFirstPersonRobe(*mObjectParts[type]->getNode());
         }
         catch (std::exception& e)
@@ -3513,8 +4386,8 @@ namespace MWRender
     {
         Animation::addControllers();
 
-        // This world-space body never aims its limbs with the camera pitch.
-        if (mBodyAwareness)
+        // The visible torso and legs keep their world-space pose.
+        if (mBodyAwareness && !mShadowOnly)
             return;
         mFirstPersonNeckController = nullptr;
         WeaponAnimation::deleteControllers();
@@ -3530,6 +4403,7 @@ namespace MWRender
                 {
                     osg::MatrixTransform* node = found->second.get();
                     mFirstPersonNeckController = new RotateController(mObjectRoot.get());
+                    mFirstPersonNeckController->setOffsetProvider([this] { return liveBodyEyeOffset(); });
                     if (MWMechanics::brutalDmFirstPerson())
                         mFirstPersonNeckController->setRotationCarrier(
                             dynamic_cast<const osg::MatrixTransform*>(getNode("Brutal Camera Carrier")));
@@ -3546,7 +4420,7 @@ namespace MWRender
 
     void NpcAnimation::showWeapons(bool showWeapon)
     {
-        if (mBodyAwareness)
+        if (mBodyAwareness && !mShadowOnly)
             return; // In particular, do not clear the real player's attacking flag.
         mShowWeapons = showWeapon;
         mAmmunition.reset();
@@ -3576,16 +4450,22 @@ namespace MWRender
         {
             removeIndividualPart(ESM::PRT_Weapon);
             // If we remove/hide weapon from player, we should reset attack animation as well
-            if (mPtr == MWMechanics::getPlayer())
+            if (!mBodyAwareness && mPtr == MWMechanics::getPlayer())
                 mPtr.getClass().getCreatureStats(mPtr).setAttackingOrSpell(false);
         }
 
         updateHolsteredWeapon(!mShowWeapons);
         updateQuiver();
+        if (mPlayerShadowAnimation)
+            mPlayerShadowAnimation->showWeapons(mShowWeapons);
     }
 
     bool NpcAnimation::updateCarriedLeftVisible(const int weaptype) const
     {
+        if (mPtr == MWMechanics::getPlayer()
+            && mPtr.getClass().getCreatureStats(mPtr).mBrutalCarryingObject)
+            return false;
+
         if (carriesLeftWeapon())
             return mPtr.getClass().getCreatureStats(mPtr).getDrawState() == MWMechanics::DrawState::Weapon;
 
@@ -3621,7 +4501,7 @@ namespace MWRender
 
     void NpcAnimation::showCarriedLeft(bool show)
     {
-        if (mBodyAwareness)
+        if (mBodyAwareness && !mShadowOnly)
             return;
         if (show && mViewMode == VM_FirstPerson && MWMechanics::brutalDmFirstPerson()
             && mPtr == MWMechanics::getPlayer() && carriesShield()
@@ -3651,20 +4531,127 @@ namespace MWRender
             {
                 if (mesh.empty())
                     reserveIndividualPart(ESM::PRT_Shield, MWWorld::InventoryStore::Slot_CarriedLeft, 1);
-                if (iter->getType() == ESM::Light::sRecordId && mObjectParts[ESM::PRT_Shield])
+                if (!mShadowOnly && iter->getType() == ESM::Light::sRecordId && mObjectParts[ESM::PRT_Shield])
                     addExtraLight(mObjectParts[ESM::PRT_Shield]->getNode()->asGroup(),
                         SceneUtil::LightCommon(*iter->get<ESM::Light>()->mBase));
+            }
+            if (!mShadowOnly && iter->getType() == ESM::Armor::sRecordId && mObjectParts[ESM::PRT_Shield])
+            {
+                auto* shield = mObjectParts[ESM::PRT_Shield]->getNode()->asGroup();
+                const auto& saved = iter->getRefData().getAnimationState().mEquippedShieldProjectiles;
+                if (shield && !saved.empty() && std::ranges::none_of(mStuckProjectiles,
+                        [shield](const auto& missile) { return missile.mParent.get() == shield; }))
+                    for (const auto& missile : saved)
+                        restoreStuckProjectile(*shield, missile.mItem, osg::Matrixf(missile.mTransform.data()));
             }
         }
         else
             removeIndividualPart(ESM::PRT_Shield);
 
         updateHolsteredShield(mShowCarriedLeft);
+        if (mPlayerShadowAnimation)
+            mPlayerShadowAnimation->showCarriedLeft(mShowCarriedLeft);
+    }
+
+    void NpcAnimation::loadArrowMount()
+    {
+        mArrowMount.reset();
+        constexpr VFS::Path::NormalizedView path("animations/brutal_fp_bow/arrow-mount.txt");
+        if (!mResourceSystem->getVFS()->exists(path))
+            return;
+        try
+        {
+            Files::IStreamPtr stream = mResourceSystem->getVFS()->get(path);
+            std::string word;
+            ArrowMount mount;
+            int found = 0;
+            while (*stream >> word)
+            {
+                osg::Vec3f* target = word == "nock" ? &mount.mNock
+                    : word == "rest"                ? &mount.mRest
+                    : word == "hold"                ? &mount.mHold
+                                                    : nullptr;
+                if (target == nullptr)
+                    continue;
+                *stream >> target->x() >> target->y() >> target->z();
+                ++found;
+            }
+            if (found >= 2)
+                mArrowMount = mount;
+        }
+        catch (const std::exception& e)
+        {
+            Log(Debug::Warning) << "Bow arrow mount: " << e.what();
+        }
+    }
+
+    void NpcAnimation::fitNockedArrow()
+    {
+        if (!mArrowMount || !mNockedArrow || !mAmmunition || mViewMode != VM_FirstPerson
+            || mViewmodelSet != BrutalViewmodel_Bow || mNockedArrow->getNumParents() == 0)
+            return;
+        const auto right = getBoneWorldMatrix("Bip01 R Hand");
+        const auto left = getBoneWorldMatrix("Bip01 L Hand");
+        const osg::NodePathList paths = mNockedArrow->getParent(0)->getParentalNodePaths();
+        if (!right || !left || paths.empty())
+            return;
+        const osg::Vec3f nock = mArrowMount->mNock * *right;
+        const osg::Vec3f rest = mArrowMount->mRest * *left;
+        osg::Vec3f forward = rest - nock;
+        if (forward.normalize() < 1e-3f)
+            return;
+        // Turn the arrow onto the rest as the source animation starts pulling the string.
+        osg::Vec3f held = osg::Matrixf::transform3x3(mArrowMount->mHold, *right);
+        const float time = getCurrentTime("bowandarrow");
+        const float fastStart = getTextKeyTime("bowandarrow: shoot fast start");
+        const float pull = getTextKeyTime(fastStart >= 0.f && time >= fastStart
+                ? "bowandarrow: shoot fast nock" : "bowandarrow: shoot min attack");
+        if (pull >= 0.f && time >= 0.f && time < pull && held.normalize() > 1e-3f)
+        {
+            constexpr float nockTime = .15f;
+            const float u = std::clamp(1.f + (time - pull) / nockTime, 0.f, 1.f);
+            const float onBow = u * u * (3.f - 2.f * u);
+            forward = held * (1.f - onBow) + forward * onBow;
+            if (forward.normalize() < 1e-3f)
+                return;
+        }
+        // Same orientation as in flight: +Y forward, no roll.
+        osg::Vec3f side = forward ^ osg::Z_AXIS;
+        if (side.normalize() < 1e-4f)
+            side = osg::X_AXIS;
+        const osg::Vec3f up = side ^ forward;
+        const osg::Matrixf world = osg::Matrixf(side.x(), side.y(), side.z(), 0.f, forward.x(), forward.y(),
+                                       forward.z(), 0.f, up.x(), up.y(), up.z(), 0.f, 0.f, 0.f, 0.f, 1.f)
+            * osg::Matrixf::translate(nock - forward * mNockedArrowBack);
+        mNockedArrow->setMatrix(world * osg::Matrixf::inverse(osg::computeLocalToWorld(paths.front())));
     }
 
     void NpcAnimation::attachArrow()
     {
         WeaponAnimation::attachArrow(mPtr);
+
+        // The Dark Messiah bow: the arrow follows the fingers that hold it, not the bow's own arrow bone.
+        if (mArrowMount && mAmmunition && mViewMode == VM_FirstPerson && mViewmodelSet == BrutalViewmodel_Bow)
+        {
+            osg::ref_ptr<osg::Node> arrow = mAmmunition->getNode();
+            if (arrow->getNumParents() > 0)
+            {
+                osg::Group* bone = arrow->getParent(0);
+                if (!mNockedArrow)
+                    mNockedArrow = new osg::MatrixTransform;
+                if (mNockedArrow->getNumParents() > 0 && mNockedArrow->getParent(0) != bone)
+                    mNockedArrow->getParent(0)->removeChild(mNockedArrow);
+                if (mNockedArrow->getNumParents() == 0)
+                    bone->addChild(mNockedArrow);
+                bone->removeChild(arrow);
+                mNockedArrow->addChild(arrow);
+                osg::ComputeBoundsVisitor bounds;
+                arrow->accept(bounds);
+                // The nock is the back end of the shaft.
+                mNockedArrowBack = bounds.getBoundingBox().valid() ? bounds.getBoundingBox().yMin() : 0.f;
+                fitNockedArrow();
+            }
+        }
 
         const MWWorld::InventoryStore& inv = mPtr.getClass().getInventoryStore(mPtr);
         MWWorld::ConstContainerStoreIterator ammo = inv.getSlot(MWWorld::InventoryStore::Slot_Ammunition);
@@ -3743,6 +4730,8 @@ namespace MWRender
 
     void NpcAnimation::equipmentChanged()
     {
+        clearNpcGuardPose();
+        clearNpcTwoHandGuardPose();
         if (Settings::game().mShieldSheathing)
         {
             int weaptype = ESM::Weapon::None;
@@ -3777,6 +4766,8 @@ namespace MWRender
         mHeadAnimationTime->updatePtr(updated);
         if (mBodyAwarenessAnimation)
             mBodyAwarenessAnimation->updatePtr(updated);
+        if (mPlayerShadowAnimation)
+            mPlayerShadowAnimation->updatePtr(updated);
     }
 
     // Remember body parts so we only have to search through the store once for each race/gender/viewmode combination

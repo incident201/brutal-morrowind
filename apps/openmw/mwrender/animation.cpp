@@ -9,6 +9,9 @@
 #include <array>
 
 #include <osg/BlendFunc>
+#include <osgUtil/LineSegmentIntersector>
+#include <osgUtil/IntersectionVisitor>
+#include <osg/ComputeBoundsVisitor>
 #include <osg/FrontFace>
 #include <osg/LightModel>
 #include <osg/Material>
@@ -27,22 +30,26 @@
 #include <components/resource/keyframemanager.hpp>
 #include <components/resource/scenemanager.hpp>
 
+#include <components/esm3/loadarmo.hpp>
 #include <components/esm3/loadcont.hpp>
 #include <components/esm3/loadcrea.hpp>
 #include <components/esm3/loadmgef.hpp>
 #include <components/esm3/loadnpc.hpp>
 #include <components/esm3/loadrace.hpp>
+#include <components/esm3/loadweap.hpp>
 #include <components/esm3/releasedequipmentstate.hpp>
 #include <components/esm4/loadligh.hpp>
 
 #include <components/misc/constants.hpp>
 #include <components/misc/pathhelpers.hpp>
 #include <components/misc/resourcehelpers.hpp>
+#include <components/nifosg/controller.hpp>
 
 #include <components/vfs/manager.hpp>
 #include <components/vfs/pathutil.hpp>
 #include <components/vfs/recursivedirectoryiterator.hpp>
 
+#include <components/sceneutil/controller.hpp>
 #include <components/sceneutil/keyframe.hpp>
 #include <components/sceneutil/lightcommon.hpp>
 #include <components/sceneutil/lightmanager.hpp>
@@ -476,7 +483,7 @@ namespace
     };
 
     osg::ref_ptr<osg::Group> restoreReleasedEquipment(
-        osg::Node& sourceRoot, const ESM::ReleasedEquipmentState& saved)
+        osg::Node& sourceRoot, const ESM::ReleasedEquipmentState& saved, bool keepParticles)
     {
         if (!saved.valid())
             throw std::runtime_error("Invalid released equipment render snapshot");
@@ -486,6 +493,7 @@ namespace
         result->setName("Released equipment");
         std::set<const ReleasedSource*> used;
         std::size_t compatibilityBudget = ESM::ReleasedEquipmentState::MaxVertices;
+        std::optional<osg::Matrixd> rigidRoot;
         for (const auto& drawable : saved.mDrawables)
         {
             const ReleasedSource* found = nullptr;
@@ -522,6 +530,22 @@ namespace
             }
             if (!found || !used.insert(found).second)
                 throw std::runtime_error("Released equipment source mesh changed or is unavailable");
+
+            if (keepParticles)
+            {
+                osg::Matrixd modelFromSource;
+                keepParticles = found->plain && MWRender::releasedEquipmentStaticVerticesMatch(*found->geometry, drawable)
+                    && modelFromSource.invert(osg::computeLocalToWorld(found->path));
+                const osg::Matrixd transform = modelFromSource * osg::Matrixd(drawable.mTransform.data());
+                if (keepParticles && rigidRoot)
+                {
+                    for (int row = 0; row < 4; ++row)
+                        for (int column = 0; column < 4; ++column)
+                            keepParticles &= std::abs((*rigidRoot)(row, column) - transform(row, column)) < .0001;
+                }
+                else if (keepParticles)
+                    rigidRoot = transform;
+            }
 
             osg::ref_ptr<osg::Geometry> geometry = new osg::Geometry(*found->geometry, osg::CopyOp::SHALLOW_COPY);
             geometry->setUserDataContainer(found->geometry->getUserDataContainer()
@@ -599,6 +623,16 @@ namespace
                 = new osg::MatrixTransform(osg::Matrixf(drawable.mTransform.data()));
             parent->addChild(affine);
             affine->addChild(geometry);
+        }
+        if (keepParticles && rigidRoot)
+        {
+            // The solid meshes agree on one placement for the original light
+            // model. Keep its live particle controllers on the falling item.
+            SceneUtil::AssignControllerSourcesVisitor assign(std::make_shared<SceneUtil::FrameTimeSource>());
+            sourceRoot.accept(assign);
+            osg::ref_ptr<osg::MatrixTransform> model = new osg::MatrixTransform(*rigidRoot);
+            model->addChild(&sourceRoot);
+            return model;
         }
         return result;
     }
@@ -1022,6 +1056,11 @@ namespace MWRender
         bool mImportedFamilyArms = false;
         bool mImportedFarArms = false; // Dagger and staff sets: see familyClinchArmBlendRules.
         bool mImportedDaggerArms = false;
+        bool mImportedPairedArms = false;
+        bool mImportedBow = false;
+        bool mNpcCombatWalk = false;
+        // Dark Messiah's wounded NPC set: the same group names, used only while the actor is wounded.
+        bool mBrutalWounded = false;
         std::map<std::weak_ptr<float>, float, std::owner_less<std::weak_ptr<float>>> mDaggerClockStarts;
     };
 
@@ -1114,6 +1153,7 @@ namespace MWRender
 
     Animation::~Animation()
     {
+        removeStuckProjectiles();
         removeFromSceneImpl();
     }
 
@@ -1210,7 +1250,7 @@ namespace MWRender
 
         constexpr VFS::Path::ExtensionView kf("kf");
         for (const VFS::Path::Normalized& name : mResourceSystem->getVFS()->getRecursiveDirectoryIterator(path))
-            if (name.extension() == kf)
+            if (name.extension() == kf && !skipAdditionalAnimation(name))
                 addSingleAnimSource(name, baseModel);
     }
 
@@ -1307,19 +1347,26 @@ namespace MWRender
         // Do not enable global vanilla/player smoothing or inherit global rules.
         const bool importedNpc = mPtr.getClass().isNpc()
             && mPtr != MWBase::Environment::get().getWorld()->getPlayerPtr()
-            && kfname.starts_with("animations/brutal_npc/");
+            && (kfname.starts_with("animations/brutal_npc/") || kfname.starts_with("animations/brutal_npc_wounded/"));
+        const auto filename = std::string_view(kfname).substr(kfname.find_last_of('/') + 1);
+        animsrc->mNpcCombatWalk = importedNpc && filename.starts_with("walk");
+        animsrc->mBrutalWounded = kfname.starts_with("animations/brutal_npc_wounded/");
         // Weapon families opt only their first-person arm tracks into local
         // source fade rules. Never turn on global smoothing for their camera,
         // root, classic animations or other actors.
+        const bool polearm = kfname.starts_with("animations/brutal_fp_staff/") || kfname.starts_with("animations/brutal_fp_spear/");
         const bool importedFamily = mPtr == MWBase::Environment::get().getWorld()->getPlayerPtr()
             && (kfname.starts_with("animations/brutal_fp/")
                 || kfname.starts_with("animations/brutal_fp_shield/")
-                || kfname.starts_with("animations/brutal_fp_staff/")
+                || polearm
                 || kfname.starts_with("animations/brutal_fp_dagger/"));
         animsrc->mImportedFamilyArms = importedFamily;
         animsrc->mImportedFarArms = importedFamily
-            && (kfname.starts_with("animations/brutal_fp_staff/") || kfname.starts_with("animations/brutal_fp_dagger/"));
+            && (polearm || kfname.starts_with("animations/brutal_fp_dagger/"));
         animsrc->mImportedDaggerArms = importedFamily && kfname.starts_with("animations/brutal_fp_dagger/");
+        animsrc->mImportedPairedArms = kfname.starts_with("animations/brutal_fp_paired/")
+            || kfname.starts_with("animations/brutal_fp_paired_blunt/");
+        animsrc->mImportedBow = kfname.starts_with("animations/brutal_fp_bow/");
         if (Settings::game().mSmoothAnimTransitions || importedNpc || importedFamily)
         {
             constexpr VFS::Path::ExtensionView yaml("yaml");
@@ -1379,8 +1426,52 @@ namespace MWRender
         mSupportedAnimations.clear();
         mSupportedDirections.clear();
         mAnimSources.clear();
+        mGroupTimeMaps.clear();
 
         mAnimVelocities.clear();
+    }
+
+    bool Animation::sourceInUse(const AnimSource& source) const
+    {
+        return (!source.mNpcCombatWalk || mNpcCombatWalking) && (!source.mBrutalWounded || mBrutalWounded);
+    }
+
+    bool Animation::setNpcCombatWalking(bool inCombat)
+    {
+        if (std::exchange(mNpcCombatWalking, inCombat) == inCombat)
+            return false;
+        if (!std::ranges::any_of(mAnimSources, [](const auto& source) { return source->mNpcCombatWalk; }))
+            return false;
+        mAnimVelocities.clear();
+        return true;
+    }
+
+    bool Animation::setBrutalWounded(bool wounded)
+    {
+        if (wounded == mBrutalWounded)
+            return false;
+        mBrutalWounded = wounded;
+        std::set<std::string, std::less<>> groups;
+        for (const auto& source : mAnimSources)
+            if (source->mBrutalWounded)
+                for (const std::string& group : source->getTextKeys().getGroups())
+                    groups.insert(group);
+        if (groups.empty())
+            return false;
+        mAnimVelocities.clear();
+        // Playing states keep the clip they started with: end those the wounded set redefines.
+        for (auto state = mStates.begin(); state != mStates.end();)
+        {
+            if (groups.contains(state->first))
+            {
+                animationEnded(state->second);
+                state = mStates.erase(state);
+            }
+            else
+                ++state;
+        }
+        resetActiveGroups();
+        return true;
     }
 
     bool Animation::hasAnimation(std::string_view anim) const
@@ -1427,6 +1518,8 @@ namespace MWRender
     {
         for (AnimSourceList::const_reverse_iterator iter(mAnimSources.rbegin()); iter != mAnimSources.rend(); ++iter)
         {
+            if (!sourceInUse(**iter))
+                continue;
             const SceneUtil::TextKeyMap& keys = (*iter)->getTextKeys();
 
             const auto found = keys.findGroupStart(groupname);
@@ -1440,6 +1533,8 @@ namespace MWRender
     {
         for (auto source = mAnimSources.rbegin(); source != mAnimSources.rend(); ++source)
         {
+            if (!sourceInUse(**source))
+                continue;
             bool ownerFound = false, keyFound = false;
             for (const auto& [time, text] : (*source)->getTextKeys())
             {
@@ -1456,6 +1551,8 @@ namespace MWRender
     {
         for (AnimSourceList::const_reverse_iterator iter(mAnimSources.rbegin()); iter != mAnimSources.rend(); ++iter)
         {
+            if (!sourceInUse(**iter))
+                continue;
             const SceneUtil::TextKeyMap& keys = (*iter)->getTextKeys();
 
             for (auto iterKey = keys.begin(); iterKey != keys.end(); ++iterKey)
@@ -1506,7 +1603,7 @@ namespace MWRender
             const auto& stats = mPtr.getClass().getCreatureStats(mPtr);
             // A Lua action may have been queued before the parry. The relation
             // claims the pose immediately, including the deferred entry frame.
-            if (stats.mBrutalClinchActive || !stats.mBrutalClinchOpponent.isEmpty())
+            if (stats.mBrutalClinchActive || !stats.mBrutalClinchOpponent.ptrOrEmpty().isEmpty())
                 return;
         }
 
@@ -1545,6 +1642,8 @@ namespace MWRender
         AnimSourceList::reverse_iterator iter(mAnimSources.rbegin());
         for (; iter != mAnimSources.rend(); ++iter)
         {
+            if (!sourceInUse(**iter))
+                continue;
             const SceneUtil::TextKeyMap& textkeys = (*iter)->getTextKeys();
             if (reset(state, textkeys, groupname, start, stop, startpoint, loopfallback))
             {
@@ -1690,6 +1789,48 @@ namespace MWRender
         return osg::computeLocalToWorld(paths.front());
     }
 
+    std::optional<osg::Matrixf> Animation::sampleBoneInModelSpace(
+        std::string_view group, std::string_view bone, float time) const
+    {
+        const auto state = mStates.find(group);
+        const auto found = getNodeMap().find(std::string(bone));
+        if (state == mStates.end() || found == getNodeMap().end())
+            return std::nullopt;
+        const auto paths = found->second->getParentalNodePaths(mObjectRoot);
+        if (paths.empty())
+            return std::nullopt;
+
+        osg::Matrixf result;
+        const auto& tracks = state->second.mSource->mControllerMap;
+        for (const auto* node : paths.front())
+        {
+            const auto* transform = dynamic_cast<const NifOsg::MatrixTransform*>(node);
+            if (!transform || node == mObjectRoot)
+                continue;
+            auto local = transform->getMatrix();
+            for (const auto& arm : tracks)
+            {
+                const auto controller = arm.find(Misc::StringUtils::lowerCase(node->getName()));
+                if (controller == arm.end())
+                    continue;
+                if (const auto* track = dynamic_cast<const NifOsg::KeyframeController*>(controller->second.get()))
+                {
+                    const auto key = track->sampleTransformation(time);
+                    if (key.mRotation)
+                    {
+                        local.makeRotate(*key.mRotation);
+                        const auto scale = key.mScale.value_or(transform->mScale);
+                        local.preMultScale(osg::Vec3f(scale, scale, scale));
+                    }
+                    local.setTrans(key.mTranslation.value_or(transform->getMatrix().getTrans()));
+                }
+                break;
+            }
+            result.preMult(local);
+        }
+        return result;
+    }
+
     void Animation::setBoneWorldMatrix(std::string_view bone, const osg::Matrixf& world)
     {
         const auto found = getNodeMap().find(std::string(bone));
@@ -1817,7 +1958,8 @@ namespace MWRender
     namespace
     {
         osg::ref_ptr<const SceneUtil::AnimBlendRules> primaryCrouchBlendRules(
-            const osg::ref_ptr<const SceneUtil::AnimBlendRules>& base, bool cameraAncestor)
+            const osg::ref_ptr<const SceneUtil::AnimBlendRules>& base, bool cameraAncestor,
+            bool pairedSprintArms = false)
         {
             using Rule = SceneUtil::AnimBlendRules::BlendRule;
             osg::ref_ptr<SceneUtil::AnimBlendRules> rules = base
@@ -1836,6 +1978,14 @@ namespace MWRender
                 for (const auto* from : {"idle*", "walk*", "run*"})
                     for (const auto* to : {"idle*", "walk*", "run*"})
                         overrides.push_back({from, "", to, "", .22f, "sineInOut", false});
+            else
+                overrides.push_back({"brutal_ground_finisher*", "", "*", "", .20f, "sineOut", false});
+            if (pairedSprintArms)
+            {
+                // Blend the free arm back onto the grip when the player stops sprinting.
+                overrides.push_back({"brutal_sprint*", "", "*", "", .22f, "sineInOut", false});
+                overrides.push_back({"*", "", "brutal_sprint*", "", .22f, "sineInOut", false});
+            }
             overrides.push_back({"", "", "*", "", 0.f, "linear", false});
             rules->addOverrideRules(SceneUtil::AnimBlendRules(overrides));
             return rules;
@@ -1846,7 +1996,18 @@ namespace MWRender
         {
             // Preserve an explicitly enabled global body transition policy. With
             // no base rule the blend controller already defaults to duration zero.
-            return primaryCrouchBlendRules(base, false);
+            // The first-person eye rides this torso, so a gait change (or a crouch blend
+            // interrupted by one) must not snap it: locomotion changes fade like the crouch.
+            osg::ref_ptr<const SceneUtil::AnimBlendRules> crouch = primaryCrouchBlendRules(base, false);
+            using Rule = SceneUtil::AnimBlendRules::BlendRule;
+            std::vector<Rule> gait;
+            for (const auto* from : { "idle*", "walk*", "run*", "brutal_sprint*" })
+                for (const auto* to : { "idle*", "walk*", "run*", "brutal_sprint*" })
+                    gait.push_back({ from, "", to, "", .22f, "sineInOut", false });
+            osg::ref_ptr<SceneUtil::AnimBlendRules> rules
+                = new SceneUtil::AnimBlendRules(*crouch, osg::CopyOp::SHALLOW_COPY);
+            rules->addOverrideRules(SceneUtil::AnimBlendRules(gait));
+            return rules;
         }
 
     }
@@ -2067,7 +2228,8 @@ namespace MWRender
                                 : slideArmState ? slideArmBlendRules(stateData.mGroupname, stateData.mStartKey)
                                 : familyArmState ? animsrc->mAnimBlendRules : nullptr;
                             if (primaryCrouchNode)
-                                rules = primaryCrouchBlendRules(rules, primaryCameraAncestor);
+                                rules = primaryCrouchBlendRules(
+                                    rules, primaryCameraAncestor, playerArm && animsrc->mImportedPairedArms);
                             callback = handleBlendTransform<NifAnimBlendController>(node, it->second,
                                 mAnimBlendControllers, stateData, rules, active->second);
                         }
@@ -2196,6 +2358,8 @@ namespace MWRender
         AnimSourceList::const_reverse_iterator animsrc(mAnimSources.rbegin());
         for (; animsrc != mAnimSources.rend(); ++animsrc)
         {
+            if (!sourceInUse(**animsrc))
+                continue;
             const SceneUtil::TextKeyMap& keys = (*animsrc)->getTextKeys();
             if (keys.hasGroupStart(groupname))
                 break;
@@ -2225,6 +2389,8 @@ namespace MWRender
 
             while (!(velocity > 1.0f) && ++animiter != mAnimSources.rend())
             {
+                if (!sourceInUse(**animiter))
+                    continue;
                 const SceneUtil::TextKeyMap& keys2 = (*animiter)->getTextKeys();
 
                 const AnimSource::ControllerMap& ctrls2 = (*animiter)->mControllerMap[0];
@@ -2251,8 +2417,389 @@ namespace MWRender
         position += off - osg::componentMultiply(mAccumCtrl->getTranslation(oldtime), mAccumulate);
     }
 
+    std::optional<ProjectileContact> Animation::findProjectileContact(
+        const osg::Vec3f& hitPosition, const osg::Vec3f& direction, osg::Node* within) const
+    {
+        // Attachment of missiles to the body follows sunspotdark/morrowind-modern-physics
+        // (https://github.com/sunspotdark/morrowind-modern-physics, commit eb50a40), GPLv3.
+        osg::Node* searched = within != nullptr ? within : mInsert.get();
+        if (searched == nullptr || direction.length2() < 1e-6f)
+            return std::nullopt;
+        osg::Vec3f flight = direction;
+        flight.normalize();
+
+        // The physical hit is on the actor's collision capsule, which is larger than the body. The missile
+        // goes in where its line meets what is seen (armour and clothes, not other stuck missiles).
+        // A shield can be held well out in front of the body that was hit.
+        const float before = within != nullptr ? 140.f : 40.f;
+        constexpr float searchDepth = 90.f;
+        // The intersection runs in the frame of what holds the searched node.
+        osg::Matrixf aboveToWorld;
+        {
+            const osg::NodePathList paths = searched->getParentalNodePaths();
+            if (paths.empty())
+                return std::nullopt;
+            osg::NodePath path = paths.front();
+            path.pop_back();
+            aboveToWorld = osg::computeLocalToWorld(path);
+        }
+        const osg::Matrixf worldToAbove = osg::Matrixf::inverse(aboveToWorld);
+        const auto trace = [&](const osg::Vec3f& point) -> std::optional<ProjectileContact> {
+            osg::ref_ptr<osgUtil::LineSegmentIntersector> intersector
+                = new osgUtil::LineSegmentIntersector(osgUtil::Intersector::MODEL,
+                    (point - flight * before) * worldToAbove, (point + flight * searchDepth) * worldToAbove);
+            osgUtil::IntersectionVisitor visitor(intersector);
+            visitor.setTraversalMask(~static_cast<unsigned int>(Mask_Effect));
+            searched->accept(visitor);
+            for (const auto& intersection : intersector->getIntersections())
+            {
+                const int part = within != nullptr ? ESM::PRT_Shield : getPartForNodePath(intersection.nodePath);
+                if (within == nullptr && (part == ESM::PRT_Weapon || part == ESM::PRT_Shield || part == ESM::PRT_Hair))
+                    continue;
+                osg::Vec3f normal = osg::Matrixf::transform3x3(worldToAbove, intersection.getWorldIntersectNormal());
+                if (normal.normalize() < 1e-4f)
+                    normal = -flight;
+                else if (normal * flight > 0.f)
+                    normal = -normal;
+                return ProjectileContact{ intersection.getWorldIntersectPoint() * aboveToWorld, normal, part };
+            }
+            return std::nullopt;
+        };
+        auto surface = trace(hitPosition);
+        if (!surface && within != nullptr && mPtr == MWBase::Environment::get().getWorld()->getPlayerPtr())
+        {
+            // The raised player shield has a gameplay volume in front of the body. Its first-person mesh
+            // uses the viewmodel pose and projection. Find a nearby point on the board after a confirmed block.
+            osg::ComputeBoundsVisitor bounds;
+            bounds.setTraversalMask(~static_cast<unsigned int>(Mask_Effect));
+            within->accept(bounds);
+            if (bounds.getBoundingBox().valid())
+            {
+                const osg::Vec3f center = bounds.getBoundingBox().center() * aboveToWorld;
+                const osg::Vec3f offset = hitPosition - center;
+                const osg::Vec3f across = offset - flight * (offset * flight);
+                for (float scale : { .65f, .3f, 0.f })
+                {
+                    surface = trace(center + across * scale);
+                    if (surface)
+                        break;
+                }
+            }
+        }
+        return surface;
+    }
+
+    ProjectileAttachment Animation::attachStuckProjectile(VFS::Path::NormalizedView model, const ProjectileContact& contact,
+        const osg::Vec3f& direction, const ESM::RefId& item, osg::Node* within)
+    {
+        osg::Vec3f flight = direction;
+        if (flight.normalize() < 1e-4f)
+            return ProjectileAttachment::NoSurface;
+        // Deeper in flesh than in a shield board.
+        const float embed = within != nullptr ? 3.f : 6.f;
+        const osg::Vec3f tipPosition = contact.mPosition + flight * embed;
+
+        osg::Group* parent = nullptr;
+        osg::Matrixf parentToWorld;
+        std::string_view bone;
+        if (within != nullptr)
+        {
+            parent = within->asGroup();
+            const osg::NodePathList paths = within->getParentalNodePaths();
+            if (parent == nullptr || paths.empty())
+                return ProjectileAttachment::NoSurface;
+            parentToWorld = osg::computeLocalToWorld(paths.front());
+        }
+        else
+        {
+            // The bone nearest the tip, among those that move the body: not the root, which carries the walk,
+            // and not the attachment bones of weapons and shields.
+            std::set<const osg::Node*> aboveBody;
+            for (const osg::Node* up = mAccumRoot.get(); up != nullptr && up != mInsert.get();
+                 up = up->getNumParents() > 0 ? up->getParent(0) : nullptr)
+                aboveBody.insert(up);
+            float closest = std::numeric_limits<float>::max();
+            for (const auto& [name, node] : getNodeMap())
+            {
+                if (aboveBody.count(node.get()) != 0 || name.find("weapon") != std::string::npos
+                    || name.find("shield") != std::string::npos || name.find("arrow") != std::string::npos
+                    || name.find("quiver") != std::string::npos || name.find("camera") != std::string::npos)
+                    continue;
+                const osg::NodePathList paths = node->getParentalNodePaths();
+                if (paths.empty())
+                    continue;
+                const osg::Matrixf toWorld = osg::computeLocalToWorld(paths.front());
+                const float distance = (toWorld.getTrans() - tipPosition).length2();
+                if (distance < closest)
+                {
+                    closest = distance;
+                    parent = node.get();
+                    parentToWorld = toWorld;
+                    bone = name;
+                }
+            }
+            if (parent == nullptr)
+                return ProjectileAttachment::NoSurface;
+        }
+
+        return addStuckProjectile(model, tipPosition, flight, item, *parent, parentToWorld, bone);
+    }
+
+    static float projectileModelTip(osg::Node& projectile)
+    {
+        // Missile models point along +Y; the tip is the far end.
+        osg::ComputeBoundsVisitor bounds;
+        projectile.accept(bounds);
+        return bounds.getBoundingBox().valid() ? bounds.getBoundingBox().yMax() : 0.f;
+    }
+
+    ProjectileAttachment Animation::addStuckProjectile(
+        VFS::Path::NormalizedView model, const osg::Vec3f& tipPosition,
+        const osg::Vec3f& flight, const ESM::RefId& item, osg::Group& parent, const osg::Matrixf& parentToWorld,
+        std::string_view bone)
+    {
+        constexpr float nearbyRadius = 10.f;
+        constexpr std::size_t maxNearby = 3;
+        std::size_t sameSurface = 0;
+        std::size_t nearby = 0;
+        for (const auto& stuck : mStuckProjectiles)
+        {
+            if (bone.empty() ? stuck.mParent.get() != &parent : stuck.mBone.empty())
+                continue;
+            osg::ref_ptr<osg::Group> anchor;
+            if (!stuck.mParent.lock(anchor) || !anchor->containsNode(stuck.mNode))
+                continue;
+            if (++sameSurface >= ESM::AnimationState::MaxStuckProjectiles)
+                return ProjectileAttachment::Crowded;
+
+            osg::Matrixf anchorToWorld = parentToWorld;
+            if (anchor != &parent)
+            {
+                const auto paths = anchor->getParentalNodePaths();
+                if (paths.empty())
+                    continue;
+                anchorToWorld = osg::computeLocalToWorld(paths.front());
+            }
+            const auto offset = stuck.mTipInParent * anchorToWorld - tipPosition;
+            if (offset.length2() < nearbyRadius * nearbyRadius && ++nearby >= maxNearby)
+                return ProjectileAttachment::Crowded;
+        }
+
+        osg::ref_ptr<osg::Node> projectile = mResourceSystem->getSceneManager()->getInstance(model);
+        const float tip = projectileModelTip(*projectile);
+
+        osg::Vec3f right = flight ^ osg::Z_AXIS;
+        if (right.normalize() < 1e-4f)
+            right = osg::X_AXIS;
+        const osg::Vec3f up = right ^ flight;
+        const osg::Matrixf rotation(right.x(), right.y(), right.z(), 0.f, flight.x(), flight.y(), flight.z(), 0.f,
+            up.x(), up.y(), up.z(), 0.f, 0.f, 0.f, 0.f, 1.f);
+        const osg::Matrixf projectileToWorld = rotation * osg::Matrixf::translate(tipPosition - flight * tip);
+
+        const osg::Matrixf local = projectileToWorld * osg::Matrixf::inverse(parentToWorld);
+        mountProjectile(*projectile, parent, local, item, bone, tip);
+        if (!bone.empty())
+            saveBodyProjectiles();
+        return ProjectileAttachment::Attached;
+    }
+
+    void Animation::saveBodyProjectiles() const
+    {
+        auto& saved = mPtr.getRefData().getAnimationState().mBodyProjectiles;
+        saved.clear();
+        for (const auto& stuck : mStuckProjectiles)
+        {
+            if (stuck.mBone.empty() || stuck.mItem.empty())
+                continue;
+            auto& entry = saved.emplace_back();
+            entry.mBone = stuck.mBone;
+            entry.mItem = stuck.mItem;
+            const osg::Matrixf matrix(stuck.mNode->getMatrix());
+            std::copy_n(matrix.ptr(), entry.mTransform.size(), entry.mTransform.begin());
+        }
+    }
+
+    void Animation::restoreBodyProjectiles()
+    {
+        const auto& saved = mPtr.getRefData().getAnimationState().mBodyProjectiles;
+        if (saved.empty() || !mPtr.getClass().isActor())
+            return;
+        const auto& nodes = getNodeMap();
+        for (const auto& entry : saved)
+            if (const auto bone = nodes.find(entry.mBone); bone != nodes.end())
+                restoreStuckProjectile(*bone->second, entry.mItem, osg::Matrixf(entry.mTransform.data()), entry.mBone);
+    }
+
+    void Animation::restoreStuckProjectile(osg::Group& parent, const ESM::RefId& item, const osg::Matrixf& transform,
+        std::string_view bone)
+    {
+        const auto* record = MWBase::Environment::get().getESMStore()->get<ESM::Weapon>().search(item);
+        if (!record || record->mModel.empty())
+            return;
+        try
+        {
+            const auto model = Misc::ResourceHelpers::correctMeshPath(VFS::Path::Normalized(record->mModel));
+            const auto projectile = mResourceSystem->getSceneManager()->getInstance(model);
+            mountProjectile(*projectile, parent, transform, item, bone, projectileModelTip(*projectile));
+        }
+        catch (const std::exception& error)
+        {
+            Log(Debug::Warning) << "Could not restore embedded projectile " << item << ": " << error.what();
+        }
+    }
+
+    void Animation::mountProjectile(osg::Node& projectile, osg::Group& parent, const osg::Matrixf& transform,
+        const ESM::RefId& item, std::string_view bone, float modelTip)
+    {
+        osg::ref_ptr<osg::MatrixTransform> attached = new osg::MatrixTransform(transform);
+        // A missile is visible without becoming a hit surface for another missile.
+        attached->setNodeMask(Mask_Effect);
+        attached->setName("Brutal Stuck Projectile");
+        attached->addChild(&projectile);
+        parent.addChild(attached);
+        mStuckProjectiles.push_back(
+            { &parent, std::move(attached), item, std::string(bone), osg::Vec3f(0.f, modelTip, 0.f) * transform });
+    }
+
+    float Animation::mapToOriginalGroupTime(std::string_view group, float time, bool relative) const
+    {
+        const auto state = mStates.find(group);
+        if (state == mStates.end() || !state->second.mSource || !state->second.mSource->mImportedBow)
+            return time;
+        const AnimSource* playing = state->second.mSource.get();
+        const auto key = std::make_pair(std::string(group), playing);
+        auto found = mGroupTimeMaps.find(key);
+        if (found == mGroupTimeMaps.end())
+        {
+            GroupTimeMap map;
+            const AnimSource* original = nullptr;
+            for (const auto& source : mAnimSources)
+                if (source->getTextKeys().hasGroupStart(group))
+                {
+                    original = source.get();
+                    break;
+                }
+            if (original != nullptr && original != playing)
+            {
+                const std::string prefix = std::string(group) + ": ";
+                std::map<std::string, float> originalTimes;
+                map.mOriginalStart = std::numeric_limits<float>::max();
+                for (const auto& [at, label] : original->getTextKeys())
+                    if (label.starts_with(prefix))
+                    {
+                        originalTimes.emplace(label, at);
+                        map.mOriginalStart = std::min(map.mOriginalStart, at);
+                    }
+                map.mPlayingStart = std::numeric_limits<float>::max();
+                const std::string fastPrefix = prefix + "shoot fast ";
+                for (const auto& [at, label] : playing->getTextKeys())
+                    if (label.starts_with(prefix))
+                    {
+                        map.mPlayingStart = std::min(map.mPlayingStart, at);
+                        const bool fastBow = label.starts_with(fastPrefix);
+                        const std::string equivalent = fastBow ? prefix + "shoot " + label.substr(fastPrefix.size())
+                                                               : label;
+                        if (const auto match = originalTimes.find(equivalent); match != originalTimes.end())
+                            (fastBow ? map.mFastBowTable : map.mTable).emplace_back(at, match->second);
+                    }
+                std::sort(map.mTable.begin(), map.mTable.end());
+                std::sort(map.mFastBowTable.begin(), map.mFastBowTable.end());
+            }
+            found = mGroupTimeMaps.emplace(key, std::move(map)).first;
+        }
+        const GroupTimeMap& map = found->second;
+        const float at = relative ? time + map.mPlayingStart : time;
+        const auto& table = !map.mFastBowTable.empty() && at >= map.mFastBowTable.front().first
+            ? map.mFastBowTable : map.mTable;
+        if (table.empty())
+            return time;
+        float mapped = table.back().second;
+        if (at <= table.front().first)
+            mapped = table.front().second;
+        else
+            for (std::size_t i = 1; i < table.size(); ++i)
+                if (at <= table[i].first)
+                {
+                    const auto& [a0, b0] = table[i - 1];
+                    const auto& [a1, b1] = table[i];
+                    const float u = a1 > a0 ? (at - a0) / (a1 - a0) : 1.f;
+                    mapped = b0 + (b1 - b0) * u;
+                    break;
+                }
+        return relative ? mapped - map.mOriginalStart : mapped;
+    }
+
+    std::optional<osg::Vec3f> Animation::intersectNode(
+        osg::Node* node, const osg::Vec3f& from, const osg::Vec3f& to) const
+    {
+        if (node == nullptr)
+            return std::nullopt;
+        const osg::NodePathList paths = node->getParentalNodePaths();
+        if (paths.empty())
+            return std::nullopt;
+        osg::NodePath path = paths.front();
+        path.pop_back();
+        const osg::Matrixf aboveToWorld = osg::computeLocalToWorld(path);
+        const osg::Matrixf worldToAbove = osg::Matrixf::inverse(aboveToWorld);
+        osg::ref_ptr<osgUtil::LineSegmentIntersector> intersector = new osgUtil::LineSegmentIntersector(
+            osgUtil::Intersector::MODEL, from * worldToAbove, to * worldToAbove);
+        intersector->setIntersectionLimit(osgUtil::LineSegmentIntersector::LIMIT_NEAREST);
+        osgUtil::IntersectionVisitor visitor(intersector);
+        // Missiles already stuck in it are not part of it.
+        visitor.setTraversalMask(~static_cast<unsigned int>(Mask_Effect));
+        node->accept(visitor);
+        if (!intersector->containsIntersections())
+            return std::nullopt;
+        return intersector->getFirstIntersection().getWorldIntersectPoint() * aboveToWorld;
+    }
+
+    void Animation::removeStuckProjectiles()
+    {
+        for (const StuckProjectile& stuck : mStuckProjectiles)
+            if (osg::ref_ptr<osg::Group> group; stuck.mParent.lock(group))
+                group->removeChild(stuck.mNode);
+        mStuckProjectiles.clear();
+    }
+
+    void Animation::syncStuckProjectiles()
+    {
+        // Gone with the part it was stuck in (an unequipped shield), or taken from the body.
+        std::map<ESM::RefId, int> shown;
+        bool bodyChanged = false;
+        for (auto it = mStuckProjectiles.rbegin(); it != mStuckProjectiles.rend();)
+        {
+            osg::ref_ptr<osg::Group> group;
+            bool keep = it->mParent.lock(group) && group->containsNode(it->mNode);
+            if (keep && !it->mBone.empty() && !it->mItem.empty())
+            {
+                const int carried = mPtr.getClass().getContainerStore(mPtr).count(it->mItem);
+                keep = ++shown[it->mItem] <= carried;
+            }
+            if (keep)
+            {
+                ++it;
+                continue;
+            }
+            if (group)
+                group->removeChild(it->mNode);
+            bodyChanged |= !it->mBone.empty();
+            it = std::make_reverse_iterator(mStuckProjectiles.erase(std::next(it).base()));
+        }
+        if (bodyChanged)
+            saveBodyProjectiles();
+    }
+
     osg::Vec3f Animation::runAnimation(float duration)
     {
+        if (!mStuckProjectiles.empty())
+        {
+            mStuckProjectileCheck += duration;
+            if (mStuckProjectileCheck >= 0.25f)
+            {
+                mStuckProjectileCheck = 0.f;
+                syncStuckProjectiles();
+            }
+        }
         if (mRagdollRecoveryProgress)
         {
             *mRagdollRecoveryProgress=std::min(1.f,*mRagdollRecoveryProgress+duration/mRagdollRecoveryDuration);
@@ -2480,6 +3027,7 @@ namespace MWRender
         // A rebuilt skeleton must not retain snapshots of detached nodes.
         // World resumes ownership if the actor still has an active ragdoll.
         endRagdollPose();
+        removeStuckProjectiles();
         osg::ref_ptr<osg::StateSet> previousStateset;
         if (mObjectRoot)
         {
@@ -2593,6 +3141,7 @@ namespace MWRender
         mObjectRoot->addCullCallback(mLightListCallback);
         if (mTransparencyUpdater)
             mObjectRoot->addCullCallback(mTransparencyUpdater);
+        restoreBodyProjectiles();
     }
 
     osg::Group* Animation::getObjectRoot()
@@ -3010,7 +3559,8 @@ namespace MWRender
             setObjectRoot(released ? released->mModel : model, false, false, false);
             if (released)
             {
-                auto snapshot = restoreReleasedEquipment(*mObjectRoot, *released);
+                auto snapshot = restoreReleasedEquipment(
+                    *mObjectRoot, *released, allowLight && ptr.getType() == ESM::Light::sRecordId);
                 mInsert->removeChild(mObjectRoot);
                 mObjectRoot = std::move(snapshot);
                 mSkeleton = nullptr;

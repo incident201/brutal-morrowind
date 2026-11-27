@@ -73,6 +73,7 @@ namespace MWLua
         const LuaUtil::UserdataSerializer* serializer)
     {
         clear();
+        // Loaded events are pending input to the next finalizeEventBatch().
         while (esm.isNextSub("LUAE"))
         {
             std::string name = esm.getHString();
@@ -91,10 +92,10 @@ namespace MWLua
                 auto it = contentFileMapping.find(dest.mContentFile);
                 if (it != contentFileMapping.end())
                     dest.mContentFile = it->second;
-                mLocalEventBatch.push_back({ dest, std::move(name), std::move(data) });
+                addLocalEvent({ dest, std::move(name), std::move(data) });
             }
             else
-                mGlobalEventBatch.push_back({ std::move(name), std::move(data) });
+                addGlobalEvent({ std::move(name), std::move(data) });
         }
     }
 

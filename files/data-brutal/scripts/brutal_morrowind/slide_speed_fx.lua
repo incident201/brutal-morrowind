@@ -5,6 +5,7 @@ local types = require('openmw.types')
 local I = require('openmw.interfaces')
 local postprocessing = require('openmw.postprocessing')
 local shader, checked, warmed, warmFrames = nil, false, false, nil
+local active
 local alpha, clock, speed, phase = 0, 0, 0, 0
 local previousRealTime, previousSimulationTime, previousPosition, previousCell, sampleAge
 
@@ -19,6 +20,13 @@ local function setEnabled(enabled)
     end
 end
 
+local function setActive(value)
+    if shader and active ~= value then
+        shader:setActive(value)
+        active = value
+    end
+end
+
 local function resetSamples()
     previousSimulationTime, previousPosition, previousCell = nil, nil, nil
     sampleAge = 0
@@ -29,6 +37,9 @@ local function destroy()
     if shader and alpha ~= 0 then shader:setFloat('brutalSlideAlpha', 0) end
     alpha, clock, previousRealTime = 0, 0, nil
     warmFrames = nil
+    warmed = false
+    setActive(false)
+    setEnabled(false)
     resetSamples()
 end
 
@@ -73,7 +84,10 @@ local function draw(state)
     local rawDt = previousRealTime and now - previousRealTime or 0
     previousRealTime = now
     if not visible() then
-        destroy()
+        if shader and alpha ~= 0 then shader:setFloat('brutalSlideAlpha', 0) end
+        setActive(false)
+        alpha, previousRealTime = 0, nil
+        resetSamples()
         return
     end
     -- A resumed frame must not replay an old slide's screen flash.
@@ -95,9 +109,11 @@ local function draw(state)
         shader:setFloat('brutalSlideAlpha', 0)
         shader:setFloat('brutalSlideClock', 0)
         setEnabled(true)
+        setActive(true)
         warmFrames = (warmFrames or 0) + 1
         if warmFrames >= 4 then
             warmed, warmFrames = true, nil
+            setActive(false)
         end
         return
     end
@@ -115,10 +131,9 @@ local function draw(state)
         shader:setFloat('brutalSlideClock', clock)
         shader:setFloat('brutalSlideAlpha', alpha)
     end
-    -- Retain the warmed pass, which is an exact identity at alpha zero. Native
-    -- chain toggles rebuild render targets and caused a measured 77--90ms hitch
-    -- at slide entry, even after precompiling this same shader during setup.
-    setEnabled(true)
+    -- Keep allocated targets for fast entry, but skip the pass completely
+    -- once the streaks finish fading. No chain rebuild occurs on a slide.
+    setActive(alpha > 0)
 end
 
 return {

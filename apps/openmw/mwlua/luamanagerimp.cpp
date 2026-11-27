@@ -19,6 +19,7 @@
 #include <components/esm/luascripts.hpp>
 #include <components/esm3/esmreader.hpp>
 #include <components/esm3/esmwriter.hpp>
+#include <components/esm3/loadskil.hpp>
 #include <components/esm3/loadweap.hpp>
 #include <components/esm3/loadarmo.hpp>
 
@@ -58,6 +59,39 @@ namespace MWLua
 {
     namespace
     {
+        std::string_view rangedHitZone(int part)
+        {
+            switch (part)
+            {
+                case ESM::PRT_Head:
+                case ESM::PRT_Neck:
+                    return "head";
+                case ESM::PRT_Skirt:
+                case ESM::PRT_RHand:
+                case ESM::PRT_LHand:
+                case ESM::PRT_RWrist:
+                case ESM::PRT_LWrist:
+                case ESM::PRT_RForearm:
+                case ESM::PRT_LForearm:
+                case ESM::PRT_RUpperarm:
+                case ESM::PRT_LUpperarm:
+                case ESM::PRT_RFoot:
+                case ESM::PRT_LFoot:
+                case ESM::PRT_RAnkle:
+                case ESM::PRT_LAnkle:
+                case ESM::PRT_RKnee:
+                case ESM::PRT_LKnee:
+                case ESM::PRT_RLeg:
+                case ESM::PRT_LLeg:
+                case ESM::PRT_RPauldron:
+                case ESM::PRT_LPauldron:
+                case ESM::PRT_Tail:
+                    return "limb";
+                default:
+                    return "body";
+            }
+        }
+
         struct BoolScopeGuard
         {
             bool& mValue;
@@ -725,9 +759,21 @@ namespace MWLua
 
     void LuaManager::onHit(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, const MWWorld::Ptr& weapon,
         const MWWorld::Ptr& ammo, int attackType, float attackStrength, float damage, bool isHealth,
-        const osg::Vec3f& hitPos, bool successful, MWMechanics::DamageSourceType sourceType,
-        uint64_t brutalAttackId, bool brutalPowered, bool brutalBlocked, int contactPart)
+        const osg::Vec3f& hitPos, bool successful, MWMechanics::DamageSourceType sourceType, uint64_t brutalAttackId,
+        bool brutalPowered, bool brutalBlocked, int contactPart, bool brutalGroundFinisher,
+        const osg::Vec3f* contactNormal, bool brutalCharged)
     {
+        const bool rangedContact
+            = sourceType == MWMechanics::DamageSourceType::Ranged && contactNormal && victim.getClass().isNpc();
+        if (rangedContact && Settings::game().mBrutalEnabled && Settings::game().mNpcBloodDecals
+            && successful && !brutalBlocked && victim.get<ESM::NPC>()->mBase->mBloodType == 0)
+        {
+            // Anchor to the pose that was hit, before damage or the next animation step moves the surface.
+            if (auto* npc
+                = dynamic_cast<MWRender::NpcAnimation*>(MWBase::Environment::get().getWorld()->getAnimation(victim)))
+                if (npc->addBloodDecal(hitPos, *contactNormal, "projectile", false, contactPart))
+                    storeNpcBloodDecals(victim, npc->getBloodDecalData());
+        }
         mLua.protectedCall([&](LuaUtil::LuaView& view) {
             sol::table damageTable = view.newTable();
             if (isHealth)
@@ -749,6 +795,22 @@ namespace MWLua
             data["successful"] = successful;
             data["brutalAttackId"] = brutalAttackId;
             data["brutalPowered"] = brutalPowered;
+            data["brutalGroundFinisher"] = brutalGroundFinisher;
+            data["brutalCharged"] = brutalCharged;
+            const auto& game = Settings::game();
+            if (successful && isHealth && damage > 0.f && !brutalBlocked && !brutalPowered && !brutalGroundFinisher
+                && game.mBrutalEnabled && !attacker.isEmpty() && attacker == MWMechanics::getPlayer())
+            {
+                ESM::RefId skill;
+                if (sourceType == MWMechanics::DamageSourceType::Melee && game.mMeleeContactAlwaysHits
+                    && !weapon.isEmpty() && weapon.getType() == ESM::Weapon::sRecordId)
+                    skill = weapon.getClass().getEquipmentSkill(weapon);
+                else if (sourceType == MWMechanics::DamageSourceType::Ranged && MWMechanics::physicalProjectiles()
+                    && MWMechanics::isMissileItem(ammo))
+                    skill = ESM::Skill::Marksman;
+                if (!skill.empty())
+                    data["brutalWeaponDamageSkill"] = attacker.getClass().getSkill(attacker, skill);
+            }
             data["brutalFast"] = !attacker.isEmpty() && attacker.getClass().isActor()
                 && attacker.getClass().getCreatureStats(attacker).mBrutalFastStrike;
             data["brutalShieldRush"] = !attacker.isEmpty() && attacker.getClass().isActor()
@@ -760,6 +822,8 @@ namespace MWLua
                 && attacker == MWMechanics::getPlayer()
                 && attacker.getClass().getCreatureStats(attacker).mBrutalSlideAttack;
             data["brutalBlocked"] = brutalBlocked;
+            data["brutalPerfectBlock"] = brutalBlocked && victim.getClass().isActor()
+                && victim.getClass().getCreatureStats(victim).mBrutalPerfectShieldBlock;
             data["brutalAttackType"] = sourceType != MWMechanics::DamageSourceType::Melee ? ""
                 : attackType == ESM::Weapon::AT_Slash ? "slash"
                 : attackType == ESM::Weapon::AT_Chop ? "chop"
@@ -773,10 +837,16 @@ namespace MWLua
             if (classifyAnatomy)
                 headContact = classifyMeleeHeadContact(attacker, victim, hitPos, contactPart);
             data["brutalContactPart"] = contactPart;
+            if (rangedContact)
+            {
+                data["brutalContactNormal"] = *contactNormal;
+                data["brutalRangedZone"] = rangedHitZone(contactPart);
+            }
             // Attack receipts also exist for original bounds-based targeting;
             // those random blood points are not rendered surface contacts.
-            data["brutalContactExact"] = sourceType == MWMechanics::DamageSourceType::Melee
-                && brutalAttackId != 0 && Settings::game().mBrutalMeleeGeometry;
+            data["brutalContactExact"] = rangedContact
+                || (sourceType == MWMechanics::DamageSourceType::Melee && brutalAttackId != 0
+                    && Settings::game().mBrutalMeleeGeometry);
             MeleeWaistContact waistContact;
             if (classifyAnatomy)
                 waistContact = classifyMeleeWaistContact(attacker, victim, hitPos, contactPart);
@@ -857,6 +927,16 @@ namespace MWLua
         });
     }
 
+    void LuaManager::storeNpcBloodDecals(const MWWorld::Ptr& actor, const std::string& data)
+    {
+        mLua.protectedCall([&](LuaUtil::LuaView& view) {
+            sol::table receipt = view.newTable();
+            receipt["data"] = data;
+            receipt["restored"] = true;
+            sendLocalEvent(actor, "BrutalBloodDecalsStored", receipt);
+        });
+    }
+
     void LuaManager::swordClinchResolved(const MWWorld::Ptr& player, const MWWorld::Ptr& opponent,
         uint64_t id, std::string_view result, std::string_view reason, int clicks, int requiredClicks)
     {
@@ -912,6 +992,96 @@ namespace MWLua
             sol::table data = view.newTable();
             data["target"] = LObject(target);
             sendLocalEvent(attacker, "BrutalKickRagdoll", data);
+        });
+    }
+
+    void LuaManager::thrownObjectHit(const MWWorld::Ptr& attacker, const MWWorld::Ptr& item,
+        const MWWorld::Ptr& victim, const osg::Vec3f& hitPos, const osg::Vec3f& normal,
+        const osg::Vec3f& velocity, float mass, bool adrenaline, bool headHit, bool knockedDown,
+        std::string_view reaction, float damage)
+    {
+        if (attacker.isEmpty())
+            return;
+        mLua.protectedCall([&](LuaUtil::LuaView& view) {
+            sol::table data = view.newTable();
+            if (!item.isEmpty())
+                data["item"] = LObject(item);
+            if (!victim.isEmpty())
+                data["target"] = LObject(victim);
+            data["hitPos"] = hitPos;
+            data["normal"] = normal;
+            data["velocity"] = velocity;
+            data["mass"] = mass;
+            data["adrenaline"] = adrenaline;
+            data["headHit"] = headHit;
+            data["knockedDown"] = knockedDown;
+            data["reaction"] = std::string(reaction);
+            data["damage"] = damage;
+            sendLocalEvent(attacker, "BrutalThrownObjectHit", data);
+        });
+    }
+
+    void LuaManager::missileLanded(const MWWorld::Ptr& caster, const MWWorld::Ptr& target, const MWWorld::Ptr& item,
+        const ESM::RefId& missile, std::string_view outcome, std::string_view material, const osg::Vec3f& position)
+    {
+        mLua.protectedCall([&](LuaUtil::LuaView& view) {
+            sol::table data = view.newTable();
+            if (!caster.isEmpty())
+                data["attacker"] = LObject(caster);
+            if (!target.isEmpty())
+                data["target"] = LObject(target);
+            if (!item.isEmpty())
+                data["item"] = LObject(item);
+            data["recordId"] = missile.serializeText();
+            data["outcome"] = std::string(outcome);
+            data["material"] = std::string(material);
+            data["position"] = position;
+            data["timeScale"] = MWBase::Environment::get().getWorld()->getTimeManager()->getSimulationTimeScale();
+            if (!caster.isEmpty() && caster.getClass().isActor())
+                sendLocalEvent(caster, "BrutalMissileLanded", data);
+            if (!target.isEmpty() && target != caster && target.getClass().isActor())
+                sendLocalEvent(target, "BrutalMissileLanded", data);
+        });
+    }
+
+    void LuaManager::projectileFinisher(const MWWorld::Ptr& player, const MWWorld::Ptr& target, std::uint64_t attackId,
+        std::string_view phase, std::string_view token)
+    {
+        mLua.protectedCall([&](LuaUtil::LuaView& view) {
+            sol::table data = view.newTable();
+            data["target"] = LObject(target);
+            data["attackId"] = attackId;
+            data["phase"] = std::string(phase);
+            if (!token.empty())
+                data["token"] = std::string(token);
+            sendLocalEvent(player, "BrutalProjectileFinisher", data);
+        });
+    }
+
+    void LuaManager::objectThrowResolved(const MWWorld::Ptr& player, std::uint64_t throwId, bool released)
+    {
+        if (player.isEmpty() || throwId == 0)
+            return;
+        mLua.protectedCall([&](LuaUtil::LuaView& view) {
+            sol::table data = view.newTable();
+            data["throwId"] = throwId;
+            data["released"] = released;
+            sendLocalEvent(player, "BrutalObjectThrowResolved", data);
+        });
+    }
+
+    void LuaManager::dynamicObjectImpact(const MWWorld::Ptr& player, const MWWorld::Ptr& item,
+        const osg::Vec3f& position, const osg::Vec3f& normal, float speed)
+    {
+        if (player.isEmpty() || item.isEmpty())
+            return;
+        mLua.protectedCall([&](LuaUtil::LuaView& view) {
+            sol::table data = view.newTable();
+            data["item"] = LObject(item);
+            data["position"] = position;
+            data["normal"] = normal;
+            data["speed"] = speed;
+            sendLocalEvent(player, "BrutalDynamicObjectImpact", data);
         });
     }
 
@@ -1026,6 +1196,8 @@ namespace MWLua
         mGlobalScripts.save(globalScripts);
         globalScripts.save(writer);
         mLuaEvents.save(writer);
+        if (const auto lastAttackId = MWMechanics::getLastCombatAttackId(); lastAttackId != 0)
+            writer.writeHNT("BAID", lastAttackId);
 
         writer.endRecord(ESM::REC_LUAM);
     }
@@ -1054,6 +1226,9 @@ namespace MWLua
         mLua.protectedCall([&](LuaUtil::LuaView& view) {
             mLuaEvents.load(view.sol(), reader, mContentFileMapping, mGlobalLoader.get());
         });
+        std::uint64_t lastAttackId = 0;
+        reader.getHNOT(lastAttackId, "BAID");
+        MWMechanics::restoreCombatAttackId(lastAttackId);
 
         mGlobalScripts.setSavedDataDeserializer(mGlobalLoader.get());
         mGlobalScripts.load(globalScripts);
@@ -1121,6 +1296,8 @@ namespace MWLua
             localData[id] = std::move(data);
         }
 
+        if (!mPlayer.isEmpty())
+            MWBase::Environment::get().getWorld()->releaseHeldObject(mPlayer, {}, {}, 0.f, false);
         initConfiguration(true);
 
         mMenuScripts.removeAllScripts();

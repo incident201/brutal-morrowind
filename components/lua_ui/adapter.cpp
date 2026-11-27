@@ -56,7 +56,15 @@ namespace LuaUi
         const int padding = std::max(0, root->widget()->getLeft());
         width = std::max(1, width - 2 * padding);
         if (root->widget()->getWidth() == width)
+        {
+            // Nested text can finish reflowing after the viewport width is set.
+            // Refresh the adapter when its cached extent still describes the old layout.
+            const auto bounds = root->calculateCoord();
+            const MyGUI::IntSize contentSize(std::max(0, bounds.right()), std::max(0, bounds.bottom()));
+            if (mContainer->getSize() != contentSize)
+                mContainer->updateCoord();
             return;
+        }
         // Keep layout properties for subsequent edits. Zero minimum height lets
         // wrapped text reflow when the window becomes wider as well as narrower.
         auto layout = root->getLayout();

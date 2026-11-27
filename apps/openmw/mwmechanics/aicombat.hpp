@@ -2,6 +2,8 @@
 #define GAME_MWMECHANICS_AICOMBAT_H
 
 #include "aitemporarybase.hpp"
+
+#include <vector>
 #include "aitimer.hpp"
 #include "movement.hpp"
 #include "typedaipackage.hpp"
@@ -58,13 +60,39 @@ namespace MWMechanics
         bool mUseCustomDestination;
         osg::Vec3f mCustomDestination;
 
+        // Health at the last AI decision catches damage outside the native hit handler.
+        float mBrutalLastHealth = -1.f;
+        bool mBrutalFleeing = false;
+
+        // Dark Messiah's ACT_GRAB_WEAPON (AiCombat::updateBrutalPickup): the loose item this NPC goes
+        // for, whether it is a shield, the crouch, the item's last position and how long it lay
+        // still, the time spent going to it, the next search and the items it gave up.
+        ESM::RefNum mBrutalPickupItem;
+        bool mBrutalPickupShield = false;
+        bool mBrutalPickupCrouching = false;
+        osg::Vec3f mBrutalPickupLastPos;
+        float mBrutalPickupStill = 0.f;
+        float mBrutalPickupTime = 0.f;
+        float mBrutalPickupScan = 0.f;
+        osg::Vec3f mBrutalPickupActorLast; // the NPC's position in the direct approach
+        float mBrutalPickupStall = 0.f; // seconds the direct approach has not advanced
+        std::vector<ESM::RefNum> mBrutalPickupRejected;
+
         // Dark Messiah guard pacing (npc_guard.qct, mm_game_settings.txt).
         bool mDmBerserk = false;
         float mDmRhythmTimer = 0.f;
         float mDmTargetPassive = 0.f;
         float mDmDodgeCooldown = 0.f;
         float mDmPreventiveTimer = 0.f;
-        void updateDarkMessiah(float duration, const MWWorld::Ptr& target);
+        float mDmTargetGuardTime = 0.f;
+        float mDmChargedHold = 0.f;
+        // Spreading around a shared target: the side to drift (-1 left, 1 right, 0 none),
+        // its next re-evaluation, and whether the strafe currently owns mMovement.
+        float mBrutalSpreadSide = 0.f;
+        float mBrutalSpreadTimer = 0.f;
+        bool mBrutalSpreading = false;
+        void updateDarkMessiah(float duration, const MWWorld::Ptr& actor, const MWWorld::Ptr& target,
+            CharacterController& characterController);
 
         AiCombatStorage();
 
@@ -93,6 +121,7 @@ namespace MWMechanics
         explicit AiCombat(const ESM::AiSequence::AiCombat* combat);
 
         void init();
+        static void clearBrutalPickupClaims();
 
         bool execute(const MWWorld::Ptr& actor, CharacterController& characterController, AiState& state,
             float duration) override;
@@ -116,6 +145,13 @@ namespace MWMechanics
             CharacterController& characterController);
 
         void updateLOS(const MWWorld::Ptr& actor, const MWWorld::Ptr& target, float duration, AiCombatStorage& storage);
+
+        /// An NPC without a weapon goes for one lying nearby, then for a shield right beside it.
+        /// Returns true while this owns the actor's movement and actions.
+        void updateBrutalSpread(const MWWorld::Ptr& actor, const MWWorld::Ptr& target, AiCombatStorage& storage,
+            float duration);
+        bool updateBrutalPickup(const MWWorld::Ptr& actor, const MWWorld::Ptr& target,
+            CharacterController& characterController, AiCombatStorage& storage, float duration);
 
         void updateFleeing(const MWWorld::Ptr& actor, const MWWorld::Ptr& target, float duration,
             MWWorld::MovementDirectionFlags supportedMovementDirections, AiCombatStorage& storage);

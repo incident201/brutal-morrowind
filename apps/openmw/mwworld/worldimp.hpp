@@ -1,8 +1,11 @@
 #ifndef GAME_MWWORLD_WORLDIMP_H
 #define GAME_MWWORLD_WORLDIMP_H
 #include <map>
+#include <optional>
 
+#include <osg/Node>
 #include <osg/Timer>
+#include <osg/observer_ptr>
 #include <osg/ref_ptr>
 
 #include <components/debug/debuglog.hpp>
@@ -87,6 +90,7 @@ namespace MWWorld
     class World final : public MWBase::World
     {
     private:
+        bool releaseNpcEquipment(const Ptr& ptr, bool afterKnockdown, const osg::Vec3f* disarmVelocity);
         Resource::ResourceSystem* mResourceSystem;
 
         ESM::ReadersCache mReaders;
@@ -102,6 +106,19 @@ namespace MWWorld
 
         std::unique_ptr<MWWorld::Player> mPlayer;
         std::unique_ptr<MWPhysics::PhysicsSystem> mPhysics;
+        struct HeldThrow
+        {
+            SafePtr item;
+            float speed;
+            bool adrenaline;
+            std::uint64_t id;
+            float wait = 0.f;
+        };
+        std::optional<HeldThrow> mHeldThrow;
+        std::vector<std::pair<osg::observer_ptr<osg::Node>, unsigned>> mHeldVisuals;
+        osg::ref_ptr<osg::Callback> mHeldVisualCull;
+        void clearHeldVisual();
+        void resolveHeldThrow(bool released);
         std::unique_ptr<DetourNavigator::Navigator> mNavigator;
         std::unique_ptr<MWRender::RenderingManager> mRendering;
         std::unique_ptr<MWWorld::Scene> mWorldScene;
@@ -149,7 +166,9 @@ namespace MWWorld
 
         void initObjectInCell(const Ptr& ptr, CellStore& cell, bool adjustPos, bool notifyScripts = true);
         Ptr moveObjectToCell(const Ptr& ptr, CellStore* cell, ESM::Position pos, bool adjustPos);
+        void releaseShieldProjectiles(const Ptr& shield, const osg::Matrixf& toDropped = {});
         Ptr copyObjectToCell(const ConstPtr& ptr, CellStore* cell, ESM::Position pos, int count, bool adjustPos);
+        ESM::Position getGroundDropPosition(const Ptr& actor) const;
 
         void updateSoundListener();
 
@@ -166,6 +185,7 @@ namespace MWWorld
 
         void doPhysics(float duration, osg::Timer_t frameStart, unsigned int frameNumber, osg::Stats& stats);
         ///< Run physics simulation and modify \a world accordingly.
+        void processThrownObjects();
 
         void updateNavigator();
 
@@ -224,7 +244,6 @@ namespace MWWorld
         void readRecord(ESM::ESMReader& reader, uint32_t type) override;
 
         // switch to POV before showing player's death animation
-        void useDeathCamera() override;
 
         void setWaterHeight(const float height) override;
 
@@ -407,9 +426,12 @@ namespace MWWorld
             std::uint64_t kickId) override;
         std::map<std::string, double> getNpcSuperKickState(const Ptr& ptr) const override;
         std::vector<osg::Vec3f> getNpcRagdollDynamics(const MWWorld::Ptr& ptr) const override;
+        bool isNpcGroundedRagdoll(const MWWorld::Ptr& ptr) const override;
         std::vector<osg::Vec3f> getNpcRagdollState(const Ptr& ptr) const override;
         std::map<std::string, double> getNpcRagdollEnhancementState(const Ptr& ptr) const override;
-        void releaseNpcRagdollEquipment(const Ptr& ptr) override;
+        void releaseNpcRagdollEquipment(const Ptr& ptr, bool afterKnockdown) override;
+        bool disarmNpcWeapon(const Ptr& ptr, const osg::Vec3f& velocity) override;
+        void getLooseEquipmentInRange(const osg::Vec3f& center, float radius, std::vector<Ptr>& out) override;
         std::vector<RagdollDroppedItem> getNpcRagdollDroppedItems(const Ptr& ptr) const override;
         std::vector<osg::Vec3f> getReleasedEquipmentState(const Ptr& ptr) const override;
         bool applyNpcRagdollImpact(const Ptr& ptr, std::size_t part, const osg::Vec3f& point,
@@ -417,6 +439,14 @@ namespace MWWorld
         Ptr kickNpcRagdoll(const osg::Vec3f& origin, const osg::Vec3f& forward, float reach, float minimumDot,
             const osg::Vec3f& velocity, bool& headHit, osg::Vec3f& hitPoint, std::size_t& hitPart) override;
         void applyObjectImpulse(const Ptr& ptr, const osg::Vec3f& impulse, float mass) override;
+        bool canHoldObject(const ConstPtr& ptr) const override;
+        std::pair<Ptr, unsigned> findDetachedGrabFragment(const Ptr& player,
+            const osg::Vec3f& from, const osg::Vec3f& to) const override;
+        bool holdObject(const Ptr& ptr, const Ptr& holder, MWPhysics::HeldObjectInfo* info = nullptr,
+            unsigned fragment = 0) override;
+        bool releaseHeldObject(const Ptr& holder, const osg::Vec3f& eyePos, const osg::Vec3f& throwDir,
+            float throwSpeed, bool adrenaline, std::uint64_t throwId = 0) override;
+        Ptr getHeldObject() const override;
         void syncDynamicObject(const Ptr& ptr, const osg::Vec3f& position, const osg::Quat& rotation,
             const osg::Vec3f& renderedPosition, const osg::Quat& renderedRotation, bool authoritativeChanged) override;
         void queueMovement(const Ptr& ptr, const osg::Vec3f& velocity) override;
@@ -450,6 +480,7 @@ namespace MWWorld
 
         void update(float duration, bool paused);
         void sampleNpcRagdollAnimation(float duration);
+        void samplePlayerObjectGrip(float duration, const osg::FrameStamp& frameStamp);
         void samplePlayerSwordWallContact(float duration, const osg::FrameStamp& frameStamp);
         void updatePhysics(
             float duration, bool paused, osg::Timer_t frameStart, unsigned int frameNumber, osg::Stats& stats);

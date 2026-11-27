@@ -105,6 +105,24 @@ class GuardImporter(Importer):
             axis=np.array([R[2,1]-R[1,2],R[0,2]-R[2,0],R[1,0]-R[0,1]])
             self.hinge[side]=axis/norm(axis)
         self.mapping=dict(self.mapping,**{'Weapon Bone':'__native_weapon','Shield Bone':'__source_shield'})
+        # Optional right-hand goal: {'point': handle position over the feet, 'profile': t -> 0..1}.
+        self.reach=None
+
+    def blended(self,clip,toward,weight):
+        """The clip with every bone only `weight` of the way from `toward`'s first frame."""
+        bones,tracks,anim=clip;_,other,_=toward;out={}
+        for b in bones:
+            a=tracks.get(b.name);o=other.get(b.name)
+            if a is None and o is None:continue
+            qo=o['rot'][0] if o is not None else b.quat;po=o['pos'][0] if o is not None else b.position
+            rot=[];pos=[]
+            for f in range(anim.frame_count):
+                qa=a['rot'][min(f,len(a['rot'])-1)] if a is not None else b.quat
+                pa=a['pos'][min(f,len(a['pos'])-1)] if a is not None else b.position
+                rot.append(sample_quaternion(np.array([qo,qa],float),weight))
+                pos.append(np.asarray(po,float)*(1-weight)+np.asarray(pa,float)*weight)
+            out[b.name]={'rot':np.array(rot),'pos':np.array(pos)}
+        return bones,out,anim
 
     def resource(self,name):
         path=self.work/Path(name).name
@@ -174,6 +192,12 @@ class GuardImporter(Importer):
             if side=='R':
                 handle=dm[self.attachments['RightHand'][0]]@self.attachments['RightHand'][1]@self.sword_idle
                 target=shoulder+scale*self.basis@(handle[:3,3]-dm[ds][:3,3])-Rh@self.nodes['Weapon Bone'].translation
+                if self.reach is not None:
+                    # This frame lacks the pelvis drop that segment() adds afterwards.
+                    w=self.reach['profile'](time)
+                    dz=(float(dm['SK_Root'][2,3])-self.reference_height)*self.height_scale
+                    goal=self.reach['point']-np.array([0,0,dz])-Rh@self.nodes['Weapon Bone'].translation
+                    target=target*(1-w)+goal*w
             L1=norm(self.nodes[fore].translation);L2=norm(self.nodes[hand].translation)
             reach=target-shoulder;distance=norm(reach);axis=reach/distance
             d=np.clip(distance,abs(L1-L2)+1e-3,L1+L2-1e-3);target=shoulder+axis*d
@@ -244,7 +268,8 @@ class GuardImporter(Importer):
         self.segment_records.append(dict(clip=base[2].name,duration=float(duration),natural=self.duration(base),loop=loop))
         return times,poses
 
-    def write(self,out,group,segments,textkeys,root_velocity=None):
+    def write(self,out,group,segments,textkeys,root_velocity=None,grip_at=None):
+        """grip_at: the right fingers open until this time, then close on the item."""
         super().write(out,group,segments,textkeys,root_velocity)
         nif=self.nif;path=out/(group+'.kf');stream=nif.NiStream();stream.load(path)
         names=[e.string_data for e in stream.root.extra_datas if isinstance(e,nif.NiStringExtraData)]
@@ -261,9 +286,14 @@ class GuardImporter(Importer):
             else:
                 ctrl=nif.NiKeyframeController(data=nif.NiKeyframeData(),start_time=0.,stop_time=float(max(row[0] for row in rows)),flags=12)
                 stream.root.extra_datas.append(nif.NiStringExtraData(string_data=name));stream.root.controllers.append(ctrl)
-            armed=group.endswith('1h') or group in ('weapononehand','brutal_hit','shield') or group.startswith(('hit','brutal_clinch'))
+            armed=group.endswith('1h') or group in ('weapononehand','brutal_hit','shield','brutal_weapon_guard',
+                                                    'brutal_npc_bow_kick') or group.startswith(('hit','brutal_clinch'))
             q=q if armed else matrix_quat(self.nodes[name].rotation)
-            ctrl.data.rotations=nif.NiRotData(keys=np.array([[rows[0][0],*q],[rows[-1][0],*q]],np.float32))
+            keys=[[rows[0][0],*q],[rows[-1][0],*q]]
+            if grip_at is not None and name.startswith('Bip01 R'):
+                relaxed=matrix_quat(self.nodes[name].rotation);held=self.grip[name]
+                keys=[[rows[0][0],*relaxed],[grip_at-.06,*relaxed],[grip_at,*held],[rows[-1][0],*held]]
+            ctrl.data.rotations=nif.NiRotData(keys=np.array(keys,np.float32))
             ctrl.data.translations=nif.NiPosData(keys=np.array([[0,*self.nodes[name].translation]],np.float32))
         stream.save(path)
         yaml="blending_rules:\n  - from: '*'\n    to: '*'\n    easing: linear\n    duration: 0.2\n"
@@ -292,18 +322,20 @@ class GuardImporter(Importer):
             marks = [(0, 'start'), (float(t[-1]), 'stop')]
             self.write(out, group, [(0, t, p)], marks)
 
-    def weapon_guard(self,out):
+    def weapon_guard(self,out,attacks=(('chop','@attack_top'),('slash','@attack_left'),('thrust','@attack_bottom'))):
         segments=[];marks=[(0,'start'),(0,'brutal continuous release')];offset=0.
         for phase,clip in [('equip','@unsheathe_sword'),('unequip','@sheathe_sword')]:
             t,p=self.segment(self.clip('guard',clip));d=float(t[-1])
             segments.append((offset,t,p))
             marks += [(offset,phase+' start'),(offset+d*.4,phase+(' attach' if phase=='equip' else ' detach')),(offset+d,phase+' stop')]
             offset+=d+.05
-        for attack,clip in [('chop','@attack_top'),('slash','@attack_left'),('thrust','@attack_bottom')]:
+        for attack,clip in attacks:
             t,p=self.segment(self.clip('guard',clip));d=float(t[-1])
             events={e.event:float(e.cycle)*d for e in self.sequences[clip][0].events}
             if 2152 not in events or 2102 not in events:raise ValueError('Missing source swing/hit events: '+clip)
-            wind=events[2152];hit=events[2102]
+            # @attack_wounded_2 marks its hit (2102) before the swing event 2152:
+            # the windup must end before the hit.
+            hit=events[2102];wind=min(events[2152],hit-.05)
             segments.append((offset,t,p))
             marks += [(offset,attack+' start'),(offset+.15,attack+' min attack'),(offset+wind,attack+' max attack'),
                       (offset+wind,attack+' min hit'),(offset+hit,attack+' hit')]
@@ -314,6 +346,76 @@ class GuardImporter(Importer):
         self.write(out,'weapononehand',segments,marks)
 
 
+def write_native_paired_guards(skeleton, animation, output):
+    """Private/reproducible paired guard samples from the user's third-person KF.
+
+    These are new named upper-body groups, never aliases of live idle/attack
+    states. Both hands, fingers and the native item mount are sampled together.
+    """
+    sys.path.insert(0, str(ROOT/'third_party/io_scene_mw/lib'))
+    from es3 import nif
+    source=nif.NiStream();source.load(animation)
+    bind=nif.NiStream();bind.load(skeleton)
+    nodes={n.name:n for n in bind.objects_of_type(nif.NiNode)}
+    parents={c.name:n.name for n in nodes.values() for c in n.children if isinstance(c,nif.NiNode)}
+    names=[e.string_data for e in source.root.extra_datas if isinstance(e,nif.NiStringExtraData)]
+    controllers=dict(zip(names,source.root.controllers))
+    marks={line.strip().lower():float(t) for t,label in source.root.extra_data.keys
+           for line in str(label).replace('\r','').split('\n') if line.strip()}
+    out=output/'Animations/brutal_npc';out.mkdir(parents=True,exist_ok=True)
+    selected=[name for name in nodes if name.startswith(('Bip01 L Clavicle','Bip01 R Clavicle',
+        'Bip01 L UpperArm','Bip01 R UpperArm','Bip01 L Forearm','Bip01 R Forearm',
+        'Bip01 L Hand','Bip01 R Hand','Bip01 L Finger','Bip01 R Finger'))
+        or name in ('Bip01 Spine','Bip01 Spine1','Bip01 Spine2','Bip01 Neck','Bip01 Head','Weapon Bone')]
+    groups={};outputs={}
+    for family,native in (('2c','weapontwohand'),('2w','weapontwowide')):
+        key=native+': slash min attack'
+        if key not in marks:
+            raise ValueError('Third-person native paired guard requires '+key+' in '+str(animation))
+        at=marks[key];duration=.4;group='brutal_weapon_guard_'+family
+        stream=nif.NiStream();stream.root=nif.NiSequenceStreamHelper(extra_data=nif.NiTextKeyExtraData(
+            keys=np.array([(0.,group+': start'),(.1,group+': brutal guard hold'),
+                           (duration,group+': stop')],dtype='<f,O')))
+        local={name:to4(node.rotation,node.translation) for name,node in nodes.items()}
+        for name in selected:
+            node=nodes[name];q=matrix_quat(node.rotation);p=np.asarray(node.translation,float)
+            controller=controllers.get(name)
+            if controller is not None:
+                rows=controller.data.rotations.keys
+                if len(rows):
+                    lo=max(0,min(int(np.searchsorted(rows[:,0],at,side='right'))-1,len(rows)-1))
+                    hi=min(lo+1,len(rows)-1)
+                    fraction=float((at-rows[lo,0])/(rows[hi,0]-rows[lo,0])) if hi!=lo else 0.
+                    q=sample_quaternion(rows[[lo,hi],1:5],fraction)
+                rows=controller.data.translations.keys
+                if len(rows):p=np.array([np.interp(at,rows[:,0],rows[:,axis]) for axis in (1,2,3)])
+            local[name]=to4(quat_matrix(q[[1,2,3,0]]),p)
+        from native_paired_guard import naturalize_paired_guard
+        local,adaptation=naturalize_paired_guard(nodes,parents,local)
+        for name in selected:
+            q=matrix_quat(local[name][:3,:3]);p=local[name][:3,3]
+            data=nif.NiKeyframeData(rotations=nif.NiRotData(keys=np.array([[0.,*q],[duration,*q]],np.float32)),
+                translations=nif.NiPosData(keys=np.array([[0.,*p],[duration,*p]],np.float32)))
+            stream.root.extra_datas.append(nif.NiStringExtraData(string_data=name))
+            stream.root.controllers.append(nif.NiKeyframeController(data=data,start_time=0.,stop_time=duration,flags=12))
+        path=out/(group+'.kf');stream.save(path)
+        path.with_suffix('.yaml').write_text("blending_rules:\n  - from: '*'\n    to: '*'\n    easing: linear\n    duration: 0.2\n  - from: ''\n    to: '*'\n    easing: linear\n    duration: 0\n")
+        check=nif.NiStream();check.load(path)
+        assert len(list(check.root.controllers))==len(selected)
+        for controller in check.root.controllers:
+            assert np.isfinite(controller.data.rotations.keys).all()
+        groups[group]={'source_kind':'native_paired_guard','source':str(animation),'sample_key':key,'sample_time':at,
+            'hold_time':.1,'duration':duration,'bones':len(selected),'preserves':'both native hands/fingers/item mount',
+            'elbow_adaptation':adaptation}
+        for file in (path,path.with_suffix('.yaml')):outputs[file.name]=hashlib.sha256(file.read_bytes()).hexdigest()
+        print(f'{group}: native {key} @{at:.6f}, {len(selected)} paired bones')
+    result={'converter':'import_npc.py --native-guard-animation','derived_from_game_files':True,
+        'inputs':{str(path):hashlib.sha256(path.read_bytes()).hexdigest() for path in (skeleton,animation)},
+        'groups':groups,'outputs':outputs}
+    (output/'npc-paired-guard-import.json').write_text(json.dumps(result,indent=2)+'\n')
+    return result
+
+
 def main():
     ap=argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--vpk-root',type=Path,required=True)
@@ -322,7 +424,14 @@ def main():
     ap.add_argument('--grip-animation',type=Path,required=True)
     ap.add_argument('--output',type=Path,required=True)
     ap.add_argument('--clinch-only',action='store_true',help='Emit only the three additive sword-clinch clips')
+    ap.add_argument('--native-guard-animation',type=Path,
+                    help='User-owned vanilla THIRD-PERSON xbase_anim.kf for named close/wide paired guards')
+    ap.add_argument('--paired-guards-only',action='store_true',help='Emit only native named close/wide paired guards')
     a=ap.parse_args();a.work_dir.mkdir(parents=True,exist_ok=True)
+    if a.paired_guards_only:
+        if a.native_guard_animation is None:ap.error('--paired-guards-only requires --native-guard-animation')
+        write_native_paired_guards(a.skeleton,a.native_guard_animation,a.output)
+        return
     out=a.output/'Animations/brutal_npc';out.mkdir(parents=True,exist_ok=True)
     obsolete=[p.name for p in out.glob('*.kf') if p.stem.startswith(('sneak','jump')) or p.stem=='idlesneak']
     if obsolete:
@@ -350,7 +459,16 @@ def main():
     i.weapon_guard(out)
     i.clinch(out)
     t,p=i.segment(i.clip('guard','@Block'))
-    i.write(out,'shield',[(0,t,p)],[(0,'start'),(0,'block start'),(float(t[-1]),'block stop'),(float(t[-1]),'stop')])
+    # @Block is the shield response: brace its early raised pose, not the
+    # middle of the later recoil. The normal stock block keys stay unchanged.
+    i.write(out,'shield',[(0,t,p)],[(0,'start'),(0,'block start'),
+            (float(t[-1])*.2,'brutal guard hold'),(float(t[-1]),'block stop'),(float(t[-1]),'stop')])
+    # Weapon-only defence uses the original guard's hanging sword parry.
+    # Keep the whole source clip and mark the authored braced pose explicitly,
+    # so the runtime does not guess a sample inside the shield animation.
+    t,p=i.segment(i.clip('guard','anm_parry_A'))
+    i.write(out,'brutal_weapon_guard',[(0,t,p)],[(0,'start'),
+            (float(t[-1])*.4,'brutal guard hold'),(float(t[-1]),'stop')])
     for group,clip,duration in [('brutal_hit','@Hit_Front_medium',5/6),('hit1','anm_Hit_Body_Front_small',None),
                                 ('hit2','anm_Hit_Body_left_small',None),('hit3','anm_Hit_Body_right_small',None),
                                 ('hit4','anm_Hit_Body_back_small',None),('hit5','anm_Hit_head_Front_small',None)]:
@@ -373,18 +491,62 @@ def main():
             i.write(out,group,[(0,t,p)],[(0,'start'),(float(t[-1]),'stop')])
     # SCHED_MM_STAND_UP_FRONT/BACK after a living ragdoll fall: front lies face down, back
     # face up; both start with the head behind the actor's final facing. ACT_MELEE_PARRY_BREAK
-    # (@Parry_Broken) is the attacker's recoil after a timed player parry.
+    # (@Parry_Broken) is the attacker's recoil after a timed player parry. ACT_DIE_BACKSTABBED
+    # (@die_backstabbed) is the victim's synchronized dual-dagger stealth backstab reaction.
     for group,clip in [('brutal_standup_front','@StandUp_front'),('brutal_standup_back','@StandUp_back'),
-                       ('brutal_parrybroken','@Parry_Broken')]:
+                       ('brutal_parrybroken','@Parry_Broken'),('brutal_backstabbed','@die_backstabbed'),
+                       ('brutal_npc_disarmed','@hit_disarmed')]:
         t,p=i.segment(i.clip('guard',clip))
         i.write(out,group,[(0,t,p)],[(0,'start'),(float(t[-1]),'stop')])
+    name='@bow_kick'
+    t,p=i.segment(i.clip('guard',name));duration=float(t[-1])
+    impact=[float(e.cycle)*duration for e in i.sequences[name][0].events if e.event==2102]
+    if len(impact)!=1:raise ValueError('@bow_kick: expected one impact event')
+    i.write(out,'brutal_npc_bow_kick',[(0,t,p)],[(0,'start'),(impact[0],'hit'),(duration,'stop')])
+    # ACT_GRAB_WEAPON: a disarmed guard crouches and takes a weapon from the ground in its right
+    # hand. The clip's NPC_Grab_Weapon sound marks the hand's lowest point (0.60 of 1.50 s); the
+    # engine moves the world item into the hand at 'pickup contact'.
+    seq=i.sequences['@grab_weapon'][0];t,p=i.segment(i.clip('guard','@grab_weapon'));d=float(t[-1])
+    contact=[float(e.cycle)*d for e in seq.events if str(getattr(e,'options','') or '').strip()=='NPC_Grab_Weapon']
+    if len(contact)!=1:raise ValueError('@grab_weapon: expected one NPC_Grab_Weapon event')
+    i.write(out,'brutal_npc_pickup',[(0,t,p)],[(0,'start'),(contact[0],'pickup contact'),(d,'stop')],grip_at=contact[0])
+    # Dark Messiah has no table pickup. For a table, a crate or a shelf the same clip bends the body
+    # only 40% of the way down, and the right hand follows the source hand's timing to a handle point
+    # 62 units over the feet and 42 ahead (measured: the floor clip's handle lands 43 ahead, 8 up).
+    floor=i.clip('guard','@grab_weapon')
+    hand=[i.source_world(floor,k/floor[2].fps)['SK_R_Hand'][2,3] for k in range(floor[2].frame_count)]
+    top,low=hand[0],min(hand)
+    i.reach={'point':np.array([6.,42.,62.]),
+             'profile':lambda s:float(np.clip((top-np.interp(s*floor[2].fps,np.arange(len(hand)),hand))/(top-low),0,1))}
+    t,p=i.segment(i.blended(floor,i.clip('guard','@combatidle'),.4));i.reach=None
+    i.write(out,'brutal_npc_pickup_table',[(0,t,p)],[(0,'start'),(contact[0],'pickup contact'),(float(t[-1]),'stop')],grip_at=contact[0])
+    # Dark Messiah's wounded guard (life_tohurt): the same group names in their own folder. The
+    # engine prefers this folder's clips while an NPC is wounded. Hurtwalk is both the armed and
+    # the unarmed walk; its stride matches Combatwalk (41.1 against 41.8 units per loop).
+    wounded=a.output/'Animations/brutal_npc_wounded';wounded.mkdir(parents=True,exist_ok=True)
+    records,i.group_records=i.group_records,{}
+    i.loop_guard(wounded,'idle1h','@Wounded_idle')
+    for direction,compass in [('forward','N'),('back','S'),('left','W'),('right','E')]:
+        vector={'forward':(0,150,0),'back':(0,-150,0),'left':(-150,0,0),'right':(150,0,0)}[direction]
+        for suffix in ('','1h'):
+            i.loop_guard(wounded,'walk'+direction+suffix,'a_Hurtwalk'+compass,vector)
+    i.weapon_guard(wounded,(('chop','@attack_wounded_1'),('slash','@attack_wounded_2'),('thrust','@attack_wounded_1')))
+    wounded_records,i.group_records=i.group_records,records
+    if a.native_guard_animation is not None:
+        paired=write_native_paired_guards(a.skeleton,a.native_guard_animation,a.output)
+        i.group_records.update(paired['groups'])
+    native_guard_sources=[a.native_guard_animation] if a.native_guard_animation is not None else []
     (a.output/'npc-import.json').write_text(json.dumps({'converter':'import_npc.py','clips':i.provenance,
         'source_sha256':hashlib.sha256((a.work_dir/'npc_guard_combat_animations.mdl').read_bytes()).hexdigest(),
         'outputs':{path.name:hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(out.iterdir()) if path.suffix in ('.kf','.yaml')},
-        'inputs':{str(path):hashlib.sha256(path.read_bytes()).hexdigest() for path in (a.skeleton,a.grip_animation,i.attachment_model)},
-        'coverage':{'converted':['idle','one-handed sword','shield block','small upper-body hit reactions','heavy full-body kick reaction','walk/run in four directions'],
-                    'fallback':['two-handed melee','hand-to-hand','bow','crossbow','thrown weapons','spell casting','sneak','jump','death/get-up']},
-        'groups':i.group_records,'arm_scales':i.arm_scale,
+        'inputs':{str(path):hashlib.sha256(path.read_bytes()).hexdigest() for path in (a.skeleton,a.grip_animation,i.attachment_model,*native_guard_sources)},
+        'coverage':{'converted':['idle','one-handed sword','shield block','hanging weapon guard','small upper-body hit reactions','heavy full-body kick reaction','walk/run in four directions',
+                                 'wounded idle, hurt walk and one-handed attacks','weapon pickup from the ground and from a table']
+                    +(['native paired close/wide weapon guards'] if native_guard_sources else []),
+                    'fallback':['two-handed melee attacks and locomotion','hand-to-hand','bow','crossbow','thrown weapons','spell casting','sneak','jump','death/get-up']},
+        'groups':i.group_records,'wounded_groups':wounded_records,
+        'wounded_outputs':{path.name:hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(wounded.iterdir()) if path.suffix in ('.kf','.yaml')},
+        'arm_scales':i.arm_scale,
         'attachments':{name:{'parent':parent,'matrix':matrix.tolist()} for name,(parent,matrix) in i.attachments.items() if name in ('RightHand','LeftShield')},
         'hand_maps':{side:m.tolist() for side,m in i.hand_map.items()},
         'finger_calibration':{'right':'native idle1h: start','left':'native shield: block hit','channels':sorted(i.grip)},

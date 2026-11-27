@@ -1,5 +1,6 @@
 #include <components/misc/brutalconstants.hpp>
 #include "effectmanager.hpp"
+#include "brutalparticlebatch.hpp"
 #include "renderprewarm.hpp"
 
 #include <osg/PositionAttitudeTransform>
@@ -230,6 +231,9 @@ namespace MWRender
             {"decapVelocityX", mBrutalDecapitationVelocity.x()},
             {"decapVelocityY", mBrutalDecapitationVelocity.y()},
             {"decapVelocityZ", mBrutalDecapitationVelocity.z()},
+            {"batches", double(std::count_if(mBrutalParticleBatches.begin(), mBrutalParticleBatches.end(),
+                [](const auto& entry) { return entry.second.attached; }))},
+            {"cachedBatches", double(mBrutalParticleBatches.size())}, {"batchBuilds", double(mBrutalBatchBuilds)},
             {"alive", double(mBrutalParticles.size())}, {"limit", 512.0},
             {"bloodPrepared", mBrutalImpactTemplates[0] ? 1.0 : 0.0},
             {"sparksPrepared", mBrutalImpactTemplates[1] ? 1.0 : 0.0},
@@ -291,26 +295,7 @@ namespace MWRender
             else
                 particle.velocity = normal * (30.f + 75.f*random()) + spread * 45.f;
             if(flow)particle.velocity=normal*(12.f+random()*24.f)+spread*(variant==3?4.f:12.f);
-            particle.transform = new osg::PositionAttitudeTransform;
-            particle.transform->setNodeMask(Mask_Effect);
-            particle.transform->setPosition(position);
-            particle.transform->setScale(osg::Vec3f(particle.size, particle.size, particle.size));
-            osg::ref_ptr<osg::Billboard> billboard = new osg::Billboard;
-            billboard->setMode(osg::Billboard::POINT_ROT_EYE);
-            billboard->setNormal(osg::Vec3f(0,-1,0));
-            osg::ref_ptr<osg::Geometry> geometry = new osg::Geometry(
-                *static_cast<osg::Geometry*>(prepared->getDrawable(0)), osg::CopyOp::SHALLOW_COPY);
-            particle.colors = new osg::Vec4Array;
-            particle.colors->push_back(osg::Vec4(0,0,0,particle.opacity)); // White emission preserves original sprite RGB.
-            geometry->setColorArray(particle.colors, osg::Array::BIND_OVERALL);
-            billboard->addDrawable(geometry);
-            billboard->setStateSet(prepared->getStateSet());
-            if(variant==4&&!mCutSprayFrames.empty())
-            {
-                billboard->setStateSet(mCutSprayFrames.front());particle.animatedBillboard=billboard;particle.animationFrame=0;
-            }
-            particle.transform->addChild(billboard);
-            mParentNode->addChild(particle.transform);
+            particle.variant = variant;
             mBrutalParticles.push_back(std::move(particle));
             if (spark) ++mBrutalSparkCount; else ++mBrutalBloodCount;
         }
@@ -374,6 +359,56 @@ namespace MWRender
         if(mPendingCutBlood.size()<512)mPendingCutBlood.push_back({std::string(kind),position,direction,intensity});
     }
 
+    void EffectManager::updateBrutalParticleBatches(float dt)
+    {
+        using Key = std::pair<int, int>;
+        std::map<Key, std::vector<BrutalParticleBatch::Particle>> particles;
+        for (const auto& particle : mBrutalParticles)
+        {
+            const int frame = particle.variant == 4 && !mCutSprayFrames.empty()
+                ? std::min(int(mCutSprayFrames.size()) - 1, int(particle.age * 25.f)) : -1;
+            const float fade = 1.f - particle.age / particle.life;
+            particles[{particle.variant, frame}].push_back(
+                {particle.position, particle.size, fade * fade * particle.opacity});
+        }
+        for (auto it = mBrutalParticleBatches.begin(); it != mBrutalParticleBatches.end();)
+            if (!particles.contains(it->first))
+            {
+                auto& batch = it->second;
+                if (batch.attached)
+                {
+                    mParentNode->removeChild(batch.node);
+                    static_cast<BrutalParticleBatch*>(batch.node.get())->setParticles({});
+                    batch.attached = false;
+                }
+                // Keep VBOs across adjacent animation frames and repeated
+                // bursts; idle batches take no part in scene traversal.
+                batch.idle += std::max(dt, 0.f);
+                if (batch.idle >= 2.f)
+                    it = mBrutalParticleBatches.erase(it);
+                else
+                    ++it;
+            }
+            else ++it;
+        for (auto& [key, points] : particles)
+        {
+            auto& batch = mBrutalParticleBatches[key];
+            if (!batch.node)
+            {
+                auto* source = mBrutalImpactTemplates[key.first].get();
+                batch.node = new BrutalParticleBatch(source,
+                    key.second >= 0 ? mCutSprayFrames[key.second].get() : source->getStateSet());
+                batch.node->setNodeMask(Mask_Effect);
+                ++mBrutalBatchBuilds;
+            }
+            if (!batch.attached)
+                mParentNode->addChild(batch.node);
+            batch.attached = true;
+            batch.idle = 0.f;
+            static_cast<BrutalParticleBatch*>(batch.node.get())->setParticles(std::move(points));
+        }
+    }
+
     void EffectManager::update(float dt)
     {
         // Build and enqueue GPU resources during scene setup, before the first hit.
@@ -386,23 +421,13 @@ namespace MWRender
                 particle.age += dt;
                 if (!Settings::game().mBrutalEnabled || (particle.spark ? !Settings::game().mBrutalSparkEffects : !Settings::game().mBrutalBloodEffects) || particle.age >= particle.life)
                 {
-                    mParentNode->removeChild(particle.transform);
                     return true;
                 }
                 particle.velocity.z() -= (particle.spark ? 280.f : 180.f) * dt;
                 particle.position += particle.velocity * dt;
-                particle.transform->setPosition(particle.position);
-                const float fade = 1.f - particle.age / particle.life;
-                particle.colors->front().a() = fade * fade * particle.opacity;
-                if(particle.animatedBillboard&&!mCutSprayFrames.empty())
-                {
-                    const int frame=std::min(int(mCutSprayFrames.size())-1,int(particle.age*25.f));
-                    if(frame!=particle.animationFrame)
-                    {particle.animatedBillboard->setStateSet(mCutSprayFrames[frame]);particle.animationFrame=frame;}
-                }
-                particle.colors->dirty();
                 return false;
             }), mBrutalParticles.end());
+        updateBrutalParticleBatches(dt);
 
         mEffects.erase(std::remove_if(mEffects.begin(), mEffects.end(),
                            [dt, this](Effect& effect) {
@@ -430,7 +455,10 @@ namespace MWRender
     void EffectManager::clear()
     {
         mPendingCutBlood.clear();
-        for (const auto& particle : mBrutalParticles) mParentNode->removeChild(particle.transform);
+        for (const auto& [key, batch] : mBrutalParticleBatches)
+            if (batch.attached)
+                mParentNode->removeChild(batch.node);
+        mBrutalParticleBatches.clear();
         mBrutalParticles.clear();
 
         for (const auto& effect : mEffects)

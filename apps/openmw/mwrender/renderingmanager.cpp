@@ -1,8 +1,10 @@
 #include "renderingmanager.hpp"
+#include "brutalblood.hpp"
 #include "swordsegmentintersector.hpp"
 
 #include <cstdlib>
 #include <limits>
+#include <set>
 
 #include <osg/ClipControl>
 #include <osg/ComputeBoundsVisitor>
@@ -10,11 +12,14 @@
 #include <osg/Light>
 #include <osg/Material>
 #include <osg/NodeCallback>
+#include <osg/Texture>
 #include <osg/observer_ptr>
 #include <osg/Matrix>
 #include <osg/UserDataContainer>
 
 #include <osgUtil/LineSegmentIntersector>
+#include <osgUtil/PolytopeIntersector>
+#include <osg/TriangleIndexFunctor>
 
 #include <osgViewer/Viewer>
 
@@ -50,6 +55,7 @@
 #include <components/terrain/terraingrid.hpp>
 
 #include <components/esm3/loadcell.hpp>
+#include <components/esm3/loadstat.hpp>
 #include <components/esm4/loadcell.hpp>
 
 #include <components/debug/debugdraw.hpp>
@@ -57,6 +63,7 @@
 #include <components/detournavigator/navmeshcacheitem.hpp>
 
 #include "../mwworld/cellstore.hpp"
+#include "../mwphysics/raycasting.hpp"
 #include "../mwworld/class.hpp"
 #include "../mwworld/groundcoverstore.hpp"
 #include "../mwworld/scene.hpp"
@@ -64,8 +71,11 @@
 #include "../mwgui/postprocessorhud.hpp"
 
 #include "../mwmechanics/actorutil.hpp"
+#include "../mwmechanics/combat.hpp"
+#include "../mwmechanics/creaturestats.hpp"
 
 #include "../mwbase/environment.hpp"
+#include "../mwbase/mechanicsmanager.hpp"
 #include "../mwbase/windowmanager.hpp"
 #include "../mwbase/world.hpp"
 
@@ -105,7 +115,12 @@ namespace MWRender
             // Both participants now have this frame's complete animated transforms.
             // RigGeometry skins during CULL, so this fit affects the same frame.
             if (update)
+            {
                 owner->fitSwordClinchPose(*visitor);
+                owner->fitBackstabPose(*visitor);
+                owner->fitSwordWipePose();
+                owner->fitNockedArrow();
+            }
         }
     };
 
@@ -197,7 +212,7 @@ namespace MWRender
         if (Settings::shadows().mActorShadows)
             shadowCastingTraversalMask |= Mask_Actor;
         if (Settings::shadows().mPlayerShadows)
-            shadowCastingTraversalMask |= Mask_Player;
+            shadowCastingTraversalMask |= Mask_Player | Mask_PlayerShadow;
 
         int indoorShadowCastingTraversalMask = shadowCastingTraversalMask;
         if (Settings::shadows().mObjectShadows)
@@ -206,7 +221,8 @@ namespace MWRender
             shadowCastingTraversalMask |= Mask_Terrain;
 
         mShadowManager = std::make_unique<SceneUtil::ShadowManager>(sceneRoot, mRootNode, shadowCastingTraversalMask,
-            indoorShadowCastingTraversalMask, Mask_Terrain | Mask_Object | Mask_Static, Settings::shadows(),
+            indoorShadowCastingTraversalMask, Mask_Terrain | Mask_Object | Mask_Static, Mask_PlayerShadow,
+            Settings::shadows(),
             mResourceSystem->getSceneManager()->getShaderManager());
 
         Shader::ShaderManager::DefineMap globalDefines = Shader::getDefaultDefines();
@@ -261,6 +277,31 @@ namespace MWRender
         mResourceSystem->getSceneManager()->setIncrementalCompileOperation(mViewer->getIncrementalCompileOperation());
 
         mEffectManager = std::make_unique<EffectManager>(sceneRoot, mResourceSystem);
+        BrutalBlood::SceneAccess bloodAccess;
+        bloodAccess.castStatic = [](const osg::Vec3f& origin, const osg::Vec3f& end)
+            -> std::optional<BrutalBlood::Surface> {
+            const auto world = MWBase::Environment::get().getWorld();
+            const auto hit = world->getRayCasting()->castRay(
+                origin, end, MWPhysics::CollisionType_World | MWPhysics::CollisionType_HeightMap);
+            if (!hit.mHit || (!hit.mHitObject.isEmpty() && hit.mHitObject.getType() != ESM::Static::sRecordId))
+                return std::nullopt;
+            const auto player = world->getPlayerPtr();
+            const auto surface = hit.mHitObject.isEmpty() ? player : hit.mHitObject;
+            const auto* cell = surface.isInCell() ? surface.getCell() : nullptr;
+            if (cell && world->isUnderwater(cell, hit.mHitPos))
+                return std::nullopt;
+            osg::Vec3f normal = hit.mHitNormal;
+            if (normal.normalize() < 1e-3f)
+                return std::nullopt;
+            if (normal * (end - origin) > 0.f)
+                normal = -normal;
+            return BrutalBlood::Surface{ hit.mHitPos, normal, hit.mHitObject.isEmpty() };
+        };
+        bloodAccess.collectStatic = [this](const osg::Vec3f& center, float radius, std::vector<osg::Vec3d>& positions,
+                                        std::vector<std::array<unsigned, 3>>& triangles) {
+            collectBloodSurfaces(center, radius, positions, triangles);
+        };
+        mBrutalBlood = std::make_unique<BrutalBlood>(mResourceSystem, sceneRoot, mEffectManager.get(), bloodAccess);
 
         const std::string& normalMapPattern = Settings::shaders().mNormalMapPattern;
         const std::string& heightMapPattern = Settings::shaders().mNormalHeightMapPattern;
@@ -356,7 +397,7 @@ namespace MWRender
         mViewer->getCamera()->setCullingMode(cullingMode);
         mViewer->getCamera()->setName(Constants::SceneCamera);
 
-        auto mask = ~(Mask_UpdateVisitor | Mask_SimpleWater);
+        auto mask = ~(Mask_UpdateVisitor | Mask_SimpleWater | Mask_PlayerShadow);
         MWBase::Environment::get().getWindowManager()->setCullMask(mask);
         NifOsg::Loader::setHiddenNodeMask(Mask_UpdateVisitor);
         NifOsg::Loader::setIntersectionDisabledNodeMask(Mask_Effect);
@@ -687,6 +728,15 @@ namespace MWRender
 
             const MWWorld::Ptr& player = mPlayerAnimation->getPtr();
             osg::Vec3f playerPos(player.getRefData().getPosition().asVec3());
+            if (player.isInCell())
+            {
+                const auto* cell = player.getCell()->getCell();
+                const bool exterior = cell->isExterior() || cell->isQuasiExterior();
+                const int weather = MWBase::Environment::get().getWorld()->getCurrentWeatherScriptId();
+                // Rain and thunderstorm; ash, blight and snow do not wash blood.
+                mBrutalBlood->update(dt, playerPos, cell->getWorldSpace().serializeText(), exterior,
+                    weather == 4 || weather == 5);
+            }
 
             float windSpeed = mSky->getBaseWindSpeed();
             mSharedUniformStateUpdater->setWindSpeed(windSpeed);
@@ -863,8 +913,18 @@ namespace MWRender
                 int part=-1;
                 if (const auto* npc=dynamic_cast<const NpcAnimation*>(
                     MWBase::Environment::get().getWorld()->getAnimation(ptrHolder->mPtr)))
+                {
                     part=npc->getPartForNodePath(intersection.nodePath);
-                // Sword parries are not implemented. A carried weapon must not become a flesh hit.
+                    if (melee && part == ESM::PRT_Shield && Settings::game().mDarkMessiahNpcCombat
+                        && ptrHolder->mPtr != MWMechanics::getPlayer() && ptrHolder->mPtr.getClass().isNpc())
+                    {
+                        const auto& stats = ptrHolder->mPtr.getClass().getCreatureStats(ptrHolder->mPtr);
+                        if (stats.mBrutalNpcGuardRequested && stats.mBrutalBlockRaised
+                            && npc->hasNpcGuardMeshForCombat())
+                            return; // Combat tests the published shield on the segment to the body hit.
+                    }
+                }
+                // Carried weapons must not substitute for a body target.
                 if (melee && part==ESM::PRT_Weapon) return;
                 result.mHitObject = ptrHolder->mPtr;
                 result.mHitPart = part;
@@ -927,7 +987,7 @@ namespace MWRender
     public:
         bool skipTransform(osg::Transform& transform)
         {
-            if (mContainsPagedRefs)
+            if (mContainsPagedRefs && !mIgnoreMissileItems)
                 return false;
 
             osg::UserDataContainer* userDataContainer = transform.getUserDataContainer();
@@ -938,7 +998,8 @@ namespace MWRender
             {
                 if (PtrHolder* p = dynamic_cast<PtrHolder*>(userDataContainer->getUserObject(i)))
                 {
-                    if (std::find(mIgnoreList.begin(), mIgnoreList.end(), p->mPtr) != mIgnoreList.end())
+                    if ((mIgnoreMissileItems && MWMechanics::isMissileItem(p->mPtr))
+                        || (!mContainsPagedRefs && std::ranges::find(mIgnoreList, p->mPtr) != mIgnoreList.end()))
                     {
                         return true;
                     }
@@ -959,21 +1020,24 @@ namespace MWRender
 
         void setIgnoreList(std::span<const MWWorld::Ptr> ignoreList) { mIgnoreList = ignoreList; }
         void setContainsPagedRefs(bool contains) { mContainsPagedRefs = contains; }
+        void setIgnoreMissileItems(bool ignore) { mIgnoreMissileItems = ignore; }
 
     private:
         std::span<const MWWorld::Ptr> mIgnoreList;
         bool mContainsPagedRefs = false;
+        bool mIgnoreMissileItems = false;
     };
 
     osg::ref_ptr<osgUtil::IntersectionVisitor> RenderingManager::getIntersectionVisitor(
         osgUtil::Intersector* intersector, bool ignorePlayer, bool ignoreActors,
-        std::span<const MWWorld::Ptr> ignoreList)
+        std::span<const MWWorld::Ptr> ignoreList, bool ignoreMissileItems)
     {
         if (!mIntersectionVisitor)
             mIntersectionVisitor = new IntersectionVisitorWithIgnoreList;
 
         mIntersectionVisitor->setIgnoreList(ignoreList);
         mIntersectionVisitor->setContainsPagedRefs(false);
+        mIntersectionVisitor->setIgnoreMissileItems(ignoreMissileItems);
 
         MWWorld::Scene* worldScene = MWBase::Environment::get().getWorldScene();
         for (const auto& ptr : ignoreList)
@@ -992,7 +1056,7 @@ namespace MWRender
 
         unsigned int mask = ~0u;
         mask &= ~(Mask_RenderToTexture | Mask_Sky | Mask_Debug | Mask_Effect | Mask_Water | Mask_SimpleWater
-            | Mask_Groundcover);
+            | Mask_Groundcover | Mask_PlayerShadow);
         if (ignorePlayer)
             mask &= ~(Mask_Player);
         if (ignoreActors)
@@ -1000,6 +1064,114 @@ namespace MWRender
 
         mIntersectionVisitor->setTraversalMask(mask);
         return mIntersectionVisitor;
+    }
+
+    namespace
+    {
+        // Only surfaces that never move keep blood: statics, merged static
+        // chunks and terrain. Doors, containers, items and actors are skipped.
+        constexpr unsigned BloodSurfaceMask = ~0u
+            & ~(Mask_RenderToTexture | Mask_Sky | Mask_Debug | Mask_Effect | Mask_Water | Mask_SimpleWater
+                | Mask_Groundcover | Mask_Actor | Mask_Player | Mask_FirstPerson | Mask_Object
+                | Mask_ParticleSystem | Mask_WeatherParticles | Mask_Sun);
+
+        struct BloodTriangles
+        {
+            std::vector<std::array<unsigned, 3>> triangles;
+            void operator()(unsigned a, unsigned b, unsigned c) { triangles.push_back({ a, b, c }); }
+        };
+    }
+
+    void RenderingManager::collectBloodSurfaces(const osg::Vec3f& center, float radius,
+        std::vector<osg::Vec3d>& positions, std::vector<std::array<unsigned, 3>>& triangles)
+    {
+        const osg::Vec3f extent(radius, radius, radius);
+        const osg::BoundingBox box(center - extent, center + extent);
+        osg::Polytope polytope;
+        polytope.setToBoundingBox(box);
+        osg::ref_ptr<osgUtil::PolytopeIntersector> intersector(
+            new osgUtil::PolytopeIntersector(osgUtil::Intersector::MODEL, polytope));
+        intersector->setPrimitiveMask(osgUtil::PolytopeIntersector::TRIANGLE_PRIMITIVES);
+        intersector->setIntersectionLimit(osgUtil::Intersector::NO_LIMIT);
+        auto visitor = getIntersectionVisitor(intersector, true, true);
+        // Terrain is sampled from its heights below: an intersection pass over the
+        // terrain quad tree would build a new set of terrain chunks for every point.
+        visitor->setTraversalMask(BloodSurfaceMask & ~Mask_Terrain);
+        mRootNode->accept(*visitor);
+        const MWWorld::Ptr player = mPlayerAnimation->getPtr();
+        if (player.isInCell() && (player.getCell()->getCell()->isExterior()))
+        {
+            const ESM::RefId worldspace = player.getCell()->getCell()->getWorldSpace();
+            const auto world = MWBase::Environment::get().getWorld();
+            const float step = std::clamp(radius / 5.f, 8.f, 32.f);
+            const int n = int(std::ceil(radius / step));
+            const unsigned first = unsigned(positions.size());
+            bool near = false;
+            for (int y = -n; y <= n; ++y)
+                for (int x = -n; x <= n; ++x)
+                {
+                    osg::Vec3f p = center + osg::Vec3f(x * step, y * step, 0.f);
+                    p.z() = world->getTerrainHeightAt(p, worldspace) + .3f;
+                    near |= std::abs(p.z() - center.z()) < radius;
+                    positions.push_back(osg::Vec3d(p));
+                }
+            if (!near)
+                positions.resize(first);
+            else
+            {
+                const unsigned side = unsigned(2 * n + 1);
+                for (unsigned y = 0; y + 1 < side; ++y)
+                    for (unsigned x = 0; x + 1 < side; ++x)
+                    {
+                        const unsigned a = first + y * side + x;
+                        triangles.push_back({ a, a + 1, a + side + 1 });
+                        triangles.push_back({ a, a + side + 1, a + side });
+                    }
+            }
+        }
+        std::set<std::pair<const osg::Drawable*, const osg::RefMatrix*>> seen;
+        for (const auto& hit : intersector->getIntersections())
+        {
+            if (!hit.drawable || !seen.emplace(hit.drawable.get(), hit.matrix.get()).second)
+                continue;
+            const auto* geometry = hit.drawable->asGeometry();
+            if (!geometry)
+                continue;
+            const auto* vertices = dynamic_cast<const osg::Vec3Array*>(geometry->getVertexArray());
+            if (!vertices || vertices->empty())
+                continue;
+            osg::TriangleIndexFunctor<BloodTriangles> functor;
+            const_cast<osg::Geometry*>(geometry)->accept(functor);
+            const osg::Matrixd matrix = hit.matrix ? osg::Matrixd(*hit.matrix) : osg::Matrixd();
+            std::vector<int> remap(vertices->size(), -1);
+            for (const auto& t : functor.triangles)
+            {
+                if (t[0] >= vertices->size() || t[1] >= vertices->size() || t[2] >= vertices->size())
+                    continue;
+                osg::BoundingBox triangleBox;
+                std::array<osg::Vec3d, 3> world;
+                for (unsigned k = 0; k < 3; ++k)
+                {
+                    world[k] = osg::Vec3d((*vertices)[t[k]]) * matrix;
+                    triangleBox.expandBy(osg::Vec3f(world[k]));
+                }
+                if (!triangleBox.intersects(box))
+                    continue;
+                std::array<unsigned, 3> output;
+                for (unsigned k = 0; k < 3; ++k)
+                {
+                    if (remap[t[k]] < 0)
+                    {
+                        remap[t[k]] = int(positions.size());
+                        positions.push_back(world[k]);
+                    }
+                    output[k] = unsigned(remap[t[k]]);
+                }
+                triangles.push_back(output);
+                if (triangles.size() > 60000)
+                    return;
+            }
+        }
     }
 
     RenderingManager::RayResult RenderingManager::castRay(const osg::Vec3f& origin, const osg::Vec3f& dest,
@@ -1012,7 +1184,101 @@ namespace MWRender
 
         mRootNode->accept(*getIntersectionVisitor(intersector, ignorePlayer, ignoreActors, ignoreList));
 
-        return getIntersectionResult(intersector, mIntersectionVisitor, ignoreList, melee);
+        RayResult result = getIntersectionResult(intersector, mIntersectionVisitor, ignoreList, melee);
+        if (melee && !ignoreActors && Settings::game().mDarkMessiahNpcCombat)
+        {
+            const osg::Vec3f segment = dest - origin;
+            const float lengthSquared = segment.length2();
+            if (lengthSquared > 1e-6f)
+            {
+                // Authored shield transforms can already have been restored for
+                // the next animation update. Insert the actual guard surfaces in
+                // front-to-back order, retaining their owner even if that owner's
+                // body is outside this ray and another actor stands behind it.
+                std::vector<MWWorld::Ptr> actors;
+                MWBase::Environment::get().getMechanicsManager()->getActorsInRange(
+                    origin, std::sqrt(lengthSquared) + 128.f, actors);
+                float closest = result.mHit ? result.mRatio : 1.f;
+                for (const auto& actor : actors)
+                {
+                    if (actor == MWMechanics::getPlayer() || !actor.getClass().isNpc()
+                        || std::find(ignoreList.begin(), ignoreList.end(), actor) != ignoreList.end())
+                        continue;
+                    const auto& stats = actor.getClass().getCreatureStats(actor);
+                    if (stats.isDead() || !stats.mBrutalNpcGuardRequested || !stats.mBrutalBlockRaised)
+                        continue;
+                    const auto* npc = dynamic_cast<const NpcAnimation*>(getAnimation(actor));
+                    if (!npc || !npc->hasNpcGuardMeshForCombat())
+                        continue;
+                    const auto guard = npc->traceNpcGuardMeshForCombat(origin, origin + segment * closest);
+                    if (!guard || !std::isfinite(guard->gap) || guard->gap > MWMechanics::sNpcGuardContactMargin)
+                        continue;
+                    const float ratio = (guard->point - origin) * segment / lengthSquared;
+                    if (!std::isfinite(ratio) || ratio < 0.f || ratio > closest)
+                        continue;
+                    RayResult contact;
+                    contact.mHit = true;
+                    contact.mHitObject = actor;
+                    contact.mHitPart = stats.mBrutalParry ? ESM::PRT_Weapon : ESM::PRT_Shield;
+                    contact.mHitPointWorld = guard->point;
+                    contact.mHitNormalWorld = -segment / std::sqrt(lengthSquared);
+                    contact.mRatio = ratio;
+                    result = contact;
+                    closest = ratio;
+                }
+            }
+        }
+        return result;
+    }
+
+    // Derived from sunspotdark/morrowind-modern-physics
+    // (https://github.com/sunspotdark/morrowind-modern-physics, commit eb50a40), GPLv3.
+    RenderingManager::SurfaceResult RenderingManager::castRayForSurface(
+        const osg::Vec3f& origin, const osg::Vec3f& dest)
+    {
+        osg::ref_ptr<osgUtil::LineSegmentIntersector> intersector(
+            new osgUtil::LineSegmentIntersector(osgUtil::LineSegmentIntersector::MODEL, origin, dest));
+        intersector->setIntersectionLimit(osgUtil::LineSegmentIntersector::LIMIT_NEAREST);
+        mRootNode->accept(*getIntersectionVisitor(intersector, true, true, {}, true));
+
+        SurfaceResult result;
+        if (!intersector->containsIntersections())
+            return result;
+        const osgUtil::LineSegmentIntersector::Intersection& intersection = intersector->getFirstIntersection();
+        result.mHit = true;
+        result.mPosition = intersection.getWorldIntersectPoint();
+        result.mNormal = intersection.getWorldIntersectNormal();
+        for (osg::Node* node : intersection.nodePath)
+        {
+            if (node->getNodeMask() == Mask_Terrain)
+                result.mTerrain = true;
+            if (osg::UserDataContainer* data = node->getUserDataContainer())
+                for (unsigned int i = 0; i < data->getNumUserObjects(); ++i)
+                    if (const auto* holder = dynamic_cast<const PtrHolder*>(data->getUserObject(i)))
+                        result.mObject = holder->mPtr;
+        }
+
+        // The base texture, looking from the drawable up towards the root, as rendering would apply it.
+        const auto findTexture = [](const osg::StateSet* stateSet) -> std::string {
+            if (stateSet == nullptr)
+                return {};
+            for (unsigned int unit = 0; unit < stateSet->getTextureAttributeList().size(); ++unit)
+            {
+                const auto* texture = dynamic_cast<const osg::Texture*>(
+                    stateSet->getTextureAttribute(unit, osg::StateAttribute::TEXTURE));
+                if (texture == nullptr || texture->getNumImages() == 0 || texture->getImage(0) == nullptr)
+                    continue;
+                if (unit == 0 || texture->getName() == "diffuseMap")
+                    return texture->getImage(0)->getFileName();
+            }
+            return {};
+        };
+        if (intersection.drawable)
+            result.mTexture = findTexture(intersection.drawable->getStateSet());
+        for (auto it = intersection.nodePath.rbegin(); result.mTexture.empty() && it != intersection.nodePath.rend();
+             ++it)
+            result.mTexture = findTexture((*it)->getStateSet());
+        return result;
     }
 
     std::vector<float> RenderingManager::findSegmentCandidates(
@@ -1083,14 +1349,17 @@ namespace MWRender
     void RenderingManager::notifyWorldSpaceChanged()
     {
         mEffectManager->clear();
+        mBrutalBlood->unloadSplats();
         mWater->clearRipples();
     }
 
     void RenderingManager::clear()
     {
+        mCamera->setPlayerDeathTime(std::nullopt);
         mSky->setMoonColour(false);
 
         notifyWorldSpaceChanged();
+        mBrutalBlood->clear();
         if (mObjectPaging)
             mObjectPaging->clear();
     }

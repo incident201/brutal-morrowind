@@ -18,6 +18,7 @@
 #include <components/vfs/pathutil.hpp>
 
 #include <osg/MatrixTransform>
+#include <osg/observer_ptr>
 #include <optional>
 #include <map>
 #include <span>
@@ -49,6 +50,20 @@ namespace SceneUtil
 
 namespace MWRender
 {
+
+    struct ProjectileContact
+    {
+        osg::Vec3f mPosition;
+        osg::Vec3f mNormal;
+        int mPart = -1;
+    };
+
+    enum class ProjectileAttachment
+    {
+        NoSurface,
+        Attached,
+        Crowded,
+    };
 
     class ResetAccumRootCallback;
     class RotateController;
@@ -197,6 +212,37 @@ namespace MWRender
 
         osg::ref_ptr<osg::Group> mInsert;
 
+        struct StuckProjectile
+        {
+            osg::observer_ptr<osg::Group> mParent;
+            osg::ref_ptr<osg::MatrixTransform> mNode;
+            ESM::RefId mItem;
+            std::string mBone;
+            osg::Vec3f mTipInParent;
+        };
+        std::vector<StuckProjectile> mStuckProjectiles;
+        // Phase-matched (playing, original) key times per group and playing source.
+        struct GroupTimeMap
+        {
+            std::vector<std::pair<float, float>> mTable;
+            std::vector<std::pair<float, float>> mFastBowTable;
+            float mPlayingStart = 0.f;
+            float mOriginalStart = 0.f;
+        };
+        mutable std::map<std::pair<std::string, const AnimSource*>, GroupTimeMap, std::less<>> mGroupTimeMaps;
+        float mStuckProjectileCheck = 0.f;
+        /// Remove stuck missiles whose items are no longer carried.
+        void syncStuckProjectiles();
+        void saveBodyProjectiles() const;
+        void restoreBodyProjectiles();
+        void restoreStuckProjectile(osg::Group& parent, const ESM::RefId& item, const osg::Matrixf& transform,
+            std::string_view bone = {});
+        void mountProjectile(osg::Node& projectile, osg::Group& parent, const osg::Matrixf& transform,
+            const ESM::RefId& item, std::string_view bone, float modelTip);
+        ProjectileAttachment addStuckProjectile(VFS::Path::NormalizedView model, const osg::Vec3f& tipPosition,
+            const osg::Vec3f& flight, const ESM::RefId& item, osg::Group& parent, const osg::Matrixf& parentToWorld,
+            std::string_view bone = {});
+
         osg::ref_ptr<osg::Group> mObjectRoot;
         SceneUtil::Skeleton* mSkeleton;
 
@@ -259,6 +305,11 @@ namespace MWRender
 
         mutable std::map<std::string, float, std::less<>> mAnimVelocities;
 
+        // Sources from animations/brutal_npc_wounded/ take part only while this is set.
+        bool mBrutalWounded = false;
+        bool mNpcCombatWalking = false;
+        bool sourceInUse(const AnimSource& source) const;
+
         osg::ref_ptr<SceneUtil::LightListCallback> mLightListCallback;
 
         bool mPlayScriptedOnly;
@@ -305,6 +356,8 @@ namespace MWRender
         void setObjectRoot(const std::string& model, bool forceskeleton, bool baseonly, bool isCreature);
 
         void loadAdditionalAnimations(VFS::Path::NormalizedView model, const std::string& baseModel);
+        // Lets a subclass leave out single clips of an additional-animation folder.
+        virtual bool skipAdditionalAnimation(const VFS::Path::Normalized& kf) const { return false; }
 
         /** Adds the keyframe controllers in the specified model as a new animation source.
          * @note Later added animation sources have the highest priority when it comes to finding a particular
@@ -384,6 +437,12 @@ namespace MWRender
         virtual void updatePtr(const MWWorld::Ptr& ptr);
 
         bool hasAnimation(std::string_view anim) const;
+
+        // Dark Messiah's wounded NPC: prefer the wounded clips of the same groups. Ends the
+        // playing states those clips redefine; true when that changes the clips in use.
+        bool setBrutalWounded(bool wounded);
+        bool setNpcCombatWalking(bool inCombat);
+        bool isBrutalWounded() const { return mBrutalWounded; }
 
         bool isLoopingAnimation(std::string_view group) const;
 
@@ -487,11 +546,32 @@ namespace MWRender
 
         virtual osg::Vec3f runAnimation(float duration);
 
+        virtual int getPartForNodePath(const osg::NodePath&) const { return -1; }
+        /// Trace the flight through the visible body, or through the given shield (\a within).
+        std::optional<ProjectileContact> findProjectileContact(
+            const osg::Vec3f& hitPosition, const osg::Vec3f& direction, osg::Node* within = nullptr) const;
+        /// Embed a missile at the visible contact, on the bone nearest the tip.
+        /// The stuck missile disappears when its inventory item is taken.
+        ProjectileAttachment attachStuckProjectile(VFS::Path::NormalizedView model, const ProjectileContact& contact,
+            const osg::Vec3f& direction, const ESM::RefId& item, osg::Node* within = nullptr);
+        void removeStuckProjectiles();
+        /// Time on the first (original) source's timeline of \a group for a time of the source now playing it,
+        /// matched phase by phase through their shared text keys. Weapon models keep their own animation on the
+        /// original timeline (a bow's bend and arrow bone), while a replacement may time the phases differently.
+        /// With \a relative, both times count from their sources' group starts.
+        float mapToOriginalGroupTime(std::string_view group, float time, bool relative = false) const;
+
+        /// The first point where the world-space segment meets what is shown of \a node's subtree.
+        std::optional<osg::Vec3f> intersectNode(osg::Node* node, const osg::Vec3f& from, const osg::Vec3f& to) const;
+        std::size_t getStuckProjectileCount() const { return mStuckProjectiles.size(); }
+
         // Remove a rendered-only correction before controllers capture or advance their source pose.
         virtual void restoreTransientPose() {}
 
         // World transforms are applied parents first after physics moves the actor root.
         std::optional<osg::Matrixf> getBoneWorldMatrix(std::string_view bone) const;
+        std::optional<osg::Matrixf> sampleBoneInModelSpace(
+            std::string_view group, std::string_view bone, float time) const;
         void setBoneWorldMatrix(std::string_view bone, const osg::Matrixf& world);
         void stopAllAnimations();
         // Explicit ownership keeps animation callbacks from replacing Bullet's pose.

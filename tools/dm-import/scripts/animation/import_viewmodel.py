@@ -675,10 +675,34 @@ class Viewmodel:
         return self.segment(model, clip, duration=duration, loop=True, start_pose=start_pose,
                             roll_state=roll_state, loop_lead_in=lead), lead
 
+    def record_camera_segments(self, out, group, segments, textkeys):
+        """Remember which DM clip each part of a group plays, by its text keys.
+
+        Later steps re-time and extend groups but keep their key names. The camera
+        step (import_camera_head.py) maps each part to the player's head clip."""
+        def label(time, suffix):
+            found = [name for t, name in textkeys if abs(t-time) < 1e-5]
+            preferred = [name for name in found if name == suffix or name.endswith(' '+suffix)]
+            return (preferred or found or [None])[0]
+        entries = []
+        for (offset, times, _), src in zip(segments, self.pending):
+            if src.get('loop'):
+                continue
+            start, stop = label(offset, 'start'), label(offset+float(times[-1]), 'stop')
+            if start is None or stop is None or start == stop:
+                continue
+            entries.append(dict(start=start, stop=stop, model=src['model'], clip=src['clip'],
+                                natural=float(src['natural']), duration=float(times[-1])))
+        # One file per group: steps that copy their folders over each other keep every group.
+        path = out/'camera-segments'/(group+'.json')
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(entries, indent=1)+'\n')
+
     def write(self, out, group, segments, textkeys):
         nif = self.nif
         # Which DM clip and time each part of the group comes from, for reference renders.
         assert len(self.pending) == len(segments)
+        self.record_camera_segments(out, group, segments, textkeys)
         gait = (out.name in ('brutal_fp', 'brutal_fp_shield', 'brutal_fp_staff', 'brutal_fp_dagger')
                 and (group in ('idle', 'idle1h', 'brutal_sprint', 'brutal_sprint1h')
                      or group.startswith(('walk', 'run', 'sneak'))))
@@ -1136,24 +1160,36 @@ class Viewmodel:
         return max(errors)
 
     def write_clinch_head(self, output):
-        # Generated from the user's game; Lua loads it on demand.
-        clips = {}
-        for group, name in [('brutal_clinch', '@layer_sword_versus_noshield_r_idle'),
-                            ('brutal_clinch_win', '@layer_sword_versus_noshield_r_out'),
-                            ('brutal_clinch_lose', '@layer_sword_versus_noshield_out_loose')]:
-            _, _, anim = self.dm_clip('player_head_mvt', name)
-            clips[group] = dict(source=name, fps=anim.fps, frames=[
-                self.head_motion(name, frame/anim.fps)[1].tolist() for frame in range(anim.frame_count)])
+        # Generated from the user's game; Lua loads it on demand. The sword contest is at
+        # the top level; staff (spear, staff) and dagger contests have their own camera.
+        families = {None: '@layer_sword_versus_noshield', 'staff': '@layer_staff_versus',
+                    'dagger': '@layer_daggers_versus'}
+        tables = {}
+        for family, prefix in families.items():
+            clips = {}
+            for group, suffix in [('brutal_clinch', '_r_idle'), ('brutal_clinch_win', '_r_out'),
+                                  ('brutal_clinch_lose', '_out_loose')]:
+                name = prefix+suffix
+                _, _, anim = self.dm_clip('player_head_mvt', name)
+                clips[group] = dict(source=name, fps=anim.fps, frames=[
+                    self.head_motion(name, frame/anim.fps)[1].tolist() for frame in range(anim.frame_count)])
+            tables[family] = clips
         dest = output/'scripts/brutal_assets/clinch_head.lua'
         dest.parent.mkdir(parents=True, exist_ok=True)
         lines = ['-- Dark Messiah camera animation, derived from the user\'s own game files.',
                  '-- Frames are Lua camera extra pitch, yaw, roll in radians.', 'return {']
-        for group, data in clips.items():
-            lines.append(f'  {group} = {{fps = {data["fps"]:.9g}, frames = {{')
-            lines += ['    {'+', '.join(f'{value:.9g}' for value in row)+'},' for row in data['frames']]
-            lines.append('  }},')
+        def emit(clips, indent):
+            for group, data in clips.items():
+                lines.append(f'{indent}{group} = {{fps = {data["fps"]:.9g}, frames = {{')
+                lines.extend(indent+'  {'+', '.join(f'{value:.9g}' for value in row)+'},' for row in data['frames'])
+                lines.append(indent+'}},')
+        emit(tables[None], '  ')
+        for family in ('staff', 'dagger'):
+            lines.append(f'  {family} = {{')
+            emit(tables[family], '    ')
+            lines.append('  },')
         dest.write_text('\n'.join(lines+['}', '']))
-        return clips
+        return tables[None]
 
     def rush(self, out):
         # layer_combo_sword_rush_*: two strikes, hit events 2102 (event0) and 2139 (event1);

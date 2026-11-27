@@ -3,9 +3,12 @@
 local input=require('openmw.input')
 local storage=require('openmw.storage')
 local S=require('scripts.brutal_morrowind.settings')
-local KICK,SPRINT='BrutalKick','BrutalSprint'
+local KICK,SPRINT,GRAB='BrutalKick','BrutalSprint','BrutalGrab'
 if not input.triggers[KICK] then
     input.registerTrigger{key=KICK,l10n='BrutalMorrowind',name='kickBinding',description='kickBindingDescription'}
+end
+if not input.triggers[GRAB] then
+    input.registerTrigger{key=GRAB,l10n='BrutalMorrowind',name='grabBinding',description='grabBindingDescription'}
 end
 if not input.actions[SPRINT] then
     input.registerAction{key=SPRINT,type=input.ACTION_TYPE.Boolean,defaultValue=false,
@@ -25,5 +28,6 @@ local function default(id,kind,key,button)
     initialized:set(id,true)
 end
 default(S.DEFAULTS.kickBinding,'trigger',KICK,input.KEY.V)
+default(S.DEFAULTS.grabBinding,'trigger',GRAB,input.KEY.G)
 default(S.DEFAULTS.sprintBinding,'action',SPRINT,input.KEY.LeftShift)
-return {KICK=KICK,SPRINT=SPRINT}
+return {KICK=KICK,SPRINT=SPRINT,GRAB=GRAB}

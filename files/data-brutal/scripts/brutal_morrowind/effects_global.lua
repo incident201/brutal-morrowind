@@ -10,11 +10,34 @@ local function available()
     -- Combat scripts cache this capability and must resume after re-enabling.
     return state.bloodAvailable == true and state.sparksAvailable == true
 end
-return {eventHandlers = {
+local function setBloodData(data, fromSave)
+    if type(world.setBrutalBloodData) == 'function' then world.setBrutalBloodData(data or '', fromSave) end
+end
+return {
+engineHandlers = {
+    onInit = function() setBloodData('') end,
+    onSave = function()
+        return {blood = type(world.getBrutalBloodData) == 'function' and world.getBrutalBloodData() or ''}
+    end,
+    onLoad = function(data) setBloodData(type(data) == 'table' and type(data.blood) == 'string' and data.blood or '', true) end,
+},
+eventHandlers = {
+    BrutalWeaponBlood = function(data)
+        if not settings.get('weaponBlood')
+            or type(world.addBrutalWeaponBlood) ~= 'function' then return end
+        local attacker, victim, player = data.attacker, data.victim, world.players[1]
+        if not attacker or not attacker:isValid() or not victim or not victim:isValid() or not victim.cell
+            or not player or not player.cell or not data.position then return end
+        local connected = victim.cell == player.cell or (victim.cell.isExterior and player.cell.isExterior)
+        if not connected or (victim.position - player.position):length() > 6000 then return end
+        world.addBrutalWeaponBlood(attacker, victim, data.position, {
+            kind = data.kind, power = data.power == true, weapon = data.weapon,
+        })
+    end,
     BrutalRestoreBloodDecals = function(data)
         if not settings.get('bloodDecals') then return end
         if type(world.restoreNpcBloodDecals) == 'function' and data.actor and data.actor:isValid()
-            and type(data.data) == 'string' then world.restoreNpcBloodDecals(data.actor, data.data) end
+            and type(data.data) == 'string' then world.restoreNpcBloodDecals(data.actor, data.data, data.requestId or 0) end
     end,
     BrutalFeedbackQuery = function(data)
         if data.actor and data.actor:isValid() then
@@ -34,7 +57,7 @@ return {eventHandlers = {
         world.spawnBrutalImpact(data.kind, data.position, data.direction, {
             intensity = math.max(0.25, math.min(2, data.intensity or 1)), power = data.power == true,
             contactExact = data.contactExact == true,
-            actor = data.kind == 'blood' and actor
+            actor = data.kind == 'blood' and data.woundKind ~= 'projectile' and actor
                 or not data.contactExact and data.kind == 'sparks' and data.attachment == 'shield' and actor or nil,
             woundKind = data.woundKind,
             woundPart = data.woundPart,

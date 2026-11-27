@@ -340,7 +340,7 @@ namespace MWBase
         /// Darken the screen to a specified percentage
         virtual void setBlindness(const int percent) = 0;
 
-        virtual void activateHitOverlay(bool interrupt = true) = 0;
+        virtual void activateHitOverlay(float damage, bool interrupt = true) = 0;
         virtual void setWerewolfOverlay(bool set) = 0;
 
         virtual void toggleConsole() = 0;

@@ -57,6 +57,14 @@ namespace ESM
         esm.writeHNRefId("BOW_", mBowId);
         esm.writeHNT("VEL_", mVelocity);
         esm.writeHNT("STR_", mAttackStrength);
+        if (mFinisherTarget.isSet())
+        {
+            esm.writeFormId(mFinisherTarget, true, "BFTG");
+            esm.writeHNT("BFSP", mFinisherSpeed);
+            esm.writeHNT("BFTM", mFinisherTimeLeft);
+        }
+        if (mFinisherAttackId != 0)
+            esm.writeHNT("BFID", mFinisherAttackId);
     }
 
     void ProjectileState::load(ESMReader& esm)
@@ -68,6 +76,17 @@ namespace ESM
 
         mAttackStrength = 1.f;
         esm.getHNOT(mAttackStrength, "STR_");
+        mFinisherTarget = {};
+        if (esm.peekNextSub("BFTG"))
+        {
+            mFinisherTarget = esm.getFormId(true, "BFTG");
+            if (!esm.applyContentFileMapping(mFinisherTarget))
+                mFinisherTarget = {};
+            esm.getHNT(mFinisherSpeed, "BFSP");
+            esm.getHNT(mFinisherTimeLeft, "BFTM");
+        }
+        mFinisherAttackId = 0;
+        esm.getHNOT(mFinisherAttackId, "BFID");
     }
 
 }

@@ -108,7 +108,8 @@ namespace MWBase
 
         /// Makes \a ptr fight \a target. Also shouts a combat taunt.
         virtual void startCombat(
-            const MWWorld::Ptr& ptr, const MWWorld::Ptr& target, const std::set<MWWorld::Ptr>* targetAllies)
+            const MWWorld::Ptr& ptr, const MWWorld::Ptr& target, const std::set<MWWorld::Ptr>* targetAllies,
+            bool temporaryArrestCombat = false)
             = 0;
 
         /// Removes an actor and its allies from combat with the actor's targets.

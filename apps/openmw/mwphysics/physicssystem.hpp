@@ -35,6 +35,7 @@ namespace osg
 
 namespace MWRender
 {
+    class Animation;
     class DebugDrawer;
 }
 
@@ -61,6 +62,7 @@ namespace MWPhysics
     class Ragdoll;
     class PhysicsTaskScheduler;
     class Projectile;
+    struct ProjectileShield;
     enum ScriptedCollisionType : char;
 
     using ActorMap = std::unordered_map<const MWWorld::LiveCellRefBase*, std::shared_ptr<Actor>>;
@@ -128,12 +130,13 @@ namespace MWPhysics
 
     struct ProjectileFrameData
     {
-        explicit ProjectileFrameData(Projectile& projectile);
+        ProjectileFrameData(Projectile& projectile, std::shared_ptr<const std::vector<ProjectileShield>> shields);
         osg::Vec3f mPosition;
         osg::Vec3f mMovement;
         const btCollisionObject* mCaster;
         const btCollisionObject* mCollisionObject;
         Projectile* mProjectile;
+        std::shared_ptr<const std::vector<ProjectileShield>> mShields;
     };
 
     struct WorldFrameData
@@ -141,6 +144,64 @@ namespace MWPhysics
         WorldFrameData();
         bool mIsInStorm;
         osg::Vec3f mStormDirection;
+    };
+
+    struct HeldObjectInfo
+    {
+        osg::Vec3f halfExtents;
+        float mass = 1.f;
+        float radius = 4.f;
+        bool dualGrip = false;
+    };
+
+    struct HeldObjectGrip
+    {
+        osg::Vec3f center, half, contact;
+        int lengthAxis = 0;
+        int depthAxis = 2;
+        float span = 0.f;
+        float thickness = 0.f;
+        float shieldDepth = 0.f;
+        // In model space, right hand first. The empty array is used for rim grips.
+        std::array<osg::Vec3f, 2> shieldGrips{};
+        std::array<float, 2> shieldGripRadii{};
+        osg::Vec3f headForward, headUp;
+        bool head = false;
+        bool narrowEnd = false;
+        bool dual = false;
+        bool shaft = false;
+        bool uprightShaft = false;
+        bool shield = false;
+        bool shieldStraps = false;
+    };
+
+    struct ThrownObjectHit
+    {
+        MWWorld::Ptr item;
+        MWWorld::Ptr victim;
+        MWWorld::Ptr attacker;
+        osg::Vec3f hitPos;
+        osg::Vec3f velocity;
+        osg::Vec3f hitNormal;
+        float mass = 1.f;
+        bool adrenaline = false;
+    };
+
+    struct DynamicObjectImpact
+    {
+        MWWorld::Ptr item;
+        osg::Vec3f position;
+        osg::Vec3f normal;
+        float speed = 0.f;
+    };
+
+    struct ThrownObjectHitResult
+    {
+        bool applied = false;
+        bool headHit = false;
+        bool knockedDown = false;
+        float damage = 0.f;
+        std::string reaction;
     };
 
     template <class Ptr, class FrameData>
@@ -186,7 +247,7 @@ namespace MWPhysics
         void addActor(const MWWorld::Ptr& ptr, VFS::Path::NormalizedView mesh);
 
         int addProjectile(
-            const MWWorld::Ptr& caster, const osg::Vec3f& position, VFS::Path::NormalizedView mesh, bool computeRadius);
+            const MWWorld::Ptr& caster, const osg::Vec3f& position, VFS::Path::NormalizedView mesh, bool magic);
         void setCaster(int projectileId, const MWWorld::Ptr& caster);
         void removeProjectile(const int projectileId);
 
@@ -198,11 +259,34 @@ namespace MWPhysics
         const Object* getObject(const MWWorld::ConstPtr& ptr) const;
 
         Projectile* getProjectile(int projectileId) const;
+        void setProjectileShields(std::shared_ptr<const std::vector<ProjectileShield>> shields)
+        {
+            mProjectileShields = std::move(shields);
+        }
 
         // Object or Actor
         void remove(const MWWorld::Ptr& ptr);
 
         void updateScale(const MWWorld::Ptr& ptr);
+
+        bool canHoldObject(const MWWorld::ConstPtr& ptr) const;
+        std::pair<MWWorld::Ptr, unsigned> findDetachedGrabFragment(const MWWorld::Ptr& player,
+            const osg::Vec3f& from, const osg::Vec3f& to) const;
+        bool holdObject(const MWWorld::Ptr& ptr, const MWWorld::Ptr& holder, HeldObjectInfo* info = nullptr,
+            unsigned fragment = 0);
+        const HeldObjectGrip& getHeldGrip() const { return mHeldGrip; }
+        const osg::Matrixf& getHeldPickupTransform() const { return mHeldPickupTransform; }
+        unsigned getHeldFragment() const { return mHeldFragment; }
+        void poseHeldFragment(MWRender::Animation& animation) const;
+        void placeHeldObject(const osg::Vec3f& origin, const osg::Quat& rotation, float duration);
+        float sweepHeldObject(const osg::Vec3f& from, const osg::Vec3f& to, const osg::Quat& rotation) const;
+        bool releaseHeldObject(const MWWorld::Ptr& holder, const osg::Vec3f& eyePos, const osg::Vec3f& throwDir,
+            float throwSpeed, bool adrenaline);
+        bool hasHeldObject() const;
+        MWWorld::Ptr getHeldObject() const;
+        std::vector<ThrownObjectHit> takeThrownObjectHits();
+        std::vector<DynamicObjectImpact> takeDynamicImpacts();
+        ThrownObjectHitResult applyNpcThrownHit(const ThrownObjectHit& hit);
         void updateRotation(const MWWorld::Ptr& ptr, osg::Quat rotate);
         void updatePosition(const MWWorld::Ptr& ptr);
 
@@ -250,6 +334,7 @@ namespace MWPhysics
             const MWWorld::Ptr& attacker, std::uint64_t kickId);
         std::map<std::string, double> getNpcSuperKickState(const MWWorld::Ptr& ptr) const;
         std::vector<osg::Vec3f> getNpcRagdollDynamics(const MWWorld::Ptr& ptr) const;
+        bool isNpcGroundedRagdoll(const MWWorld::Ptr& ptr) const;
         std::vector<osg::Vec3f> getNpcRagdollState(const MWWorld::Ptr& ptr) const;
         std::map<std::string, double> getNpcRagdollEnhancementState(const MWWorld::Ptr& ptr) const;
         bool applyNpcRagdollImpact(const MWWorld::Ptr& ptr, std::size_t part, const osg::Vec3f& point,
@@ -275,6 +360,9 @@ namespace MWPhysics
 
         RayCastingResult castSphere(const osg::Vec3f& from, const osg::Vec3f& to, float radius,
             int mask = CollisionType_Default, int group = 0xff) const override;
+        // Something below the shoulders right behind a kicked actor that it trips over.
+        bool tripObstacleBehind(
+            const osg::Vec3f& position, const osg::Vec3f& direction, const osg::Vec3f& half, float units) const;
 
         /// Return true if actor1 can see actor2.
         bool getLineOfSight(const MWWorld::ConstPtr& actor1, const MWWorld::ConstPtr& actor2) const override;
@@ -349,7 +437,8 @@ namespace MWPhysics
     private:
         void updateWater();
         bool applyNpcKickImpl(const MWWorld::Ptr& ptr, const osg::Vec3f& kick, const MWWorld::Ptr& attacker,
-            bool continuing, bool knockDown, bool superKick, bool slideTrip = false);
+            bool continuing, bool knockDown, bool superKick, bool slideTrip = false,
+            std::string_view reactionOverride = {}, const osg::Vec3f* impactPointOverride = nullptr);
         void refreshSuperKickActors();
         void processSuperKickContacts();
 
@@ -399,6 +488,7 @@ namespace MWPhysics
 
         using ProjectileMap = std::map<int, std::shared_ptr<Projectile>>;
         ProjectileMap mProjectiles;
+        std::shared_ptr<const std::vector<ProjectileShield>> mProjectileShields;
 
         using HeightFieldMap = std::map<std::pair<int, int>, std::unique_ptr<HeightField>>;
         HeightFieldMap mHeightFields;
@@ -422,6 +512,16 @@ namespace MWPhysics
         std::size_t mSimulationsCounter = 0;
         std::array<std::vector<Simulation>, 2> mSimulations;
         std::vector<std::pair<MWWorld::Ptr, osg::Vec3f>> mActorsPositions;
+        MWWorld::Ptr mHeldObject;
+        unsigned mHeldFragment = 0;
+        float mHeldMass = 0.f;
+        HeldObjectGrip mHeldGrip;
+        osg::Matrixf mHeldPickupTransform;
+        osg::Vec3f mHeldLastCenter, mHeldVelocity;
+        bool mHeldPoseReady = false;
+
+        std::string chooseThrownReaction(const MWWorld::Ptr& ptr, const MWWorld::Ptr& attacker,
+            const osg::Vec3f& hitPos, const osg::Vec3f& direction, float mass) const;
 
         PhysicsSystem(const PhysicsSystem&);
         PhysicsSystem& operator=(const PhysicsSystem&);

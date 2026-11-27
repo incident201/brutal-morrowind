@@ -1,6 +1,7 @@
 #include "player.hpp"
 
 #include <stdexcept>
+#include <utility>
 
 #include <components/debug/debuglog.hpp>
 
@@ -164,6 +165,16 @@ namespace MWWorld
         ptr.getClass().getNpcStats(ptr).setDrawState(state);
     }
 
+    void Player::requestWeaponWipe()
+    {
+        mWeaponWipeRequested = getDrawState() == MWMechanics::DrawState::Nothing;
+    }
+
+    bool Player::takeWeaponWipeRequest()
+    {
+        return std::exchange(mWeaponWipeRequested, false);
+    }
+
     void Player::yaw(float yaw)
     {
         MWWorld::Ptr ptr = getPlayer();
@@ -262,6 +273,7 @@ namespace MWWorld
         mMarkedCell = nullptr;
         mTeleported = false;
         mJumping = false;
+        mWeaponWipeRequested = false;
         mCurrentCrimeId = -1;
         mPaidCrimeId = -1;
         mPreviousItems.clear();

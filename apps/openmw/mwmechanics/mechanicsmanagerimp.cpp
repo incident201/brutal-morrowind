@@ -229,7 +229,7 @@ namespace MWMechanics
             creatureStats.getSpells().add(spell);
 
         // forced update and current value adjustments
-        mActors.updateActor(ptr, 0);
+        mActors.updateActor(ptr, 0.f);
 
         for (int i = 0; i < 3; ++i)
         {
@@ -1178,7 +1178,9 @@ namespace MWMechanics
         if (player != getPlayer())
             return false;
 
-        if (type == OT_Assault)
+        const bool silentBackstab = !victim.isEmpty() && victim.getClass().isActor()
+            && victim.getClass().getCreatureStats(victim).mBrutalSilentBackstab;
+        if (type == OT_Assault && !silentBackstab)
             victimAware = true;
 
         // Find all the actors within the alarm radius
@@ -1205,12 +1207,38 @@ namespace MWMechanics
             if (!canReportCrime(neighbor, victim, playerFollowers))
                 continue;
 
-            if ((neighbor == victim && victimAware)
-                // Murder crime can be reported even if no one saw it (hearing is enough, I guess).
-                // TODO: Add mod support for stealth executions!
-                || (type == OT_Murder && neighbor != victim)
-                || (MWBase::Environment::get().getWorld()->getLOS(player, neighbor)
-                    && awarenessCheck(player, neighbor)))
+            bool witnessSaw = false;
+            if (silentBackstab)
+            {
+                // Silent dual-dagger backstab: only witnesses with LOS who are facing
+                // the player/execution and actually detect the player report the crime.
+                if (neighbor != victim && MWBase::Environment::get().getWorld()->getLOS(player, neighbor))
+                {
+                    bool facing = true;
+                    if (neighbor.getRefData().getBaseNode())
+                    {
+                        osg::Vec3f dir = player.getRefData().getPosition().asVec3()
+                            - neighbor.getRefData().getPosition().asVec3();
+                        dir.z() = 0.f;
+                        osg::Vec3f fwd = neighbor.getRefData().getBaseNode()->getAttitude() * osg::Vec3f(0, 1, 0);
+                        fwd.z() = 0.f;
+                        if (dir.normalize() > 1e-3f && fwd.normalize() > 1e-3f)
+                            facing = (fwd * dir) > 0.f;
+                    }
+                    witnessSaw = facing && awarenessCheck(player, neighbor);
+                }
+            }
+            else
+            {
+                witnessSaw = (neighbor == victim && victimAware)
+                    // Murder crime can be reported even if no one saw it (hearing is enough, I guess).
+                    // TODO: Add mod support for stealth executions!
+                    || (type == OT_Murder && neighbor != victim)
+                    || (MWBase::Environment::get().getWorld()->getLOS(player, neighbor)
+                        && awarenessCheck(player, neighbor));
+            }
+
+            if (witnessSaw)
             {
                 // NPC will complain about theft even if he will do nothing about it
                 if (type == OT_Theft || type == OT_Pickpocket)
@@ -1707,8 +1735,8 @@ namespace MWMechanics
         return Misc::Rng::roll0to99(prng) >= target;
     }
 
-    void MechanicsManager::startCombat(
-        const MWWorld::Ptr& ptr, const MWWorld::Ptr& target, const std::set<MWWorld::Ptr>* targetAllies)
+    void MechanicsManager::startCombat(const MWWorld::Ptr& ptr, const MWWorld::Ptr& target,
+        const std::set<MWWorld::Ptr>* targetAllies, bool temporaryArrestCombat)
     {
         CreatureStats& stats = ptr.getClass().getCreatureStats(ptr);
 
@@ -1761,20 +1789,25 @@ namespace MWMechanics
                 const ESM::RefNum playerNum = target.getCellRef().getRefNum();
                 // Stops guard from ending combat if player is unreachable
                 stats.setHitAttemptActor(playerNum);
+                stats.mBrutalAdrenalineArrestCombat = temporaryArrestCombat;
                 for (const Actor& actor : mActors)
                 {
                     if (actor.isInvalid())
                         continue;
                     if (actor.getPtr().getClass().isClass(actor.getPtr(), "Guard"))
                     {
-                        MWMechanics::AiSequence& aiSeq
-                            = actor.getPtr().getClass().getCreatureStats(actor.getPtr()).getAiSequence();
-                        if (aiSeq.getTypeId() == MWMechanics::AiPackageTypeId::Pursue)
+                        auto& guardStats = actor.getPtr().getClass().getCreatureStats(actor.getPtr());
+                        auto& aiSeq = guardStats.getAiSequence();
+                        if (!guardStats.isDead() && aiSeq.getTypeId() == MWMechanics::AiPackageTypeId::Pursue)
                         {
                             aiSeq.stopPursuit();
-                            aiSeq.stack(MWMechanics::AiCombat(target), ptr);
-                            // Stops guard from ending combat if player is unreachable
-                            actor.getPtr().getClass().getCreatureStats(actor.getPtr()).setHitAttemptActor(playerNum);
+                            if (!aiSeq.isInCombat(target))
+                            {
+                                aiSeq.stack(MWMechanics::AiCombat(target), actor.getPtr());
+                                guardStats.mBrutalAdrenalineArrestCombat = temporaryArrestCombat;
+                            }
+                            // Stops guard from ending combat if player is unreachable.
+                            guardStats.setHitAttemptActor(playerNum);
                         }
                     }
                 }

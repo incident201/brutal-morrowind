@@ -1,6 +1,7 @@
 #include <components/sdlutil/windowcoordinates.hpp>
 #include "engine.hpp"
 
+#include <algorithm>
 #include <cerrno>
 #include <chrono>
 #include <future>
@@ -72,6 +73,7 @@
 #include "mwworld/datetimemanager.hpp"
 #include "mwworld/worldimp.hpp"
 
+#include "mwrender/camera.hpp"
 #include "mwrender/vismask.hpp"
 
 #include "mwclass/classes.hpp"
@@ -80,6 +82,7 @@
 #include "mwdialogue/journalimp.hpp"
 #include "mwdialogue/scripttest.hpp"
 
+#include "mwmechanics/brutaloptions.hpp"
 #include "mwmechanics/mechanicsmanagerimp.hpp"
 
 #include "mwstate/statemanagerimp.hpp"
@@ -188,6 +191,62 @@ void OMW::Engine::executeLocalScripts()
     }
 }
 
+void OMW::Engine::updatePlayerDeath(float duration, bool paused)
+{
+    const auto state = mStateManager->getState();
+    if (state == MWBase::StateManager::State_NoGame)
+    {
+        mPlayerDeathElapsed.reset();
+        return;
+    }
+
+    constexpr float menuDelay = 2.65f;
+    constexpr float fadeDelay = 5.55f;
+    constexpr float fadeDuration = 5.4f;
+    constexpr float fadeEnd = fadeDelay + fadeDuration;
+    const bool running = state == MWBase::StateManager::State_Running;
+    if (running)
+    {
+        const auto player = mWorld->getPlayerPtr();
+        const auto& stats = player.getClass().getCreatureStats(player);
+        if (!stats.isDead())
+        {
+            if (mPlayerDeathElapsed)
+            {
+                mPlayerDeathElapsed.reset();
+                mWorld->getCamera()->setPlayerDeathTime(std::nullopt);
+                mWindowManager->setPlayerDeathFade(std::nullopt);
+            }
+            return;
+        }
+        if (paused)
+            return;
+
+        if (!mPlayerDeathElapsed && !MWMechanics::brutalPlayerDeathScene())
+        {
+            // The classic path opens the load prompt when Actors finishes the death animation.
+            mStateManager->endGame();
+            if (stats.isDeathAnimationFinished())
+                mStateManager->askLoadRecent();
+            return;
+        }
+    }
+    else if (!mPlayerDeathElapsed || *mPlayerDeathElapsed >= fadeEnd)
+        return;
+
+    mPlayerDeathElapsed = mPlayerDeathElapsed ? std::min(*mPlayerDeathElapsed + duration, fadeEnd) : 0.f;
+    const float elapsed = *mPlayerDeathElapsed;
+    if (!paused)
+        mWorld->getCamera()->setPlayerDeathTime(elapsed);
+    const float progress = std::clamp((elapsed - fadeDelay) / fadeDuration, 0.f, 1.f);
+    mWindowManager->setPlayerDeathFade(progress * progress * (3.f - 2.f * progress));
+    if (running && elapsed >= menuDelay)
+    {
+        mStateManager->endGame();
+        mStateManager->askLoadRecent();
+    }
+}
+
 bool OMW::Engine::frame(unsigned frameNumber, float frametime)
 {
     const osg::Timer_t frameStart = mViewer->getStartTick();
@@ -201,7 +260,8 @@ bool OMW::Engine::frame(unsigned frameNumber, float frametime)
         // update input
         {
             ScopedProfile<UserStatsType::Input> profile(frameStart, frameNumber, *timer, *stats);
-            mInputManager->update(frametime, false);
+            const bool deathInProgress = mPlayerDeathElapsed && mStateManager->getState() == MWBase::StateManager::State_Running;
+            mInputManager->update(frametime, deathInProgress, deathInProgress);
         }
 
         // When the window is minimized, pause the game. Currently this *has* to be here to work around a MyGUI bug.
@@ -276,12 +336,7 @@ bool OMW::Engine::frame(unsigned frameNumber, float frametime)
                 mMechanicsManager->update(frametime, paused);
             }
 
-            if (mStateManager->getState() == MWBase::StateManager::State_Running)
-            {
-                MWWorld::Ptr player = mWorld->getPlayerPtr();
-                if (!paused && player.getClass().getCreatureStats(player).isDead())
-                    mStateManager->endGame();
-            }
+            updatePlayerDeath(frametime, paused);
         }
 
         // update physics
@@ -348,6 +403,7 @@ bool OMW::Engine::frame(unsigned frameNumber, float frametime)
     {
         mWorld->sampleNpcRagdollAnimation(frametime);
         mWorld->samplePlayerSwordWallContact(frametime, *mViewer->getFrameStamp());
+        mWorld->samplePlayerObjectGrip(frametime, *mViewer->getFrameStamp());
     }
 
     // update focus object for GUI

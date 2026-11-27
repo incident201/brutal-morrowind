@@ -36,7 +36,7 @@ namespace MWRender
             mDirtyAttachments = attachments;
         }
 
-        const Fx::DispatchArray& getPasses() { return mPasses; }
+        Fx::DispatchArray& getPasses() { return mPasses; }
 
         void setPasses(Fx::DispatchArray&& passes);
 

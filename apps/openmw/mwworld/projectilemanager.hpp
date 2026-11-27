@@ -1,7 +1,11 @@
 #ifndef OPENMW_MWWORLD_PROJECTILEMANAGER_H
 #define OPENMW_MWWORLD_PROJECTILEMANAGER_H
 
+#include <cstdint>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <vector>
 
 #include <osg/PositionAttitudeTransform>
 #include <osg/ref_ptr>
@@ -16,6 +20,9 @@
 namespace MWPhysics
 {
     class PhysicsSystem;
+    class RayCastingResult;
+    struct ProjectileShield;
+    enum class ProjectileHitType;
 }
 
 namespace Loading
@@ -53,10 +60,21 @@ namespace MWWorld
         void launchMagicBolt(const ESM::RefId& spellId, const MWWorld::Ptr& caster, const osg::Vec3f& fallbackDirection,
             ESM::RefNum item);
 
-        void launchProjectile(const MWWorld::Ptr& actor, const MWWorld::ConstPtr& projectile, const osg::Vec3f& pos,
-            const osg::Quat& orient, const MWWorld::Ptr& bow, float speed, float attackStrength);
+        /// With a contact already in front of the muzzle, launch only a finisher locked on that actor.
+        bool launchProjectile(const MWWorld::Ptr& actor, const MWWorld::ConstPtr& projectile, const osg::Vec3f& pos,
+            const osg::Quat& orient, const MWWorld::Ptr& bow, float speed, float attackStrength,
+            const MWWorld::Ptr& immediateTarget = {});
 
         void updateCasters();
+        bool checkLaunchShield(const Ptr& caster, const osg::Vec3f& from, const osg::Vec3f& to,
+            const std::vector<Ptr>& targets, MWPhysics::RayCastingResult& impact) const;
+
+        /// Resolve an arrow, bolt or thrown weapon arriving at \a hitPosition: the hit itself and, with physical
+        /// missiles, where the missile ends up (stuck in a body, a shield or a soft surface, or glancing off).
+        void landProjectile(const MWWorld::Ptr& caster, const MWWorld::Ptr& target, const MWWorld::Ptr& bow,
+            const MWWorld::Ptr& projectile, osg::Vec3f hitPosition, osg::Vec3f hitNormal,
+            const osg::Vec3f& velocity, float attackStrength, MWPhysics::ProjectileHitType hitType, std::uint64_t finisherId = 0,
+            bool finisherHit = false);
 
         void update(float dt);
 
@@ -116,21 +134,41 @@ namespace MWWorld
 
         struct ProjectileState : public State
         {
+            struct Finisher
+            {
+                MWWorld::SafePtr mTarget;
+                float mSpeed;
+                float mTimeLeft;
+                bool mSlowMotionRequested = false;
+            };
+
             // RefID of the bow or crossbow the actor was using when this projectile was fired (may be empty)
             ESM::RefId mBowId;
 
             osg::Vec3f mVelocity;
             float mAttackStrength;
+            std::uint64_t mFinisherAttackId = 0;
+            std::optional<Finisher> mFinisher;
         };
 
         std::vector<MagicBoltState> mMagicBolts;
         std::vector<ProjectileState> mProjectiles;
+        std::vector<MWPhysics::ProjectileShield> collectProjectileShields(const osg::Vec3f& nearby, float radius) const;
+
+        /// Place a missile as a world item with its tip \a depth past \a tip along \a direction.
+        MWWorld::Ptr placeMissile(const ESM::RefId& id, const osg::Vec3f& tip, const osg::Vec3f& direction,
+            float depth);
+        /// Throw a missile off what it struck, or snap it when \a breakable and unlucky.
+        /// Returns the loose missile, or an empty Ptr when it snapped.
+        MWWorld::Ptr deflectMissile(const MWWorld::Ptr& projectile, const osg::Vec3f& hitPosition,
+            const osg::Vec3f& normal, const osg::Vec3f& velocity, float bounce, bool breakable, std::string_view sound);
 
         void cleanupProjectile(ProjectileState& state);
         void cleanupMagicBolt(MagicBoltState& state);
         void periodicCleanup(float dt);
 
         void moveProjectiles(float dt);
+        bool guideFinisher(ProjectileState& state, float duration);
         void moveMagicBolts(float dt);
 
         void createModel(State& state, VFS::Path::NormalizedView model, const osg::Vec3f& pos, const osg::Quat& orient,

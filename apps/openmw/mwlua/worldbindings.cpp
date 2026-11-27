@@ -1,11 +1,14 @@
 #include "worldbindings.hpp"
+#include "../mwphysics/physicssystem.hpp"
 #include "../mwphysics/raycasting.hpp"
 #include "../mwrender/animation.hpp"
 #include "../mwrender/npcanimation.hpp"
+#include "../mwrender/brutalblood.hpp"
 #include "../mwworld/inventorystore.hpp"
 #include <cmath>
 #include <memory>
 
+#include <components/misc/rng.hpp>
 #include <components/esm3/loadacti.hpp>
 #include <components/esm3/loadalch.hpp>
 #include <components/esm3/loadarmo.hpp>
@@ -32,6 +35,7 @@
 #include "../mwbase/statemanager.hpp"
 #include "../mwbase/windowmanager.hpp"
 #include "../mwbase/world.hpp"
+#include "../mwmechanics/brutaloptions.hpp"
 #include "../mwmechanics/creaturestats.hpp"
 #include "../mwworld/action.hpp"
 #include "../mwworld/class.hpp"
@@ -330,10 +334,7 @@ namespace MWLua
                                             break;
                                         }
                             if (added)
-                                context.mLua->protectedCall([&](LuaUtil::LuaView& view){
-                                    sol::table receipt=view.newTable();receipt["data"]=npc->getBloodDecalData();receipt["restored"]=true;
-                                    context.mLuaManager->sendLocalEvent(ptr,"BrutalBloodDecalsStored",receipt);
-                                });
+                                context.mLuaManager->storeNpcBloodDecals(ptr, npc->getBloodDecalData());
                         }
                 }
             }, "SpawnBrutalImpact");
@@ -375,30 +376,126 @@ namespace MWLua
                     MWBase::Environment::get().getWorld()->getAnimation(ptr)))return npc->getBloodDecalData();
             return std::string();
         };
-        api["restoreNpcBloodDecals"] = [context](const GObject& object,std::string data) {
+        api["restoreNpcBloodDecals"] = [context](const GObject& object, std::string data,
+                                           sol::optional<std::uint64_t> requestId) {
             if(data.size()>400000)throw std::runtime_error("NPC blood data exceeds bounded save size");
-            context.mLuaManager->addAction([context,object,data=std::move(data)] {
+            context.mLuaManager->addAction([context, object, data = std::move(data), requestId] {
                 const auto ptr=object.ptrOrEmpty();if(ptr.isEmpty()||!ptr.isInCell()||!ptr.getRefData().isEnabled())return;
                 if(auto* npc=dynamic_cast<MWRender::NpcAnimation*>(MWBase::Environment::get().getWorld()->getAnimation(ptr)))
                 {
-                    const bool restored=npc->restoreBloodDecals(data);
+                    const bool restored=npc->restoreBloodDecals(data, requestId.has_value());
                     context.mLua->protectedCall([&](LuaUtil::LuaView& view){
                         sol::table receipt=view.newTable();receipt["restored"]=restored;
+                        if (requestId)
+                            receipt["requestId"] = *requestId;
                         if(restored)receipt["data"]=npc->getBloodDecalData();
                         context.mLuaManager->sendLocalEvent(ptr,"BrutalBloodDecalsStored",receipt);
                     });
                 }
             },"RestoreNpcBloodDecals");
         };
+        // Mark the weapon item that made contact with living flesh.
+        api["addBrutalWeaponBlood"] = [context](const GObject& attacker, const GObject& victim,
+                                          Misc::FiniteVec3f position, sol::optional<sol::table> options) {
+            std::string kind;
+            bool power = false;
+            std::optional<GObject> weapon;
+            if (options)
+            {
+                kind = options->get<sol::optional<std::string>>("kind").value_or("");
+                power = options->get<sol::optional<bool>>("power").value_or(false);
+                if (const auto value = options->get<sol::optional<GObject>>("weapon"))
+                    weapon = *value;
+            }
+            if (!Settings::game().mBrutalEnabled || !Settings::game().mBrutalWeaponBlood)
+                return;
+            context.mLuaManager->addAction([attacker, victim, contact = osg::Vec3f(position), kind = std::move(kind),
+                                               power, weapon] {
+                auto* store = MWRender::BrutalBlood::get();
+                const auto source = attacker.ptrOrEmpty(), target = victim.ptrOrEmpty();
+                if (!store || source.isEmpty() || target.isEmpty() || !target.isInCell() || !source.isInCell())
+                    return;
+                // Only red blood stays: no skeleton dust or Dwemer sparks.
+                int bloodType = 0;
+                if (target.getType() == ESM::NPC::sRecordId)
+                    bloodType = target.get<ESM::NPC>()->mBase->mBloodType;
+                else if (target.getType() == ESM::Creature::sRecordId)
+                    bloodType = target.get<ESM::Creature>()->mBase->mBloodType;
+                else
+                    return;
+                if (bloodType != 0 || (contact - target.getRefData().getPosition().asVec3()).length() > 400.f)
+                    return;
+                const auto world = MWBase::Environment::get().getWorld();
+                if (auto* npc = dynamic_cast<MWRender::NpcAnimation*>(world->getAnimation(source)))
+                {
+                    bool left = false;
+                    if (weapon && source.getClass().hasInventoryStore(source))
+                    {
+                        auto& inventory = source.getClass().getInventoryStore(source);
+                        const auto it = inventory.getSlot(MWWorld::InventoryStore::Slot_CarriedLeft);
+                        const auto item = weapon->ptrOrEmpty();
+                        left = it != inventory.end() && !item.isEmpty() && *it == item;
+                    }
+                    npc->addWeaponBlood(contact, kind, power, left);
+                }
+            });
+        };
+        api["getBrutalBloodStats"] = [context](sol::optional<GObject> object) {
+            sol::table result(context.mLua->unsafeState(), sol::create);
+            if (auto* store = MWRender::BrutalBlood::get())
+                for (const auto& [key, value] : store->stats())
+                    result[key] = value;
+            if (object)
+            {
+                const auto ptr = object->ptrOrEmpty();
+                if (!ptr.isEmpty())
+                    if (const auto* npc = dynamic_cast<const MWRender::NpcAnimation*>(
+                            MWBase::Environment::get().getWorld()->getAnimation(ptr)))
+                        for (const auto& [key, value] : npc->getWeaponBloodStats())
+                            result["weapon_" + key] = value;
+            }
+            return result;
+        };
+        api["_isLoadingSave"] = [context] { return context.mLuaManager->getGlobalSaveFileMapping() != nullptr; };
+        api["getBrutalBloodData"] = []() {
+            auto* store = MWRender::BrutalBlood::get();
+            return store ? store->save() : std::string();
+        };
+        api["setBrutalBloodData"] = [context](std::string data, sol::optional<bool> fromSave) {
+            const bool restoring = fromSave.value_or(false);
+            if (!restoring && data.size() > MWRender::BrutalBlood::MaxSaveBytes)
+                throw std::runtime_error("Blood data exceeds bounded save size");
+            const auto* mapping = restoring ? context.mLuaManager->getGlobalSaveFileMapping() : nullptr;
+            context.mLuaManager->addAction(
+                [data = std::move(data), mapping] {
+                    if (auto* store = MWRender::BrutalBlood::get())
+                        store->load(data, mapping);
+                },
+                "SetBrutalBloodData");
+        };
+        // Cleaning, as in water; used by repairs done by scripts.
+        api["clearBrutalWeaponBlood"] = [context](const GObject& item) {
+            context.mLuaManager->addAction([item] {
+                const auto ptr = item.ptrOrEmpty();
+                if (auto* store = MWRender::BrutalBlood::get(); store && !ptr.isEmpty())
+                    store->clearItem(ptr.getCellRef().getRefNum());
+            });
+        };
         api["applyNpcKick"] = [context](const GObject& object, Misc::FiniteVec3f value, const GObject& attacker,
-                                       sol::optional<bool> knockDown, sol::optional<bool> slideTrip) {
+                                       sol::optional<bool> knockDown, sol::optional<bool> slideTrip,
+                                       sol::optional<bool> strike) {
             const osg::Vec3f kick=value;
             if (kick.length2()>1000.f*1000.f) throw std::runtime_error("NPC kick velocity must be <=1000 units/s");
             context.mLuaManager->addAction([object,attacker,kick,knockDown=knockDown.value_or(false),
-                                              slideTrip=slideTrip.value_or(false)] {
+                                              slideTrip=slideTrip.value_or(false),strike=strike.value_or(false)] {
                 const auto ptr=object.ptrOrEmpty(), source=attacker.ptrOrEmpty();
-                if (!ptr.isEmpty() && ptr.isInCell() && !source.isEmpty())
-                    MWBase::Environment::get().getWorld()->applyNpcKick(ptr,kick,source,knockDown,slideTrip);
+                if (ptr.isEmpty() || !ptr.isInCell() || source.isEmpty())
+                    return;
+                // A kick or shield bash knocks a wounded NPC down three times in ten (WoundedFallChance).
+                bool fall=knockDown;
+                if (strike && !fall && MWMechanics::isBrutalWoundedNpc(ptr))
+                    fall=Misc::Rng::rollClosedProbability(MWBase::Environment::get().getWorld()->getPrng())<.3f;
+                MWBase::Environment::get().getWorld()->applyNpcKick(ptr,kick,source,fall,slideTrip);
             },"ApplyNpcKick");
         };
         // The receipt reports the completed native handoff, rather than queue acceptance.
@@ -701,6 +798,51 @@ namespace MWLua
                 if (!ptr.isEmpty())
                     MWBase::Environment::get().getWorld()->applyObjectImpulse(ptr, impulse, mass);
             }, "ApplyObjectImpulse");
+        };
+        api["canHoldObject"] = [](const GObject& object) {
+            const auto ptr = object.ptrOrEmpty();
+            return !ptr.isEmpty() && MWBase::Environment::get().getWorld()->canHoldObject(ptr);
+        };
+        api["holdObject"] = [context](const GObject& object, const GObject& holder, sol::optional<unsigned> part) {
+            context.mLuaManager->addAction([lua = context.mLua, manager = context.mLuaManager, object, holder,
+                                               fragment = part.value_or(0)] {
+                const auto itemPtr = object.ptrOrEmpty();
+                const auto actorPtr = holder.ptrOrEmpty();
+                MWPhysics::HeldObjectInfo info;
+                const bool ok = !itemPtr.isEmpty() && !actorPtr.isEmpty()
+                    && MWBase::Environment::get().getWorld()->holdObject(itemPtr, actorPtr, &info, fragment);
+                if (actorPtr.isEmpty())
+                    return;
+                lua->protectedCall([&](LuaUtil::LuaView& view) {
+                    sol::table data = view.newTable();
+                    data["object"] = object;
+                    if (ok)
+                    {
+                        data["dualGrip"] = info.dualGrip;
+                        data["radius"] = info.radius;
+                        data["mass"] = info.mass;
+                        data["halfExtents"] = info.halfExtents;
+                        data["fragment"] = fragment;
+                    }
+                    manager->sendLocalEvent(actorPtr, ok ? "BrutalObjectHeld" : "BrutalObjectHoldFailed", data);
+                });
+            }, "HoldObject");
+        };
+        api["releaseHeldObject"] = [context](const GObject& holder, Misc::FiniteVec3f eyePos,
+                                       Misc::FiniteVec3f throwDir, Misc::FiniteFloat throwSpeed, bool adrenaline,
+                                       sol::optional<std::uint64_t> throwId) {
+            const float speed = std::clamp(float(throwSpeed), 0.f, 2000.f);
+            context.mLuaManager->addAction([holder, eyePos, throwDir, speed, adrenaline, id = throwId.value_or(0)] {
+                const auto ptr = holder.ptrOrEmpty();
+                if (!ptr.isEmpty())
+                    MWBase::Environment::get().getWorld()->releaseHeldObject(ptr, eyePos, throwDir, speed, adrenaline, id);
+            }, "ReleaseHeldObject");
+        };
+        api["getHeldObject"] = []() -> sol::optional<GObject> {
+            const auto ptr = MWBase::Environment::get().getWorld()->getHeldObject();
+            if (ptr.isEmpty())
+                return sol::nullopt;
+            return GObject(ptr);
         };
 
         ObjectLists* objectLists = context.mObjectLists;

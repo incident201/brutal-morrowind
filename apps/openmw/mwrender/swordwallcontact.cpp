@@ -18,6 +18,7 @@
 #include <components/sceneutil/skeleton.hpp>
 
 #include "camera.hpp"
+#include "griparms.hpp"
 #include "renderingmanager.hpp"
 #include "vismask.hpp"
 #include "../mwbase/environment.hpp"
@@ -52,6 +53,52 @@ namespace MWRender
             {
                 setTraversalMask(~(Mask_UpdateVisitor | Mask_Effect | Mask_ParticleSystem));
             }
+            void limitSamples()
+            {
+                // Keep real material edges, including all six coordinate
+                // extrema. Dense replacement meshes must not make every swing
+                // trace tens of thousands of almost identical segments.
+                constexpr std::size_t limit = 64;
+                if (edges.size() <= limit)
+                    return;
+                std::vector<std::pair<osg::Vec3f, osg::Vec3f>> selected;
+                std::vector<bool> used(edges.size(), false);
+                std::vector<float> distance(edges.size(), std::numeric_limits<float>::infinity());
+                const auto take = [&](std::size_t index) {
+                    if (used[index]) return;
+                    used[index] = true;
+                    const auto edge = edges[index];
+                    selected.push_back(edge);
+                    for (std::size_t i = 0; i < edges.size(); ++i)
+                    {
+                        const auto center = (edges[i].first + edges[i].second) * .5f;
+                        distance[i] = std::min(distance[i], std::min((center - edge.first).length2(),
+                            (center - edge.second).length2()));
+                    }
+                };
+                for (unsigned axis = 0; axis < 3; ++axis)
+                    for (const float sign : { -1.f, 1.f })
+                    {
+                        std::size_t best = 0;
+                        float support = -std::numeric_limits<float>::infinity();
+                        for (std::size_t i = 0; i < edges.size(); ++i)
+                        {
+                            const float value = std::max(edges[i].first[axis] * sign, edges[i].second[axis] * sign);
+                            if (value > support) { support = value; best = i; }
+                        }
+                        take(best);
+                    }
+                while (selected.size() < limit)
+                {
+                    std::size_t best = edges.size();
+                    float farthest = -1.f;
+                    for (std::size_t i = 0; i < edges.size(); ++i)
+                        if (!used[i] && distance[i] > farthest) { best = i; farthest = distance[i]; }
+                    if (best == edges.size()) break;
+                    take(best);
+                }
+                edges = std::move(selected);
+            }
             void apply(osg::Geometry& geometry) override
             {
                 const auto* array = dynamic_cast<const osg::Vec3Array*>(geometry.getVertexArray());
@@ -77,7 +124,10 @@ namespace MWRender
                             continue;
                         if (a > b)
                             std::swap(a, b);
-                        if (unique.emplace(a, b).second)
+                        const auto finite = [](const osg::Vec3f& point) {
+                            return std::isfinite(point.x()) && std::isfinite(point.y()) && std::isfinite(point.z());
+                        };
+                        if (finite(points[a]) && finite(points[b]) && unique.emplace(a, b).second)
                             edges.emplace_back(points[a], points[b]);
                     }
             }
@@ -104,6 +154,7 @@ namespace MWRender
                 * osg::Matrixf::translate(a.translation * (1.f - t) + b.translation * t);
         }
     }
+
 
     void NpcAnimation::configureSwordWallSweep(std::uint64_t swing, std::string_view group, std::string_view key)
     {
@@ -138,7 +189,8 @@ namespace MWRender
         return true;
     }
 
-    bool NpcAnimation::applySwordWallCorrection(const osg::Matrixf& correction, const osg::FrameStamp& frameStamp)
+    bool NpcAnimation::applySwordWallCorrection(
+        const osg::Matrixf& correction, const osg::FrameStamp& frameStamp, osg::Matrixf* applied)
     {
         struct CorrectedBone
         {
@@ -148,14 +200,23 @@ namespace MWRender
         std::vector<CorrectedBone> checked;
         osg::Matrixf sourceGrip;
         float checkedClamp = 0.f;
-        const bool auditPolearm = mViewmodelSet == BrutalViewmodel_Staff
-            && std::getenv("BRUTAL_SWORD_WALL_DIAGNOSTICS");
+        const bool paired = hasPairedViewmodel();
+        const bool solveArms = paired || hasPolearmViewmodel();
+        const bool auditArms = solveArms && std::getenv("BRUTAL_SWORD_WALL_DIAGNOSTICS");
+        // Keep the authored pose for restoring, also when the clinch fit moved this bone first.
+        const auto authored = [&](osg::MatrixTransform* bone) {
+            const auto clinch = std::find_if(mClinchSourcePose.begin(), mClinchSourcePose.end(),
+                [bone](const auto& entry) { return entry.first.get() == bone; });
+            return clinch == mClinchSourcePose.end() ? osg::Matrixf(bone->getMatrix()) : clinch->second;
+        };
         const auto remember = [&](osg::MatrixTransform* bone) {
             if (std::none_of(mSwordWallSourcePose.begin(), mSwordWallSourcePose.end(),
                     [bone](const auto& entry) { return entry.first.get() == bone; }))
-                mSwordWallSourcePose.emplace_back(bone, bone->getMatrix());
+                mSwordWallSourcePose.emplace_back(bone, authored(bone));
         };
-        if (mViewmodelSet == BrutalViewmodel_Staff)
+        if (applied)
+            *applied = correction;
+        if (solveArms)
         {
             // Solve both grips around the evaluated shoulders. A second response
             // during a tail composes once from the remembered authored pose.
@@ -166,110 +227,20 @@ namespace MWRender
                     [bone](const auto& entry) { return entry.first.get() == bone; });
                 return found == mSwordWallSourcePose.end() ? osg::Matrixf(bone->getMatrix()) : found->second;
             };
-            struct Arm
-            {
-                std::array<osg::MatrixTransform*, 3> bones;
-                std::array<osg::Matrixf, 3> source, world, result;
-                osg::Matrixf parent;
-            };
-            std::array<Arm, 2> arms;
-            unsigned side = 0;
-            // The shaft follows the right hand; any safety clamp moves both goals.
-            for (const char* prefix : { "Bip01 R ", "Bip01 L " })
-            {
-                auto& arm = arms[side++];
-                unsigned joint = 0;
-                for (const char* suffix : { "UpperArm", "Forearm", "Hand" })
-                {
-                    const auto found = getNodeMap().find(std::string(prefix) + suffix);
-                    if (found == getNodeMap().end() || found->second->getParentalNodePaths().empty())
-                        return false;
-                    auto* bone = found->second.get();
-                    if (joint && (!bone->getNumParents() || bone->getParent(0) != arm.bones[joint - 1]))
-                        return false;
-                    arm.bones[joint] = bone;
-                    arm.source[joint] = sourceLocal(bone);
-                    if (!joint)
-                    {
-                        auto path = bone->getParentalNodePaths().front();
-                        path.pop_back();
-                        arm.parent = osg::computeLocalToWorld(path);
-                    }
-                    arm.world[joint] = arm.source[joint] * (joint ? arm.world[joint - 1] : arm.parent);
-                    ++joint;
-                }
-            }
-            osg::Vec3f clampOffset;
+            std::array<GripArm, 2> arms;
             float maxClamp = 0.f;
-            const osg::Quat turn = total.getRotate();
-            for (auto& arm : arms)
+            if (paired)
             {
-                const osg::Vec3f shoulder = arm.world[0].getTrans();
-                const osg::Vec3f oldElbow = arm.world[1].getTrans();
-                const osg::Vec3f oldWrist = arm.world[2].getTrans();
-                osg::Matrixf hand = arm.world[2] * total * osg::Matrixf::translate(clampOffset);
-                const osg::Vec3f requested = hand.getTrans();
-                const float upperLength = (oldElbow - shoulder).length();
-                const float foreLength = (oldWrist - oldElbow).length();
-                if (upperLength < .001f || foreLength < .001f)
+                osg::Matrixf fitted;
+                const osg::Vec3f pivot = mPtr.getRefData().getPosition().asVec3();
+                if (!solveSharedGripArms(getNodeMap(), total, pivot, sourceLocal, arms, fitted))
                     return false;
-                osg::Vec3f axis = requested - shoulder;
-                const float distance = axis.normalize();
-                if (distance < .001f)
-                    return false;
-                const float reach = std::clamp(distance, std::abs(upperLength - foreLength) + .001f,
-                    upperLength + foreLength - .001f);
-                const osg::Vec3f target = shoulder + axis * reach;
-                const osg::Vec3f offset = target - requested;
-                maxClamp = std::max(maxClamp, offset.length());
-                if (&arm == &arms.front())
-                    clampOffset = offset;
-                hand.setTrans(target);
-                osg::Vec3f oldAxis = oldWrist - shoulder;
-                oldAxis.normalize();
-                osg::Vec3f sourceBend = oldElbow - shoulder;
-                sourceBend -= oldAxis * (sourceBend * oldAxis);
-                // A straight arm has no elbow pole. Use actor-relative down/out
-                // only in that degenerate case; identity keeps every other pose.
-                osg::Vec3f stable = osg::Matrixf::transform3x3(osg::Vec3f(0, 0, -1), arm.parent);
-                stable -= oldAxis * (stable * oldAxis);
-                if (stable.normalize() < .001f)
-                {
-                    stable = osg::Matrixf::transform3x3(osg::Vec3f(1, 0, 0), arm.parent);
-                    stable -= oldAxis * (stable * oldAxis);
-                    stable.normalize();
-                }
-                const float height = sourceBend.normalize();
-                if (height < .001f)
-                    sourceBend = stable;
-                osg::Vec3f bend = turn * sourceBend;
-                bend -= axis * (bend * axis);
-                if (bend.normalize() < .001f)
-                {
-                    osg::Quat transport;
-                    transport.makeRotate(oldAxis, axis);
-                    bend = transport * sourceBend;
-                }
-                const float along = (upperLength * upperLength - foreLength * foreLength + reach * reach)
-                    / (2.f * reach);
-                const osg::Vec3f elbow = shoulder + axis * along
-                    + bend * std::sqrt(std::max(0.f, upperLength * upperLength - along * along));
-                osg::Quat upperSwing, foreSwing;
-                upperSwing.makeRotate(turn * (oldElbow - shoulder), elbow - shoulder);
-                foreSwing.makeRotate(turn * (oldWrist - oldElbow), target - elbow);
-                const osg::Matrixf upper = arm.world[0] * osg::Matrixf::translate(-shoulder)
-                    * osg::Matrixf::rotate(turn * upperSwing) * osg::Matrixf::translate(shoulder);
-                const osg::Matrixf fore = arm.world[1] * osg::Matrixf::translate(-oldElbow)
-                    * osg::Matrixf::rotate(turn * foreSwing) * osg::Matrixf::translate(elbow);
-                const std::array<osg::Matrixf, 3> parents{ arm.parent, upper, fore };
-                const std::array<osg::Matrixf, 3> goals{ upper, fore, hand };
-                for (unsigned joint = 0; joint < arm.bones.size(); ++joint)
-                {
-                    arm.result[joint] = goals[joint] * osg::Matrixf::inverse(parents[joint]);
-                    arm.result[joint].setTrans(arm.source[joint].getTrans());
-                }
+                if (applied)
+                    *applied = fitted;
             }
-            if (auditPolearm)
+            else if (!solveGripArms(getNodeMap(), total, sourceLocal, arms, maxClamp))
+                return false;
+            if (auditArms)
             {
                 const auto* weaponNode = getWeaponNode();
                 if (weaponNode && !weaponNode->getParentalNodePaths().empty())
@@ -315,7 +286,7 @@ namespace MWRender
                 // the true authored pose only once before the next UPDATE.
                 if (std::none_of(mSwordWallSourcePose.begin(), mSwordWallSourcePose.end(),
                         [arm](const auto& entry) { return entry.first.get() == arm; }))
-                    mSwordWallSourcePose.emplace_back(arm, source);
+                    mSwordWallSourcePose.emplace_back(arm, authored(arm));
                 arm->setMatrix(source * parentWorld * correction * osg::Matrixf::inverse(parentWorld));
             }
         }
@@ -350,9 +321,9 @@ namespace MWRender
             const osg::Matrixf itemWorld = osg::computeLocalToWorld(item->getParentalNodePaths().front());
             const osg::Matrixf actualGrip = actual[5] * osg::Matrixf::inverse(itemWorld);
             const float gripError = (actualGrip.getTrans() - sourceGrip.getTrans()).length();
-            Log(Debug::Info) << "Polearm recoil audit: anchorError=" << anchorError
-                << " lengthError=" << lengthError << " gripError=" << gripError
-                << " reachClamp=" << checkedClamp << " callbackError=" << callbackError;
+            Log(Debug::Info) << (paired ? "Paired recoil audit: anchorError=" : "Polearm recoil audit: anchorError=")
+                             << anchorError << " lengthError=" << lengthError << " gripError=" << gripError
+                             << " reachClamp=" << checkedClamp << " callbackError=" << callbackError;
         }
         return true;
     }
@@ -417,10 +388,10 @@ namespace MWRender
             // Interpolate in a nearby frame. A world-space rotation about an
             // exterior pivot has a huge cancelling translation; interpolating
             // those independently sends the hands thousands of units away.
-            mSwordWallAppliedTail = osg::Matrixf::translate(-mSwordWallCorrectionOrigin)
+            const osg::Matrixf tail = osg::Matrixf::translate(-mSwordWallCorrectionOrigin)
                 * between(Pose(mSwordWallLastCorrection), Pose(osg::Matrixf()), t * t * (3.f - 2.f * t))
                 * osg::Matrixf::translate(mSwordWallCorrectionOrigin);
-            applySwordWallCorrection(mSwordWallAppliedTail, frameStamp);
+            applySwordWallCorrection(tail, frameStamp, &mSwordWallAppliedTail);
             if (t >= 1.f)
             {
                 mSwordWallCorrectionValid = false;
@@ -470,6 +441,7 @@ namespace MWRender
             {
                 BladeMeshVisitor mesh(node);
                 node->accept(mesh);
+                mesh.limitSamples();
                 weapon.tip = mesh.tip;
                 weapon.base = 0.f;
                 const auto vertex = [&](const osg::Vec3f& point) {
@@ -575,7 +547,7 @@ namespace MWRender
         const auto right = inventory.getSlot(MWWorld::InventoryStore::Slot_CarriedRight);
         const bool shortBlade = right != inventory.end() && right->getType() == ESM::Weapon::sRecordId
             && right->get<ESM::Weapon>()->mBase->mData.mType == ESM::Weapon::ShortBladeOneHand;
-        const bool polearm = mViewmodelSet == BrutalViewmodel_Staff;
+        const bool pairedGrasp = hasPolearmViewmodel() || hasPairedViewmodel();
         const auto recoil = [&](bool fresh) {
             if (!weapon.materialWitness || weapon.recoilAge < 0.f || stats.isDead()
                 || stats.mBrutalClinchActive || stats.mBrutalSlidePhase != 0)
@@ -636,8 +608,8 @@ namespace MWRender
             // A short blade may be carried much nearer the eye than a long
             // sword. Its own source set still has to clear the actual near plane,
             // but the sword's 22-unit comfort margin must not force it into a wall.
-            const float maximumWithdrawal = shortBlade || polearm ? 32.f : 16.f;
-            const float minimumDepth = std::max(float(near) + 2.f, shortBlade || polearm ? 10.f : 22.f);
+            const float maximumWithdrawal = shortBlade || pairedGrasp ? 32.f : 16.f;
+            const float minimumDepth = std::max(float(near) + 2.f, shortBlade || pairedGrasp ? 10.f : 22.f);
             float bestMovement = std::numeric_limits<float>::infinity();
             const auto fitStarted = std::chrono::steady_clock::now();
             struct Reach
@@ -646,7 +618,7 @@ namespace MWRender
                 float minimum, maximum;
             };
             std::vector<Reach> reaches;
-            if (polearm)
+            if (pairedGrasp)
                 for (const char* prefix : { "Bip01 L ", "Bip01 R " })
                 {
                     std::array<osg::Vec3f, 3> joints;
@@ -682,7 +654,7 @@ namespace MWRender
                 {
                     const auto point = vertex * visible;
                     nearest = std::min(nearest, -(point * view).z());
-                    if (shortBlade || polearm)
+                    if (shortBlade || pairedGrasp)
                         movement += (point - vertex * matrix).length2();
                 }
                 float reachPenalty = 0.f;
@@ -694,8 +666,10 @@ namespace MWRender
                 }
                 const float penalty = std::max(required - budget, 0.f) * 10.f
                     + std::max(minimumDepth - nearest, 0.f) * 20.f + reachPenalty * 40.f;
-                if (penalty < bestPenalty || ((shortBlade || polearm) && penalty < .001f && bestPenalty < .001f
-                        && movement < bestMovement))
+                if (penalty < bestPenalty
+                    || (penalty < .001f && bestPenalty < .001f
+                        && ((shortBlade || pairedGrasp) ? movement < bestMovement
+                            : std::abs(degrees) < std::abs(selectedDegrees))))
                 {
                     bestPenalty = penalty;
                     bestMovement = movement;
@@ -705,24 +679,41 @@ namespace MWRender
                     selectedRequired = required;
                     selectedDepth = nearest;
                 }
-                return penalty < .001f;
+                return std::pair(penalty, shortBlade || pairedGrasp ? movement : float(std::abs(degrees)));
             };
-            for (int option = 0; option <= 360; ++option)
+            const auto search = [&](const osg::Vec3f& foldAxis, float budget, int center) {
+                std::array<int, 2> coarseBest{ -91, 91 };
+                const std::pair<float, float> worst{ std::numeric_limits<float>::infinity(),
+                    std::numeric_limits<float>::infinity() };
+                std::array<std::pair<float, float>, 2> score{ worst, worst };
+                // Coarse sweep followed by one-degree local refinement. The
+                // previous fold is an exact candidate, keeping recoil stable.
+                for (int option = 0; option <= 36; ++option)
+                {
+                    const int magnitude = ((option + 1) / 2) * 10;
+                    const int degrees = center + (option % 2 ? magnitude : -magnitude);
+                    if (std::abs(degrees) > 90) continue;
+                    const auto candidate = consider(foldAxis, degrees, budget);
+                    const unsigned side = degrees < 0 ? 0 : 1;
+                    if (candidate < score[side]) { score[side] = candidate; coarseBest[side] = degrees; }
+                }
+                // Equal coarse fits on opposite sides can hide different
+                // one-degree minima. Refine both signs rather than whichever
+                // happened to be visited first.
+                for (const int coarse : coarseBest)
+                    if (std::abs(coarse) <= 90)
+                        for (int delta = -9; delta <= 9; ++delta)
+                            if (delta && std::abs(coarse + delta) <= 90)
+                                consider(foldAxis, coarse + delta, budget);
+            };
+            if (axisLength >= .01f)
+                search(axis, maximumWithdrawal, !fresh && weapon.recoilFoldValid ? weapon.recoilFoldDegrees : 0);
+            else
+                consider(axis, 0, maximumWithdrawal);
+            if (bestPenalty > .001f && axisLength >= .01f)
             {
-                const int magnitude = (option + 1) / 2;
-                const int center = !fresh && weapon.recoilFoldValid ? weapon.recoilFoldDegrees : 0;
-                const int degrees = center + (option % 2 ? magnitude : -magnitude);
-                if (std::abs(degrees) > 90)
-                    continue;
-                if (degrees && axisLength < .01f)
-                    break;
-                if (consider(axis, degrees, maximumWithdrawal))
-                    break;
-            }
-            if ((shortBlade || polearm) && bestPenalty > .001f && axisLength >= .01f)
-            {
-                // The sword's up/down fold can be blocked by the eye plane during
-                // an overhead short-blade return. Search the other stable fold
+                // The primary fold can be blocked by the eye plane, including
+                // an ordinary longsword alongside a sloping wall. Search other
                 // planes, accepting only full mesh clearance AND actual near depth.
                 // Prefer the feasible correction with least material displacement.
                 osg::Vec3f crossAxis = bladeDirection ^ axis;
@@ -735,15 +726,12 @@ namespace MWRender
                 // first fold, while the old 32-unit budget left visible penetration.
                 // Try all additional planes within 32 first, expanding to 48 only
                 // if none clears both the real wall and the real eye plane.
-                for (const float budget : { 32.f, 48.f })
+                const std::array<float, 2> budgets{
+                    maximumWithdrawal, shortBlade || pairedGrasp ? 48.f : 24.f };
+                for (const float budget : budgets)
                 {
-                    for (unsigned plane = budget == 32.f ? 1u : 0u; plane < axes.size(); ++plane)
-                        for (int option = 1; option <= 180; ++option)
-                        {
-                            const int magnitude = (option + 1) / 2;
-                            const int degrees = option % 2 ? magnitude : -magnitude;
-                            consider(axes[plane], degrees, budget);
-                        }
+                    for (unsigned plane = budget == maximumWithdrawal ? 1u : 0u; plane < axes.size(); ++plane)
+                        search(axes[plane], budget, 0);
                     if (bestPenalty < .001f)
                         break;
                 }
@@ -752,7 +740,7 @@ namespace MWRender
                 Log(Debug::Info) << "Sword recoil clearance compromise: age=" << age
                     << " degrees=" << selectedDegrees << " required=" << selectedRequired
                     << " nearDepth=" << selectedDepth << " penalty=" << bestPenalty;
-            if ((shortBlade || polearm) && std::getenv("BRUTAL_SWORD_WALL_DIAGNOSTICS"))
+            if ((shortBlade || pairedGrasp) && std::getenv("BRUTAL_SWORD_WALL_DIAGNOSTICS"))
                 Log(Debug::Info) << "Blade recoil fit: age=" << age << " degrees=" << selectedDegrees
                     << " required=" << selectedRequired << " nearDepth=" << selectedDepth << " penalty=" << bestPenalty
                     << " fitMilliseconds=" << std::chrono::duration<float, std::milli>(
@@ -760,13 +748,13 @@ namespace MWRender
             weapon.recoilFoldAxis = selectedAxis;
             weapon.recoilFoldDegrees = selectedDegrees;
             weapon.recoilFoldValid = true;
-            // Move the complete arm chains equally, preserving wrists and item attachment.
-            // This is transient collision response; original FK is restored before UPDATE.
-            if (!applySwordWallCorrection(correction, frameStamp))
+            osg::Matrixf applied;
+            if (!applySwordWallCorrection(correction, frameStamp, &applied))
                 return;
+            const osg::Matrixf total = hasPairedViewmodel() ? applied : mSwordWallAppliedTail * correction;
             mSwordWallCorrectionOrigin = mPtr.getRefData().getPosition().asVec3();
-            mSwordWallLastCorrection = osg::Matrixf::translate(mSwordWallCorrectionOrigin)
-                * mSwordWallAppliedTail * correction * osg::Matrixf::translate(-mSwordWallCorrectionOrigin);
+            mSwordWallLastCorrection = osg::Matrixf::translate(mSwordWallCorrectionOrigin) * total
+                * osg::Matrixf::translate(-mSwordWallCorrectionOrigin);
             mSwordWallCorrectionValid = true;
             mSwordWallTailAge = -1.f;
             const osg::Matrixf finalRaw = osg::computeLocalToWorld(paths.front());
@@ -845,8 +833,8 @@ namespace MWRender
             buckets.push_back(bucket);
         };
         osg::Matrixf p = previous;
-        // Retain every original mesh edge and vertex trajectory, in its
-        // original order. Bounds only select possible exact triangle hits.
+        // Sweep the cached material samples; broad-phase bounds only select
+        // candidates and the renderer still certifies each actual contact.
         for (const auto& [i, j] : weapon.edges)
             add(weapon.vertices[i] * previous, weapon.vertices[j] * previous, 0.f, 0.f, false,
                 weapon.vertices[i], weapon.vertices[j], 0);

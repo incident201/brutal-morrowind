@@ -1,6 +1,7 @@
 #include "riggeometry.hpp"
 
 #include <algorithm>
+#include <cmath>
 
 #include <osg/MatrixTransform>
 
@@ -34,6 +35,7 @@ namespace SceneUtil
     {
         if (mSurfaceDecals && mSourceGeometry != sourceGeometry)
             mSurfaceDecals->clear();
+        mDecalPoses.reset();
         for (unsigned int i = 0; i < 2; ++i)
             mGeometry[i] = nullptr;
 
@@ -411,6 +413,26 @@ namespace SceneUtil
         return true;
     }
 
+    bool RigGeometry::DecalPose::matches(const DecalPose& previous) const
+    {
+        const auto close = [](const osg::Matrixf& a, const osg::Matrixf& b) {
+            if (a == b)
+                return true;
+            // Compare with the last drawn pose, so slow motion still refreshes
+            // the mesh. Ignore small solver and transform noise.
+            for (int row = 0; row < 4; ++row)
+                for (int column = 0; column < 4; ++column)
+                {
+                    const float tolerance = row == 3 && column < 3 ? .15f : .0015f;
+                    if (!(std::abs(a(row, column) - b(row, column)) <= tolerance))
+                        return false;
+                }
+            return true;
+        };
+        return sourceVersions == previous.sourceVersions && close(transform, previous.transform)
+            && std::ranges::equal(bones, previous.bones, close);
+    }
+
     void RigGeometry::cull(osg::NodeVisitor* nv)
     {
         if (!mSkeleton)
@@ -422,15 +444,17 @@ namespace SceneUtil
                 return;
         }
 
-        unsigned int traversalNumber = nv->getTraversalNumber();
-        if (mLastFrameNumber == traversalNumber || (mLastFrameNumber != 0 && !mSkeleton->getActive()))
-        {
-            osg::Geometry& geom = *getGeometry(mLastFrameNumber);
+        const auto draw = [&](osg::Geometry& geom) {
             nv->pushOntoNodePath(&geom);
             nv->apply(geom);
             nv->popFromNodePath();
             if (mSurfaceDecals)
                 mSurfaceDecals->cull(geom, *static_cast<osgUtil::CullVisitor*>(nv));
+        };
+        unsigned int traversalNumber = nv->getTraversalNumber();
+        if (mLastFrameNumber == traversalNumber || (mLastFrameNumber != 0 && !mSkeleton->getActive()))
+        {
+            draw(*getGeometry(mLastFrameNumber));
             return;
         }
         mLastFrameNumber = traversalNumber;
@@ -447,10 +471,12 @@ namespace SceneUtil
         osg::Vec3Array* normalDst = static_cast<osg::Vec3Array*>(geom.getNormalArray());
         osg::Vec4Array* tangentDst = static_cast<osg::Vec4Array*>(geom.getTexCoordArray(7));
 
-        std::vector<osg::Matrixf> boneMatrices(mNodes.size());
+        DecalPose pose{ std::vector<osg::Matrixf>(mNodes.size()), mData->mTransform,
+            { positionSrc->getModifiedCount(), normalSrc ? normalSrc->getModifiedCount() : 0u,
+                tangentSrc ? tangentSrc->getModifiedCount() : 0u } };
         std::vector<Bone*>::const_iterator bone = mNodes.begin();
         std::vector<BoneInfo>::const_iterator boneInfo = mData->mBones.begin();
-        for (osg::Matrixf& boneMat : boneMatrices)
+        for (osg::Matrixf& boneMat : pose.bones)
         {
             if (*bone != nullptr)
                 boneMat = boneInfo->mInvBindMatrix * getBoneMatrix(std::distance(mNodes.cbegin(),bone));
@@ -458,11 +484,25 @@ namespace SceneUtil
             ++boneInfo;
         }
 
-        osg::Matrixf transform;
         if (mSkinToSkelMatrix)
-            transform = (*mSkinToSkelMatrix) * mData->mTransform;
+            pose.transform = (*mSkinToSkelMatrix) * mData->mTransform;
+
+        // Both render buffers keep their last skin pose. A resting corpse can
+        // stay active so it can be moved again, with no need to skin or upload
+        // its unchanged mesh and blood patches on every traversal.
+        if (mSurfaceDecals && mSurfaceDecals->patchCount())
+        {
+            if (!mDecalPoses)
+                mDecalPoses = std::make_unique<std::array<std::optional<DecalPose>, 2>>();
+            const auto& previous = (*mDecalPoses)[traversalNumber % 2];
+            if (previous && pose.matches(*previous))
+            {
+                draw(geom);
+                return;
+            }
+        }
         else
-            transform = mData->mTransform;
+            mDecalPoses.reset();
 
         for (const auto& [influences, vertices] : mData->mInfluences)
         {
@@ -472,14 +512,14 @@ namespace SceneUtil
             {
                 if (mNodes[index] == nullptr)
                     continue;
-                const float* boneMatPtr = boneMatrices[index].ptr();
+                const float* boneMatPtr = pose.bones[index].ptr();
                 float* resultMatPtr = resultMat.ptr();
                 for (int i = 0; i < 16; ++i, ++resultMatPtr, ++boneMatPtr)
                     if (i % 4 != 3)
                         *resultMatPtr += *boneMatPtr * weight;
             }
 
-            resultMat *= transform;
+            resultMat *= pose.transform;
 
             for (unsigned short vertex : vertices)
             {
@@ -505,11 +545,9 @@ namespace SceneUtil
 
         geom.osg::Drawable::dirtyGLObjects();
 
-        nv->pushOntoNodePath(&geom);
-        nv->apply(geom);
-        nv->popFromNodePath();
-        if (mSurfaceDecals)
-            mSurfaceDecals->cull(geom, *static_cast<osgUtil::CullVisitor*>(nv));
+        if (mDecalPoses)
+            (*mDecalPoses)[traversalNumber % 2] = std::move(pose);
+        draw(geom);
     }
 
     void RigGeometry::updateBounds(osg::NodeVisitor* nv)
@@ -613,6 +651,7 @@ namespace SceneUtil
 
     void RigGeometry::setInfluences(const std::vector<BoneWeights>& influences)
     {
+        mDecalPoses.reset();
         if (!mData)
             mData = new InfluenceData;
 

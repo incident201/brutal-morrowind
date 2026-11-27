@@ -17,6 +17,7 @@ namespace MWPhysics
         osg::Vec3f mHitNormal;
         MWWorld::Ptr mHitObject;
         int mHitPart = -1; // Render contact only: ESM::PartReferenceType, otherwise unknown.
+        int mCollisionGroup = 0; // Bullet collision group, if available.
     };
 
     class RayCastingInterface

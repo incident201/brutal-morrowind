@@ -37,12 +37,14 @@
 #include "../mwmechanics/actorutil.hpp"
 #include "../mwmechanics/aisetting.hpp"
 #include "../mwmechanics/autocalcspell.hpp"
+#include "../mwmechanics/brutaloptions.hpp"
 #include "../mwmechanics/combat.hpp"
 #include "../mwmechanics/creaturecustomdataresetter.hpp"
 #include "../mwmechanics/creaturestats.hpp"
 #include "../mwmechanics/difficultyscaling.hpp"
 #include "../mwmechanics/disease.hpp"
 #include "../mwmechanics/inventory.hpp"
+#include "../mwmechanics/meleeocclusion.hpp"
 #include "../mwmechanics/movement.hpp"
 #include "../mwmechanics/npcstats.hpp"
 #include "../mwmechanics/setbaseaisetting.hpp"
@@ -572,7 +574,7 @@ namespace MWClass
     }
 
     bool Npc::evaluateHit(const MWWorld::Ptr& ptr, MWWorld::Ptr& victim, osg::Vec3f& hitPosition, int* contactPart,
-        std::string_view swing) const
+        std::string_view swing, std::vector<MWMechanics::MeleeFollowThrough>* followThrough) const
     {
         victim = MWWorld::Ptr();
         hitPosition = osg::Vec3f();
@@ -588,8 +590,10 @@ namespace MWClass
         MWBase::World* world = MWBase::Environment::get().getWorld();
 
         const float dist = MWMechanics::getMeleeWeaponReach(ptr, weapon);
-        const std::pair<MWWorld::Ptr, osg::Vec3f> result = MWMechanics::getHitContact(ptr, dist, contactPart, swing);
+        const auto result = MWMechanics::getHitContact(ptr, dist, contactPart, swing, followThrough);
         if (result.first.isEmpty()) // Didn't hit anything
+            return true;
+        if (Settings::game().mBrutalMeleeGeometry && MWMechanics::isNpcMeleeOccluded(ptr, result.first, result.second))
             return true;
 
         // Note that earlier we returned true in spite of an apparent failure to hit anything alive.
@@ -601,34 +605,45 @@ namespace MWClass
         if (!weapon.isEmpty())
             weapskill = weapon.getClass().getEquipmentSkill(weapon);
 
-        float hitchance = MWMechanics::getHitChance(ptr, victim, static_cast<int>(getSkill(ptr, weapskill)));
-
-        // Keep the vanilla RNG draw even when opting out of random melee misses.
-        const bool rolledSuccess = Misc::Rng::roll0to99(world->getPrng()) < hitchance;
-        return Settings::game().mMeleeContactAlwaysHits || rolledSuccess;
+        const int skill = static_cast<int>(getSkill(ptr, weapskill));
+        const auto rollHit = [&](const MWWorld::Ptr& target) {
+            const float chance = MWMechanics::getHitChance(ptr, target, skill);
+            // Keep the vanilla RNG draw even when opting out of random melee misses.
+            const bool rolledSuccess = Misc::Rng::roll0to99(world->getPrng()) < chance;
+            return Settings::game().mMeleeContactAlwaysHits || rolledSuccess;
+        };
+        const bool successful = rollHit(victim);
+        if (followThrough)
+            for (auto& contact : *followThrough)
+                contact.mSuccessful = rollHit(contact.mTarget);
+        return successful;
     }
 
     void Npc::hit(const MWWorld::Ptr& ptr, float attackStrength, int type, const MWWorld::Ptr& victim,
-        const osg::Vec3f& hitPosition, bool success, int contactPart) const
+        const osg::Vec3f& hitPosition, bool success, int contactPart, bool groundFinisher,
+        const MWWorld::Ptr* followThroughWeapon) const
     {
         MWWorld::InventoryStore& inv = getInventoryStore(ptr);
         MWWorld::ContainerStoreIterator weaponslot = inv.getSlot(getCreatureStats(ptr).mBrutalOffhandStrike
                 ? MWWorld::InventoryStore::Slot_CarriedLeft : MWWorld::InventoryStore::Slot_CarriedRight);
         MWWorld::Ptr weapon;
-        if (weaponslot != inv.end() && weaponslot->getType() == ESM::Weapon::sRecordId)
+        if (followThroughWeapon)
+            weapon = *followThroughWeapon;
+        else if (weaponslot != inv.end() && weaponslot->getType() == ESM::Weapon::sRecordId)
             weapon = *weaponslot;
 
         // One receipt per native melee hit frame, including empty/range/occlusion failures.
-        static uint64_t nextBrutalAttackId = 0;
-        const uint64_t brutalAttackId = ++nextBrutalAttackId;
+        const uint64_t brutalAttackId = MWMechanics::nextCombatAttackId();
         bool brutalPowered = false, brutalBlocked = false, brutalSuccessful = false;
         float brutalMultiplier = 1.f, damage = 0.f;
         std::string brutalToken;
         auto& armed = getCreatureStats(ptr).mPowerStrike;
         // The charge belongs to the right hand; the left dagger's strike neither carries nor clears it.
         const bool offhand = getCreatureStats(ptr).mBrutalOffhandStrike;
-        if (!offhand && !armed.token.empty() && (armed.weapon != weapon || getCreatureStats(ptr).isDead())) armed = {};
-        if (!offhand && !getCreatureStats(ptr).mBrutalFastStrike && !armed.token.empty()
+        if (!followThroughWeapon && !offhand && !armed.token.empty()
+            && (armed.weapon.ptrOrEmpty() != weapon || getCreatureStats(ptr).isDead()))
+            armed = {};
+        if (!followThroughWeapon && !groundFinisher && !offhand && !getCreatureStats(ptr).mBrutalFastStrike && !armed.token.empty()
             && attackStrength >= armed.minimumStrength)
         {
             brutalPowered = true;
@@ -641,9 +656,10 @@ namespace MWClass
             MWBase::Environment::get().getLuaManager()->meleeResolved(ptr, victim, weapon, brutalAttackId,
                 brutalToken, brutalPowered, brutalSuccessful, brutalBlocked, damage, attackStrength, hitPosition);
         } };
-        MWMechanics::applyFatigueLoss(ptr, weapon, attackStrength);
+        if (!followThroughWeapon)
+            MWMechanics::applyFatigueLoss(ptr, weapon, attackStrength);
 
-        if (victim.isEmpty()) // Didn't hit anything
+        if (victim.isEmpty() || MWMechanics::isBrutalClinchProtected(victim))
             return;
 
         const MWWorld::Class& othercls = victim.getClass();
@@ -651,14 +667,21 @@ namespace MWClass
         if (otherstats.isDead()) // Can't hit dead actors
             return;
 
-        if (!MWMechanics::isInMeleeReach(ptr, victim, MWMechanics::getMeleeWeaponReach(ptr, weapon)))
+        const float reach = MWMechanics::getMeleeWeaponReach(ptr, weapon);
+        // The finisher has already traced the actual prone torso at its impact key.
+        const bool bodyInReach = groundFinisher || MWMechanics::isInMeleeReach(ptr, victim, reach);
+        if (!bodyInReach && !MWMechanics::hasReachableNpcGuardContact(ptr, victim, reach, hitPosition, contactPart))
             return;
 
-        if (Settings::game().mMeleeContactAlwaysHits
+        if (!groundFinisher && Settings::game().mMeleeContactAlwaysHits
             && !MWBase::Environment::get().getWorld()->getLOS(ptr, victim))
             return;
+        // Recheck at the hit frame too: another actor can enter the path after
+        // target evaluation, while this strike must keep its selected victim.
+        if (MWMechanics::isNpcMeleeOccluded(ptr, victim, hitPosition))
+            return;
 
-        if (ptr == MWMechanics::getPlayer())
+        if (ptr == MWMechanics::getPlayer() && !followThroughWeapon)
             MWBase::Environment::get().getWindowManager()->setEnemy(victim);
 
         if (!success)
@@ -666,7 +689,8 @@ namespace MWClass
             MWBase::Environment::get().getLuaManager()->onHit(ptr, victim, weapon, MWWorld::Ptr(), type, attackStrength,
                 damage, false, hitPosition, false, MWMechanics::DamageSourceType::Melee,
                 brutalAttackId, brutalPowered, false, contactPart);
-            MWMechanics::reduceWeaponCondition(damage, false, weapon, ptr);
+            if (!followThroughWeapon)
+                MWMechanics::reduceWeaponCondition(damage, false, weapon, ptr);
             MWMechanics::resistNormalWeapon(victim, ptr, weapon, damage);
             return;
         }
@@ -687,7 +711,10 @@ namespace MWClass
             }
             MWMechanics::adjustWeaponDamage(damage, weapon, ptr);
             damage *= brutalMultiplier * getCreatureStats(ptr).mBrutalComboMultiplier;
-            MWMechanics::reduceWeaponCondition(damage, true, weapon, ptr);
+            if (followThroughWeapon)
+                damage *= .5f;
+            else
+                MWMechanics::reduceWeaponCondition(damage, true, weapon, ptr);
             MWMechanics::resistNormalWeapon(victim, ptr, weapon, damage);
             MWMechanics::applyWerewolfDamageMult(victim, weapon, damage);
             healthdmg = true;
@@ -695,6 +722,21 @@ namespace MWClass
         else
         {
             MWMechanics::getHandToHandDamage(ptr, victim, damage, healthdmg, attackStrength);
+        }
+
+        if (!bodyInReach)
+        {
+            // The extended blade/shield can receive an impact while its owner
+            // remains beyond body reach. Opening that guard cannot damage the
+            // distant body or apply on-strike enchantments through the item.
+            brutalBlocked = MWMechanics::blockMeleeAttack(
+                ptr, victim, weapon, damage, attackStrength, hitPosition, contactPart);
+            damage = 0.f;
+            brutalSuccessful = true;
+            MWBase::Environment::get().getLuaManager()->onHit(ptr, victim, weapon, MWWorld::Ptr(), type,
+                attackStrength, damage, healthdmg, hitPosition, true, MWMechanics::DamageSourceType::Melee,
+                brutalAttackId, brutalPowered, brutalBlocked, contactPart);
+            return;
         }
 
         MWBase::World* world = MWBase::Environment::get().getWorld();
@@ -705,7 +747,8 @@ namespace MWClass
             ESM::RefId weapskill = ESM::Skill::HandToHand;
             if (!weapon.isEmpty())
                 weapskill = weapon.getClass().getEquipmentSkill(weapon);
-            skillUsageSucceeded(ptr, weapskill, ESM::Skill::Weapon_SuccessfulHit);
+            if (!followThroughWeapon)
+                skillUsageSucceeded(ptr, weapskill, ESM::Skill::Weapon_SuccessfulHit);
 
             const MWMechanics::AiSequence& seq = victim.getClass().getCreatureStats(victim).getAiSequence();
 
@@ -727,11 +770,13 @@ namespace MWClass
             damage *= store.find("fCombatKODamageMult")->mValue.getFloat();
 
         // Apply "On hit" enchanted weapons
-        MWMechanics::applyOnStrikeEnchantment(ptr, victim, weapon, hitPosition);
+        if (!followThroughWeapon)
+            MWMechanics::applyOnStrikeEnchantment(ptr, victim, weapon, hitPosition);
 
         MWMechanics::applyElementalShields(ptr, victim);
 
-        brutalBlocked = MWMechanics::blockMeleeAttack(ptr, victim, weapon, damage, attackStrength, hitPosition, contactPart);
+        brutalBlocked = !groundFinisher
+            && MWMechanics::blockMeleeAttack(ptr, victim, weapon, damage, attackStrength, hitPosition, contactPart);
         if (brutalBlocked)
             damage = 0;
 
@@ -742,27 +787,29 @@ namespace MWClass
 
         brutalSuccessful = true;
         MWBase::Environment::get().getLuaManager()->onHit(ptr, victim, weapon, MWWorld::Ptr(), type, attackStrength,
-            damage, healthdmg, hitPosition, true, MWMechanics::DamageSourceType::Melee,
-            brutalAttackId, brutalPowered, brutalBlocked, contactPart);
+            damage, healthdmg, hitPosition, true, MWMechanics::DamageSourceType::Melee, brutalAttackId, brutalPowered,
+            brutalBlocked, contactPart, groundFinisher, nullptr, MWMechanics::isBrutalChargedAttack(ptr, attackStrength));
     }
 
     void Npc::onHit(const MWWorld::Ptr& ptr, const std::map<std::string, float>& damages, ESM::RefId object,
-        const MWWorld::Ptr& attacker, bool successful, const MWMechanics::DamageSourceType sourceType) const
+        const MWWorld::Ptr& attacker, bool successful, MWMechanics::DamageSourceType sourceType, bool charged) const
     {
         MWMechanics::CreatureStats& stats = getCreatureStats(ptr);
         bool wasDead = stats.isDead();
         const bool clinchLossDamage = stats.mBrutalClinchApplyingLossDamage
             && ptr == MWMechanics::getPlayer() && stats.mBrutalClinchPhase == 4
-            && attacker == stats.mBrutalClinchOpponent && sourceType == MWMechanics::DamageSourceType::Melee;
+            && attacker == stats.mBrutalClinchOpponent.ptrOrEmpty() && sourceType == MWMechanics::DamageSourceType::Melee;
         // Claim protection starts during alignment and lasts through the paired exit.
         // Only the authored loss hit may affect either participant during that interval.
-        if (!stats.mBrutalClinchOpponent.isEmpty() && !clinchLossDamage)
+        if (!clinchLossDamage && MWMechanics::isBrutalClinchProtected(ptr))
             return;
 
         bool setOnPcHitMe = true;
 
+        const bool silentBackstabHit = stats.mBrutalSilentBackstab
+            && !attacker.isEmpty() && attacker == stats.mBrutalBackstabTarget.ptrOrEmpty();
         // NOTE: 'object' and/or 'attacker' may be empty.
-        if (!attacker.isEmpty() && attacker.getClass().isActor() && !stats.getAiSequence().isInCombat(attacker))
+        if (!silentBackstabHit && !attacker.isEmpty() && attacker.getClass().isActor() && !stats.getAiSequence().isInCombat(attacker))
         {
             stats.setAttacked(true);
             bool complain = sourceType == MWMechanics::DamageSourceType::Melee;
@@ -825,8 +872,10 @@ namespace MWClass
                 hasHealthDamage = true;
                 healthDamage = damage;
                 MWMechanics::DynamicStat<float> health(getCreatureStats(ptr).getHealth());
-                health.setCurrent(health.getCurrent() - damage);
+                const float previousHealth = health.getCurrent();
+                health.setCurrent(previousHealth - damage);
                 stats.setHealth(health);
+                MWMechanics::recordBrutalNpcHealthLoss(ptr, previousHealth);
             }
             else if (stat == "fatigue")
             {
@@ -852,7 +901,7 @@ namespace MWClass
 
             int chance = store.get<ESM::GameSetting>().find("iVoiceHitOdds")->mValue.getInteger();
             auto& prng = MWBase::Environment::get().getWorld()->getPrng();
-            if (Misc::Rng::roll0to99(prng) < chance)
+            if (!silentBackstabHit && Misc::Rng::roll0to99(prng) < chance)
                 MWBase::Environment::get().getDialogueManager()->say(ptr, ESM::RefId::stringRefId("hit"));
 
             // Check for knockdown
@@ -862,8 +911,8 @@ namespace MWClass
                     * gmst.iKnockDownOddsMult->mValue.getInteger() * 0.01f
                 + gmst.iKnockDownOddsBase->mValue.getInteger();
             const float hurtFraction = Settings::game().mNpcHurtHealthFraction;
-            if (clinchLossDamage)
-                ; // The original paired loss clip already owns this hit's reaction.
+            if (clinchLossDamage || stats.mBrutalBackstabVictim)
+                ; // The original paired loss or backstab clip already owns this hit's reaction.
             else if (ptr == MWMechanics::getPlayer() && !Settings::game().mPlayerHitRecovery)
                 ; // Blows never freeze the player; knockout from exhausted fatigue stays native.
             else if (ptr != MWMechanics::getPlayer() && hurtFraction > 0.f)
@@ -875,16 +924,49 @@ namespace MWClass
                 stats.setKnockedDown(true);
             else
                 stats.setHitRecovery(true); // Is this supposed to always occur?
+
+            // Dark Messiah's wounded NPC: a charged melee blow knocks it down (WoundedFallChance
+            // 0.3), any melee blow may stagger it (WoundedStunChance 0.3). The fall is applied on
+            // its next update. A kick or shield bash rolls its fall where its push lands (applyNpcKick).
+            if (hasHealthDamage && healthDamage > 0.f && !attacker.isEmpty() && !clinchLossDamage && !silentBackstabHit
+                && sourceType == MWMechanics::DamageSourceType::Melee && MWMechanics::isBrutalWoundedNpc(ptr)
+                && stats.mBrutalClinchOpponent.ptrOrEmpty().isEmpty())
+            {
+                const float roll = Misc::Rng::rollClosedProbability(prng);
+                osg::Vec3f direction
+                    = ptr.getRefData().getPosition().asVec3() - attacker.getRefData().getPosition().asVec3();
+                direction.z() = 0.f;
+                if (charged && roll < .3f && direction.normalize() > 1e-3f)
+                {
+                    constexpr float push = 225.f; // A combo blow's knockdown push (impact 1.5).
+                    stats.mBrutalWoundedFall = direction * push + osg::Vec3f(0.f, 0.f, push * .35f);
+                    stats.mBrutalWoundedFallAttacker = MWWorld::SafePtr(attacker);
+                }
+                else if (roll < .6f)
+                    stats.setHitRecovery(true);
+            }
         }
 
         if (hasHealthDamage && healthDamage > 0.0f)
         {
             if (ptr == MWMechanics::getPlayer())
-                MWBase::Environment::get().getWindowManager()->activateHitOverlay();
+                MWBase::Environment::get().getWindowManager()->activateHitOverlay(healthDamage);
         }
 
         if (!wasDead && getCreatureStats(ptr).isDead())
         {
+            if (ptr == MWMechanics::getPlayer() && hasHealthDamage && !attacker.isEmpty() && attacker != ptr
+                && (sourceType == MWMechanics::DamageSourceType::Melee
+                    || sourceType == MWMechanics::DamageSourceType::Ranged))
+            {
+                osg::Vec3f away
+                    = ptr.getRefData().getPosition().asVec3() - attacker.getRefData().getPosition().asVec3();
+                away.z() = 0.f;
+                if (away.normalize() > .001f)
+                    stats.mBrutalPlayerDeathPush = away * 110.f + osg::Vec3f(0, 0, 8.f);
+            }
+            if (!silentBackstabHit)
+                stats.mBrutalSilentBackstab = false;
             // NPC was killed
             if (!attacker.isEmpty() && attacker.getClass().isNpc()
                 && attacker.getClass().getNpcStats(attacker).isWerewolf())
@@ -995,6 +1077,8 @@ namespace MWClass
                     * (1.f + std::max(0.f, mageffects.getOrDefault(ESM::MagicEffect::SwiftSwim).getMagnitude()) * 0.01f);
             if (MWBase::Environment::get().getMechanicsManager()->isSneaking(ptr))
                 return MWPhysics::PlayerKinetics::SneakSpeed;
+            if (normalizedEncumbrance > 1.0f)
+                return MWPhysics::PlayerKinetics::WalkSpeed;
             switch (stats.mBrutalGait)
             {
                 case MWPhysics::PlayerKinetics::Gait_Walk:
@@ -1036,19 +1120,19 @@ namespace MWClass
 
     float Npc::getJump(const MWWorld::Ptr& ptr) const
     {
+        const float normalizedEncumbrance = getNormalizedEncumbrance(ptr);
+        if (normalizedEncumbrance > 1.0f)
+            return 0.f;
+
         if (ptr == MWMechanics::getPlayer() && Settings::game().mKineticPlayerMovement)
         {
             const auto& stats = getNpcStats(ptr);
             if (stats.isParalyzed() || stats.getKnockedDown() || stats.isDead())
                 return 0.f;
-            // Jump magic remains an explicit exception, not a character-stat multiplier.
+            const float acrobatics = stats.getSkill(ESM::Skill::Acrobatics).getModified();
             const float magic = stats.getMagicEffects().getOrDefault(ESM::MagicEffect::Jump).getMagnitude();
-            return MWPhysics::PlayerKinetics::JumpSpeed + std::clamp(magic * 2.f, 0.f, 580.f);
+            return MWPhysics::PlayerKinetics::jumpSpeed(acrobatics) + std::clamp(magic * 2.f, 0.f, 580.f);
         }
-
-        const float normalizedEncumbrance = getNormalizedEncumbrance(ptr);
-        if (normalizedEncumbrance > 1.0f)
-            return 0.f;
 
         const MWMechanics::NpcStats& stats = getNpcStats(ptr);
         if (stats.isParalyzed() || stats.getKnockedDown() || stats.isDead())
@@ -1231,8 +1315,9 @@ namespace MWClass
 
         // Race weight should not affect 1st-person meshes, otherwise it will change hand proportions and can break
         // aiming.
-        if (ptr == MWMechanics::getPlayer() && ptr.isInCell() && MWBase::Environment::get().getWorld()->isFirstPerson()
-            && !Settings::game().mFirstPersonFullBody)
+        const MWWorld::Ptr player = MWMechanics::getPlayer();
+        if (ptr == player && ptr.isInCell() && MWBase::Environment::get().getWorld()->isFirstPerson()
+            && !Settings::game().mFirstPersonFullBody && !getCreatureStats(player).isDead())
         {
             if (ref->mBase->isMale())
                 scale *= race->mData.mMaleHeight;

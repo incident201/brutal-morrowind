@@ -655,8 +655,34 @@ namespace MWPhysics
         collisionWorld->convexSweepTest(static_cast<const btConvexShape*>(shape), btTransform(btrot, btFrom),
             btTransform(btrot, btTo), resultCallback);
 
-        projectile.mPosition
-            = Misc::Convert::toOsg(projectile.mProjectile->isActive() ? btTo : resultCallback.m_hitPointWorld);
+        if (projectile.mShields)
+        {
+            const osg::Vec3f from = Misc::Convert::toOsg(btFrom);
+            const osg::Vec3f to = Misc::Convert::toOsg(btTo);
+            float closestFraction = resultCallback.m_closestHitFraction;
+            const ProjectileShield* defender = nullptr;
+            std::optional<ProjectileShield::Contact> contact;
+            for (const auto& shield : *projectile.mShields)
+            {
+                if (!projectile.mProjectile->isValidTarget(shield.mCollider))
+                    continue;
+                if (const auto hit = shield.intersect(from, to, closestFraction))
+                {
+                    closestFraction = hit->mFraction;
+                    defender = &shield;
+                    contact = hit;
+                }
+            }
+            if (defender)
+            {
+                projectile.mProjectile->hit(defender->mActor, Misc::Convert::toBullet(contact->mPoint),
+                    Misc::Convert::toBullet(contact->mNormal), ProjectileHitType::Shield);
+                projectile.mPosition = contact->mPoint;
+                return;
+            }
+        }
+        resultCallback.applyHit();
+        projectile.mPosition = Misc::Convert::toOsg(resultCallback.hasHit() ? resultCallback.m_hitPointWorld : btTo);
     }
 
     btVector3 addMarginToDelta(btVector3 delta)

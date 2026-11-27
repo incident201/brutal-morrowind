@@ -1,8 +1,13 @@
+#include "camera.hpp"
+#include "griparms.hpp"
 #include "npcanimation.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <limits>
+#include <ranges>
+#include <vector>
 
 #include <osg/FrameStamp>
 #include <osg/Geometry>
@@ -119,7 +124,12 @@ namespace MWRender
                 // Exclude pommel, grip, guard and the unstable tip. The interval
                 // scales with the actual equipped mesh, including short swords.
                 if (visitor.tip >= 8.f && visitor.tip <= 250.f)
-                    mClinchBladeRange = osg::Vec3f(std::max(3.f, visitor.tip * .25f), visitor.tip * .75f, visitor.tip);
+                {
+                    // The lower blade of a claymore is long enough to meet a
+                    // shortsword without bringing the hilt back into the body.
+                    const float start = mViewmodelSet == BrutalViewmodel_Paired ? .14f : .25f;
+                    mClinchBladeRange = osg::Vec3f(std::max(3.f, visitor.tip * start), visitor.tip * .75f, visitor.tip);
+                }
             }
         }
         return mClinchBladeRange;
@@ -136,8 +146,25 @@ namespace MWRender
 
     void NpcAnimation::restoreTransientPose()
     {
-        if (mClinchSourcePose.empty() && mSwordWallSourcePose.empty())
+        restoreNpcGuardPose();
+        restoreNpcTwoHandGuardPose();
+        const bool wipeFitted = mSwordWipeSourcePose.first.valid();
+        if (wipeFitted)
+        {
+            mSwordWipeSourcePose.first->setMatrix(mSwordWipeSourcePose.second);
+            mSwordWipeSourcePose.first = nullptr;
+        }
+        if (!wipeFitted && mClinchSourcePose.empty() && mSwordWallSourcePose.empty() && mHeldGripSourcePose.empty()
+            && mBackstabSourcePose.empty())
             return;
+        for (const auto& [node, source] : mBackstabSourcePose | std::views::reverse)
+            if (node.valid())
+                node->setMatrix(source);
+        mBackstabSourcePose.clear();
+        for (const auto& [node, source] : mHeldGripSourcePose)
+            if (node.valid())
+                node->setMatrix(source);
+        mHeldGripSourcePose.clear();
         for (const auto& [node, source] : mSwordWallSourcePose)
             if (node.valid())
                 node->setMatrix(source);
@@ -148,6 +175,38 @@ namespace MWRender
         mClinchSourcePose.clear();
         if (mSkeleton)
             mSkeleton->markDirty();
+    }
+
+    std::optional<osg::Vec3f> NpcAnimation::groundFinisherStrikeOffset(std::string_view group, float pitch)
+    {
+        const float hit = getTextKeyTime(std::string(group) + ": hit");
+        const bool sweeping = hasPolearmViewmodel();
+        const auto mount = sampleBoneInModelSpace(group, "Weapon Bone", hit + (sweeping ? .018f : 0.f));
+        const auto eye = sampleBoneInModelSpace(group, "Brutal Camera Pivot", hit);
+        const auto carrier = sampleBoneInModelSpace(group, "Brutal Camera Carrier", hit);
+        const auto root = nodeWorld(mObjectRoot);
+        if (hit < 0.f || !mount || !eye || !carrier || !root)
+            return std::nullopt;
+
+        float reach = getClinchBladeRange().z();
+        if (reach <= 0.f)
+            return std::nullopt;
+        if (sweeping)
+            reach = std::min(reach * .65f, 38.f);
+
+        const osg::Vec3f pivot = eye->getTrans() + carrier->getTrans();
+        const osg::Quat tilt(pitch, -osg::X_AXIS);
+        const osg::Vec3f strikingPoint = osg::Vec3f(0.f, reach, 0.f) * *mount;
+        const osg::Vec3f worldPoint = (pivot + tilt * (strikingPoint - pivot)) * *root;
+        const auto& actor = mPtr.getRefData().getPosition();
+        return osg::Quat(actor.rot[2], osg::Z_AXIS) * (worldPoint - actor.asVec3());
+    }
+
+    float NpcAnimation::groundFinisherCameraDrop(std::string_view group, float time) const
+    {
+        const auto carrier = sampleBoneInModelSpace(group, "Brutal Camera Carrier", time);
+        const auto root = nodeWorld(mObjectRoot);
+        return carrier && root ? -osg::Matrixf::transform3x3(osg::Vec3f(carrier->getTrans()), *root).z() : 0.f;
     }
 
     void NpcAnimation::fitSwordClinchPose(osg::NodeVisitor& visitor)
@@ -170,12 +229,14 @@ namespace MWRender
             return;
         const double now = visitor.getFrameStamp()->getSimulationTime();
         const bool contest = stats.mBrutalClinchActive && stats.mBrutalClinchPhase <= 2;
+        const bool polearm = hasPolearmViewmodel();
         auto world = MWBase::Environment::get().getWorld();
-        auto* opponent = stats.mBrutalClinchOpponent.isEmpty() ? nullptr
-            : dynamic_cast<NpcAnimation*>(world->getAnimation(stats.mBrutalClinchOpponent));
+        auto* opponent = stats.mBrutalClinchOpponent.ptrOrEmpty().isEmpty() ? nullptr
+            : dynamic_cast<NpcAnimation*>(world->getAnimation(stats.mBrutalClinchOpponent.ptrOrEmpty()));
         const auto playerMatrix = nodeWorld(getWeaponNode());
         const auto opponentMatrix = opponent ? nodeWorld(opponent->getWeaponNode()) : std::nullopt;
         osg::Vec3f correction;
+        float polearmExit = 0.f;
         audit.frame = visitor.getTraversalNumber();
         audit.phase = stats.mBrutalClinchPhase;
         audit.elapsed = stats.mBrutalClinchElapsed;
@@ -186,13 +247,11 @@ namespace MWRender
             if (mClinchPoseId != stats.mBrutalClinchId)
             {
                 mClinchPoseId = stats.mBrutalClinchId;
-                mClinchEntryTime = now;
                 mClinchExitCorrection = {};
             }
             // The pair is placed while the guard pose still holds. Fitting that pose to the blade
-            // just placed would throw the arms at the camera, so the fit starts with the contest.
-            if (stats.mBrutalClinchPhase < 2)
-                mClinchEntryTime = now;
+            // just placed would throw the arms at the camera. Advance the fit with the contest clip
+            // so a delayed render frame cannot leave the weapons apart after the arms have settled.
             audit.active = true;
             audit.playerHilt = playerMatrix->getTrans();
             audit.opponentHilt = opponentMatrix->getTrans();
@@ -210,7 +269,7 @@ namespace MWRender
             audit.clamped = correction.length2() > maximumCorrection * maximumCorrection;
             if (audit.clamped)
                 correction *= maximumCorrection / correction.length();
-            audit.weight = smooth(static_cast<float>(now - mClinchEntryTime) / blendTime);
+            audit.weight = stats.mBrutalClinchPhase == 2 ? smooth(audit.sourceElapsed / blendTime) : 0.f;
             correction *= audit.weight;
             mClinchLastCorrection = correction;
             mClinchWasContest = true;
@@ -228,9 +287,14 @@ namespace MWRender
             const float fade = 1.f - smooth(static_cast<float>(now - mClinchExitTime) / .2f);
             correction = mClinchExitCorrection * fade;
             audit.weight = fade;
+            if (polearm && stats.mBrutalClinchActive && stats.mBrutalClinchPhase >= 3)
+                polearmExit = 1.f - smooth(static_cast<float>(now - mClinchExitTime) / .55f);
         }
+        // Diagnostics only: compare the authored contest pose without any fit.
+        if (std::getenv("BRUTAL_CLINCH_FIT_DIAGNOSTICS_OFF"))
+            correction = {};
         audit.correction = correction;
-        if (correction.length2() < 1e-8f && !audit.active)
+        if (correction.length2() < 1e-8f && !audit.active && polearmExit <= 0.f)
             return;
 
         const auto cameraBefore = getBoneWorldMatrix("Camera");
@@ -242,22 +306,114 @@ namespace MWRender
             clavicleNode("Bip01 L Clavicle"), clavicleNode("Bip01 R Clavicle") };
         if (!clavicles[0] || !clavicles[1])
             return;
-        for (auto* clavicle : clavicles)
+        // The fit shifts both clavicles rigidly. It must never bring the arms' own
+        // shoulder ends into the first-person view (a sloped stair, a spear held
+        // wide): shorten the shift until no more of the shoulders is on screen
+        // than in the authored pose.
+        audit.exposureScale = 1.f;
+        const bool pairedGrip = hasPairedViewmodel() || polearm;
+        if (auto* camera = world->getCamera(); camera && !pairedGrip)
         {
-            auto paths = clavicle->getParentalNodePaths();
-            if (paths.empty())
+            const osg::Matrixf view = camera->getViewMatrix();
+            double fov = mFirstPersonFieldOfView, aspect = 1., near = 1., far = 8192.;
+            camera->getProjectionMatrix().getPerspective(fov, aspect, near, far);
+            const float tanY = std::tan(osg::DegreesToRadians(float(mFirstPersonFieldOfView)) * .5f) * 1.05f;
+            const float tanX = tanY * float(aspect);
+            std::vector<osg::Vec3f> points;
+            for (const char* side : { "Bip01 L ", "Bip01 R " })
             {
-                restoreTransientPose();
-                return;
+                const auto clavicle = getBoneWorldMatrix(std::string(side) + "Clavicle");
+                const auto upper = getBoneWorldMatrix(std::string(side) + "UpperArm");
+                const auto fore = getBoneWorldMatrix(std::string(side) + "Forearm");
+                if (!clavicle || !upper || !fore)
+                    continue;
+                for (float t : { .5f, 1.f })
+                    points.push_back(clavicle->getTrans() * (1.f - t) + upper->getTrans() * t);
+                for (float t : { .25f, .5f, .75f })
+                    points.push_back(upper->getTrans() * (1.f - t) + fore->getTrans() * t);
             }
-            paths.front().pop_back();
-            const osg::Matrixf parentInverse = osg::Matrixf::inverse(osg::computeLocalToWorld(paths.front()));
-            const osg::Matrixf source = clavicle->getMatrix();
-            mClinchSourcePose.emplace_back(clavicle, source);
-            osg::Matrixf fitted = source;
-            fitted.setTrans(source.getTrans() + osg::Matrixf::transform3x3(correction, parentInverse));
-            clavicle->setMatrix(fitted);
+            // Sleeves and pauldrons are thicker than the bones: test spheres, not points.
+            constexpr float radius = 7.f;
+            const float slackX = radius * std::sqrt(1.f + tanX * tanX), slackY = radius * std::sqrt(1.f + tanY * tanY);
+            const auto visible = [&](const osg::Vec3f& shift) {
+                int count = 0;
+                for (const auto& point : points)
+                {
+                    const osg::Vec3f v = (point + shift) * view;
+                    const float depth = -v.z();
+                    if (depth > float(near) - radius && std::abs(v.x()) < depth * tanX + slackX
+                        && std::abs(v.y()) < depth * tanY + slackY)
+                        ++count;
+                }
+                return count;
+            };
+            const int authored = visible(osg::Vec3f());
+            float scale = 1.f;
+            while (scale > 0.f && visible(correction * scale) > authored)
+                scale = std::max(0.f, scale - .125f);
+            audit.exposureScale = scale;
+            correction *= scale;
+            audit.correction = correction;
         }
+        if (pairedGrip)
+        {
+            std::array<GripArm, 2> arms;
+            osg::Matrixf fitted;
+            const auto local = [](osg::MatrixTransform* bone) { return osg::Matrixf(bone->getMatrix()); };
+            const float yaw = mPtr.getRefData().getPosition().rot[2];
+            // The high polearm grip brings the dominant elbow into view at
+            // the side. The close grip needs the same help on the support arm.
+            GripArmLimits limits;
+            limits.clavicleTurn = osg::DegreesToRadians(polearm ? 25.f : 33.f);
+            auto& elbow = limits.elbows[polearm ? 0 : 1];
+            elbow.guide.set(std::sin(yaw), std::cos(yaw), polearm ? -.4f : .6f);
+            elbow.turn = osg::DegreesToRadians(polearm ? 55.f : 42.f) * audit.weight;
+            if (polearmExit > 0.f)
+            {
+                // The release folds the dominant arm back toward the camera.
+                // Support its elbow longer than the fading blade correction.
+                elbow.guide -= osg::Vec3f(std::cos(yaw), -std::sin(yaw), 0.f) * (.35f * polearmExit);
+                elbow.turn = osg::DegreesToRadians(72.f) * polearmExit;
+            }
+            if (!solveSharedGripArms(
+                    getNodeMap(), osg::Matrixf::translate(correction), {}, local, arms, fitted, limits))
+                return;
+            for (const auto& arm : arms)
+            {
+                if (arm.clavicle)
+                {
+                    mClinchSourcePose.emplace_back(arm.clavicle, arm.clavicleSource);
+                    arm.clavicle->setMatrix(arm.clavicleResult);
+                }
+                for (std::size_t joint = 0; joint < arm.bones.size(); ++joint)
+                {
+                    mClinchSourcePose.emplace_back(arm.bones[joint], arm.source[joint]);
+                    arm.bones[joint]->setMatrix(arm.result[joint]);
+                }
+            }
+            audit.correction = fitted.getTrans();
+            if (contest)
+                mClinchLastCorrection = audit.correction;
+        }
+        else
+            for (auto* clavicle : clavicles)
+            {
+                auto paths = clavicle->getParentalNodePaths();
+                if (paths.empty())
+                {
+                    restoreTransientPose();
+                    return;
+                }
+                paths.front().pop_back();
+                const osg::Matrixf parentInverse = osg::Matrixf::inverse(osg::computeLocalToWorld(paths.front()));
+                const osg::Matrixf source = clavicle->getMatrix();
+                const auto wall = std::find_if(mSwordWallSourcePose.begin(), mSwordWallSourcePose.end(),
+                    [clavicle](const auto& entry) { return entry.first.get() == clavicle; });
+                mClinchSourcePose.emplace_back(clavicle, wall == mSwordWallSourcePose.end() ? source : wall->second);
+                osg::Matrixf fitted = source;
+                fitted.setTrans(source.getTrans() + osg::Matrixf::transform3x3(correction, parentInverse));
+                clavicle->setMatrix(fitted);
+            }
         if (mSkeleton)
             mSkeleton->markDirty();
         // Refresh skin bounds with the fitted transforms but do not invoke any

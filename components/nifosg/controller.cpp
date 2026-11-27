@@ -200,23 +200,21 @@ namespace NifOsg
 
     KeyframeController::KfTransform KeyframeController::getCurrentTransformation(osg::NodeVisitor* nv)
     {
+        return hasInput() ? sampleTransformation(getInputValue(nv)) : KfTransform{};
+    }
+
+    KeyframeController::KfTransform KeyframeController::sampleTransformation(float time) const
+    {
         KfTransform out;
+        if (!mRotations.empty())
+            out.mRotation = mRotations.interpKey(time);
+        else if (!mXRotations.empty() || !mYRotations.empty() || !mZRotations.empty())
+            out.mRotation = getXYZRotation(time);
 
-        if (hasInput())
-        {
-            float time = getInputValue(nv);
-
-            if (!mRotations.empty())
-                out.mRotation = mRotations.interpKey(time);
-            else if (!mXRotations.empty() || !mYRotations.empty() || !mZRotations.empty())
-                out.mRotation = getXYZRotation(time);
-
-            if (!mTranslations.empty())
-                out.mTranslation = mTranslations.interpKey(time);
-
-            if (!mScales.empty())
-                out.mScale = mScales.interpKey(time);
-        }
+        if (!mTranslations.empty())
+            out.mTranslation = mTranslations.interpKey(time);
+        if (!mScales.empty())
+            out.mScale = mScales.interpKey(time);
 
         return out;
     }

@@ -16,6 +16,7 @@
 #include <variant>
 
 #include <BulletCollision/BroadphaseCollision/btDbvtBroadphase.h>
+#include <BulletCollision/CollisionShapes/btBoxShape.h>
 #include <BulletCollision/CollisionShapes/btCollisionShape.h>
 #include <LinearMath/btThreads.h>
 
@@ -27,6 +28,7 @@
 #include <components/settings/values.hpp>
 
 #include "../mwmechanics/actorutil.hpp"
+#include "../mwmechanics/combat.hpp"
 #include "../mwmechanics/creaturestats.hpp"
 
 #include "../mwrender/bulletdebugdraw.hpp"
@@ -797,6 +799,10 @@ namespace MWPhysics
             mDynamicTransforms.emplace(body, DynamicTransformHistory(body->getWorldTransform()));
         }
         object->applyDynamicImpulse(impulse, mass);
+        const auto& item = object->getPtr();
+        if (MWMechanics::isMissileItem(item) && !item.getRefData().getReleasedEquipment())
+            if (const auto* body = btRigidBody::upcast(object->getCollisionObject()))
+                mSettlingMissiles.insert_or_assign(body, MissileRest{ body->getWorldTransform() });
     }
 
     namespace
@@ -824,6 +830,44 @@ namespace MWPhysics
             if (auto* proxy = item->getBroadphaseHandle())
                 world.getBroadphase()->getOverlappingPairCache()->cleanProxyFromPairs(proxy, world.getDispatcher());
             item->activate(true);
+        }
+    }
+
+    void PhysicsTaskScheduler::keepDynamicObjectsAboveFloorUnsafe(
+        const std::vector<std::pair<btRigidBody*, btTransform>>& before)
+    {
+        // Only fixed world geometry: static meshes and terrain, not movable bodies, actors or doors.
+        struct StaticFloor final : btCollisionWorld::ClosestRayResultCallback
+        {
+            using ClosestRayResultCallback::ClosestRayResultCallback;
+            bool needsCollision(btBroadphaseProxy* proxy) const override
+            {
+                if (!(proxy->m_collisionFilterGroup & (CollisionType_World | CollisionType_HeightMap))
+                    || (proxy->m_collisionFilterGroup & (CollisionType_Dynamic | CollisionType_Actor)))
+                    return false;
+                const auto* object = static_cast<const btCollisionObject*>(proxy->m_clientObject);
+                const auto* body = btRigidBody::upcast(object);
+                return !(body && body->getInvMass() > 0.f);
+            }
+        };
+        for (const auto& [body, previous] : before)
+        {
+            const btVector3 from = previous.getOrigin();
+            const btVector3 to = body->getWorldTransform().getOrigin();
+            if (to.z() >= from.z())
+                continue;
+            StaticFloor ray(from, to);
+            mCollisionWorld->rayTest(from, to, ray);
+            if (!ray.hasHit() || ray.m_hitNormalWorld.z() < .5f)
+                continue;
+            // The pose before this step was above the floor. The item has met the floor, so it keeps
+            // no motion: nothing is added, and a resting item still comes to sleep.
+            body->setWorldTransform(previous);
+            body->setInterpolationWorldTransform(previous);
+            body->setLinearVelocity(btVector3(0, 0, 0));
+            body->setInterpolationLinearVelocity(btVector3(0, 0, 0));
+            body->setAngularVelocity(btVector3(0, 0, 0));
+            body->setInterpolationAngularVelocity(btVector3(0, 0, 0));
         }
     }
 
@@ -868,10 +912,19 @@ namespace MWPhysics
                 throw std::runtime_error("Non-finite released equipment motion");
         if (velocity.length2() > 2000.f * 2000.f || omega.length2() > 200.f * 200.f)
             throw std::runtime_error("Released equipment motion exceeds numeric bound");
-        body->setLinearVelocity(velocity);
-        body->setAngularVelocity(omega);
-        body->setInterpolationLinearVelocity(velocity);
-        body->setInterpolationAngularVelocity(omega);
+        // A hand knocked down mid-swing moves at up to ~1200 units/s and 24 rad/s; at that speed a
+        // dropped sword flew over the arena wall. It keeps its direction at a few metres' flight.
+        constexpr btScalar maxSpin = 12.f, maxSpeed = 400.f;
+        btVector3 spin = omega;
+        if (spin.length() > maxSpin)
+            spin *= maxSpin / spin.length();
+        btVector3 launch = Misc::Convert::toBullet(linear) + spin.cross(offset);
+        if (launch.length() > maxSpeed)
+            launch *= maxSpeed / launch.length();
+        body->setLinearVelocity(launch);
+        body->setAngularVelocity(spin);
+        body->setInterpolationLinearVelocity(launch);
+        body->setInterpolationAngularVelocity(spin);
         body->activate(true);
         mReleasedGripPairs.reserve(mReleasedGripPairs.size() + gripBodies.size());
         for (auto* grip : gripBodies)
@@ -913,6 +966,580 @@ namespace MWPhysics
             }
             else
                 ++it;
+    }
+
+    namespace
+    {
+        constexpr int sGrabHeldGroup = CollisionType_World | CollisionType_Dynamic;
+        constexpr int sGrabHeldMask = CollisionType_World | CollisionType_Dynamic | CollisionType_Door
+            | CollisionType_HeightMap | CollisionType_Projectile;
+        constexpr int sGrabNormalMask = sGrabHeldMask | CollisionType_Actor;
+        constexpr int sRagdollMask = CollisionType_World | CollisionType_Door | CollisionType_HeightMap
+            | CollisionType_Dynamic;
+
+        void setGrabCollisionFilter(btDiscreteDynamicsWorld* world, btRigidBody* body, int group, int mask)
+        {
+            if (!world || !body)
+                return;
+            if (body->getBroadphaseProxy())
+                world->removeRigidBody(body);
+            world->addRigidBody(body, group, mask);
+        }
+
+        void restoreGrabDynamics(btDiscreteDynamicsWorld* world, btRigidBody* body, float mass, bool ragdoll)
+        {
+            btVector3 inertia(0, 0, 0);
+            body->getCollisionShape()->calculateLocalInertia(mass, inertia);
+            body->setMassProps(mass, inertia);
+            body->updateInertiaTensor();
+            body->setCollisionFlags(body->getCollisionFlags() & ~btCollisionObject::CF_KINEMATIC_OBJECT);
+            setGrabCollisionFilter(world, body, ragdoll ? CollisionType_Dynamic : sGrabHeldGroup,
+                ragdoll ? sRagdollMask : sGrabHeldMask);
+        }
+
+        struct FlyingActorContactCallback final : btCollisionWorld::ContactResultCallback
+        {
+            const btCollisionObject* mSelf;
+            const btCollisionObject* mOwner;
+            const btCollisionObject* mHitActor = nullptr;
+            btVector3 mHitPoint{ 0, 0, 0 };
+            btVector3 mHitNormal{ 0, 0, 1 };
+            btScalar mBestDistance = BT_LARGE_FLOAT;
+
+            FlyingActorContactCallback(const btCollisionObject* self, const btCollisionObject* owner)
+                : mSelf(self)
+                , mOwner(owner)
+            {
+                m_collisionFilterGroup = CollisionType_World | CollisionType_Dynamic;
+                m_collisionFilterMask = CollisionType_Actor;
+            }
+
+            bool needsCollision(btBroadphaseProxy* proxy0) const override
+            {
+                if (!btCollisionWorld::ContactResultCallback::needsCollision(proxy0))
+                    return false;
+                const auto* obj = static_cast<const btCollisionObject*>(proxy0->m_clientObject);
+                return obj && obj != mSelf && obj != mOwner
+                    && (proxy0->m_collisionFilterGroup & CollisionType_Actor) != 0;
+            }
+
+            btScalar addSingleResult(btManifoldPoint& cp, const btCollisionObjectWrapper* colObj0Wrap, int, int,
+                const btCollisionObjectWrapper* colObj1Wrap, int, int) override
+            {
+                if (cp.getDistance() > 0.f)
+                    return 1.f;
+                const bool selfIs0 = colObj0Wrap->getCollisionObject() == mSelf;
+                const auto* other = selfIs0 ? colObj1Wrap->getCollisionObject() : colObj0Wrap->getCollisionObject();
+                if (!other || other == mSelf || other == mOwner)
+                    return 1.f;
+                if (cp.getDistance() < mBestDistance)
+                {
+                    mBestDistance = cp.getDistance();
+                    mHitActor = other;
+                    mHitPoint = selfIs0 ? cp.getPositionWorldOnB() : cp.getPositionWorldOnA();
+                    mHitNormal = selfIs0 ? cp.m_normalWorldOnB : -cp.m_normalWorldOnB;
+                }
+                return 1.f;
+            }
+        };
+
+        struct FlyingActorSweepCallback final : btCollisionWorld::ClosestConvexResultCallback
+        {
+            const btCollisionObject* mSelf;
+            const btCollisionObject* mOwner;
+
+            FlyingActorSweepCallback(const btVector3& from, const btVector3& to, const btCollisionObject* self,
+                const btCollisionObject* owner)
+                : ClosestConvexResultCallback(from, to)
+                , mSelf(self)
+                , mOwner(owner)
+            {
+                m_collisionFilterGroup = CollisionType_World | CollisionType_Dynamic;
+                m_collisionFilterMask = CollisionType_Actor;
+            }
+
+            bool needsCollision(btBroadphaseProxy* proxy0) const override
+            {
+                if (!ClosestConvexResultCallback::needsCollision(proxy0))
+                    return false;
+                const auto* obj = static_cast<const btCollisionObject*>(proxy0->m_clientObject);
+                return obj && obj != mSelf && obj != mOwner
+                    && (proxy0->m_collisionFilterGroup & CollisionType_Actor) != 0;
+            }
+        };
+    }
+
+    void PhysicsTaskScheduler::holdObject(const std::shared_ptr<Object>& object,
+        const std::vector<osg::Vec3f>& vertices, float mass, const btCollisionObject* owner)
+    {
+        if (!object)
+            return;
+        MaybeExclusiveLock lock(mCollisionWorldMutex, mLockingPolicy);
+        auto* world = static_cast<btDiscreteDynamicsWorld*>(mCollisionWorld);
+        if (!world || hasHeldObject())
+            return;
+
+        if (object->commitPositionChange())
+            resetDynamicObjectHistory(*object);
+        btCollisionObject* oldCol = object->getCollisionObject();
+        if (oldCol && !btRigidBody::upcast(oldCol))
+        {
+            clearObjectTrackingUnsafe(oldCol);
+            mCollisionObjects.erase(oldCol);
+            world->removeCollisionObject(oldCol);
+        }
+        object->makeGrabbableDynamic(mass, vertices);
+        auto* body = btRigidBody::upcast(object->getCollisionObject());
+        if (!body)
+            return;
+
+        mCollisionObjects.insert(body);
+        beginHoldUnsafe(body, owner);
+
+        const bool tracked = std::any_of(mDynamicObjects.begin(), mDynamicObjects.end(), [&](const auto& existing) {
+            return !existing.owner_before(object) && !object.owner_before(existing);
+        });
+        if (!tracked)
+            mDynamicObjects.push_back(object);
+        mDynamicTransforms.insert_or_assign(body, DynamicTransformHistory(body->getWorldTransform()));
+        resetDynamicObjectHistory(*object);
+    }
+
+    float PhysicsTaskScheduler::holdDetachedFragment(const std::vector<btRigidBody*>& bodies, btTypedConstraint* joint,
+        const btCollisionObject* owner, osg::Vec3f& minimum, osg::Vec3f& maximum, osg::Matrixf& pickupTransform)
+    {
+        MaybeExclusiveLock lock(mCollisionWorldMutex, mLockingPolicy);
+        if (hasHeldObject() || bodies.empty()
+            || std::any_of(bodies.begin(), bodies.end(), [&](const auto* body) {
+                return !mRagdollTransforms.contains(body) || body->getInvMass() <= 0.f;
+            }))
+            return 0.f;
+
+        const auto& root = bodies.front()->getWorldTransform();
+        pickupTransform.makeRotate(Misc::Convert::toOsg(root.getRotation()));
+        pickupTransform.setTrans(Misc::Convert::toOsg(root.getOrigin()));
+        const auto rootInverse = root.inverse();
+        std::vector<HeldState::Part> fragment;
+        btVector3 lower(BT_LARGE_FLOAT, BT_LARGE_FLOAT, BT_LARGE_FLOAT), upper = -lower;
+        float mass = 0.f;
+        for (auto* body : bodies)
+        {
+            const float partMass = 1.f / body->getInvMass();
+            const auto relative = rootInverse * body->getWorldTransform();
+            btVector3 lo, hi;
+            body->getCollisionShape()->getAabb(relative, lo, hi);
+            lower.setMin(lo);
+            upper.setMax(hi);
+            fragment.push_back({ body, relative, partMass });
+            mass += partMass;
+        }
+        minimum = Misc::Convert::toOsg(lower);
+        maximum = Misc::Convert::toOsg(upper);
+
+        // The elbow's current bend is kept as part of the grip until release.
+        if (joint)
+            static_cast<btDiscreteDynamicsWorld*>(mCollisionWorld)->removeConstraint(joint);
+        for (auto* body : bodies)
+            makeKinematicUnsafe(body);
+        std::lock_guard holdLock(mHoldStateMutex);
+        mHeldState = { bodies.front(), owner, std::move(fragment), joint };
+        return mass;
+    }
+
+    void PhysicsTaskScheduler::makeKinematicUnsafe(btRigidBody* body)
+    {
+        auto* world = static_cast<btDiscreteDynamicsWorld*>(mCollisionWorld);
+        if (const auto timer = mActorIgnoreTimers.find(body); timer != mActorIgnoreTimers.end())
+        {
+            if (timer->second.owner && mCollisionObjects.contains(timer->second.owner))
+                body->setIgnoreCollisionCheck(timer->second.owner, false);
+            mActorIgnoreTimers.erase(timer);
+        }
+        std::erase_if(mFlyingObjects, [body](const FlyingObjectState& f) {
+            return f.body == body || f.secondBody == body;
+        });
+        body->setMassProps(0, btVector3(0, 0, 0));
+        body->setCollisionFlags((body->getCollisionFlags() & ~btCollisionObject::CF_STATIC_OBJECT)
+            | btCollisionObject::CF_KINEMATIC_OBJECT);
+        setGrabCollisionFilter(world, body, mRagdollTransforms.contains(body) ? CollisionType_Dynamic : sGrabHeldGroup, 0);
+        body->setGravity(btVector3(0, 0, 0));
+        body->setLinearVelocity(btVector3(0, 0, 0));
+        body->setAngularVelocity(btVector3(0, 0, 0));
+        body->clearForces();
+        body->forceActivationState(DISABLE_DEACTIVATION);
+    }
+
+    void PhysicsTaskScheduler::beginHoldUnsafe(btRigidBody* body, const btCollisionObject* owner)
+    {
+        makeKinematicUnsafe(body);
+        if (owner)
+            body->setIgnoreCollisionCheck(owner, true);
+        std::lock_guard holdLock(mHoldStateMutex);
+        mHeldState = { body, owner, {}, nullptr };
+    }
+
+    void PhysicsTaskScheduler::setHeldPose(const osg::Vec3f& center, const osg::Quat& rotation, const Object* object)
+    {
+        MaybeExclusiveLock lock(mCollisionWorldMutex, mLockingPolicy);
+        std::lock_guard holdLock(mHoldStateMutex);
+        auto* body = mHeldState.body;
+        if (!body)
+            return;
+        const btTransform pose(Misc::Convert::toBullet(rotation), Misc::Convert::toBullet(center));
+        const auto place = [&](btRigidBody* part, const btTransform& target) {
+            part->setCenterOfMassTransform(target);
+            part->setInterpolationWorldTransform(target);
+            part->setLinearVelocity(btVector3(0, 0, 0));
+            part->setAngularVelocity(btVector3(0, 0, 0));
+            mCollisionWorld->updateSingleAabb(part);
+        };
+        if (object)
+        {
+            place(body, pose);
+            resetDynamicObjectHistory(*object);
+        }
+        for (const auto& part : mHeldState.fragment)
+        {
+            const btTransform target = pose * part.relative;
+            place(part.body, target);
+            mRagdollTransforms.at(part.body) = { target, target };
+        }
+    }
+
+    float PhysicsTaskScheduler::sweepHeldPose(const osg::Vec3f& from, const osg::Vec3f& to,
+        const osg::Quat& rotation) const
+    {
+        MaybeSharedLock lock(mCollisionWorldMutex, mLockingPolicy);
+        std::lock_guard holdLock(mHoldStateMutex);
+        if (!mHeldState.body)
+            return 1.f;
+        const auto start = Misc::Convert::toBullet(from);
+        const auto end = Misc::Convert::toBullet(to);
+        const auto orientation = Misc::Convert::toBullet(rotation);
+        btCollisionWorld::ClosestConvexResultCallback hit(start, end);
+        hit.m_collisionFilterGroup = CollisionType_Dynamic;
+        hit.m_collisionFilterMask = CollisionType_World | CollisionType_Door | CollisionType_HeightMap;
+        const auto sweep = [&](const btRigidBody* body, const btTransform& relative) {
+            const auto* shape = body->getCollisionShape();
+            if (shape->isConvex())
+                mCollisionWorld->convexSweepTest(static_cast<const btConvexShape*>(shape),
+                    btTransform(orientation, start) * relative, btTransform(orientation, end) * relative, hit);
+        };
+        if (mHeldState.fragment.empty())
+            sweep(mHeldState.body, btTransform::getIdentity());
+        for (const auto& part : mHeldState.fragment)
+            sweep(part.body, part.relative);
+        return hit.m_closestHitFraction;
+    }
+
+    bool PhysicsTaskScheduler::releaseHeldObject(const btCollisionObject* owner, const osg::Vec3f& linearVelocity,
+        const osg::Vec3f& angularVelocity, bool thrown, bool adrenaline, float mass)
+    {
+        MaybeExclusiveLock lock(mCollisionWorldMutex, mLockingPolicy);
+        auto* world = static_cast<btDiscreteDynamicsWorld*>(mCollisionWorld);
+        HeldState held;
+        {
+            std::lock_guard holdLock(mHoldStateMutex);
+            held = std::exchange(mHeldState, {});
+        }
+        auto* body = held.body;
+        const auto* heldOwner = held.owner ? held.owner : owner;
+        if (!world || !body || !body->isInWorld())
+            return false;
+        const auto angular = Misc::Convert::toBullet(angularVelocity);
+        const auto root = body->getWorldTransform().getOrigin();
+        const auto launch = [&](btRigidBody* part, float partMass, bool ragdoll) {
+            restoreGrabDynamics(world, part, partMass, ragdoll);
+            part->forceActivationState(ACTIVE_TAG);
+            part->setGravity(world->getGravity());
+            if (!ragdoll)
+                part->setDamping(.05f, .15f);
+            const auto linear = Misc::Convert::toBullet(linearVelocity)
+                + angular.cross(part->getWorldTransform().getOrigin() - root);
+            part->setLinearVelocity(linear);
+            part->setInterpolationLinearVelocity(linear);
+            part->setAngularVelocity(angular);
+            part->setInterpolationAngularVelocity(angular);
+            invalidateReleasedPairs(*mCollisionWorld, part);
+        };
+        if (held.fragment.empty())
+            launch(body, mass, false);
+        for (const auto& part : held.fragment)
+            launch(part.body, part.mass, true);
+        if (held.joint)
+            world->addConstraint(held.joint, false);
+
+        if (thrown)
+        {
+            FlyingObjectState flying{ body, heldOwner, 0.f, mass, adrenaline, root };
+            if (held.fragment.size() > 1)
+            {
+                flying.secondBody = held.fragment[1].body;
+                flying.secondPrevOrigin = flying.secondBody->getWorldTransform().getOrigin();
+            }
+            mFlyingObjects.push_back(flying);
+            mActorIgnoreTimers[body] = ActorIgnoreEntry{ 4.2f, heldOwner };
+        }
+        else if (held.fragment.empty())
+        {
+            mActorIgnoreTimers[body] = ActorIgnoreEntry{ .35f, heldOwner };
+        }
+        return true;
+    }
+
+    bool PhysicsTaskScheduler::hasHeldObject() const
+    {
+        std::lock_guard holdLock(mHoldStateMutex);
+        return mHeldState.body != nullptr;
+    }
+
+    osg::Vec3f PhysicsTaskScheduler::getHeldCenter() const
+    {
+        MaybeSharedLock lock(mCollisionWorldMutex, mLockingPolicy);
+        std::lock_guard holdLock(mHoldStateMutex);
+        if (!mHeldState.body)
+            return osg::Vec3f();
+        return Misc::Convert::toOsg(mHeldState.body->getWorldTransform().getOrigin());
+    }
+
+    std::vector<PhysicsTaskScheduler::FlyingObjectHit> PhysicsTaskScheduler::takeFlyingObjectHits()
+    {
+        std::lock_guard lock(mImpactQueueMutex);
+        return std::exchange(mFlyingHits, {});
+    }
+
+    std::vector<PhysicsTaskScheduler::DynamicObjectImpact> PhysicsTaskScheduler::takeDynamicImpacts()
+    {
+        std::lock_guard lock(mImpactQueueMutex);
+        return std::exchange(mDynamicImpacts, {});
+    }
+
+    void PhysicsTaskScheduler::clearObjectTrackingUnsafe(btCollisionObject* collisionObject)
+    {
+        if (!collisionObject)
+            return;
+        invalidateReleasedPairs(*mCollisionWorld, collisionObject);
+        {
+            std::lock_guard holdLock(mHoldStateMutex);
+            if (mHeldState.body == collisionObject)
+                mHeldState = {};
+            else if (mHeldState.owner == collisionObject)
+                mHeldState.owner = nullptr;
+        }
+        std::erase_if(mFlyingObjects, [collisionObject](FlyingObjectState& f) {
+            if (f.owner == collisionObject)
+                f.owner = nullptr;
+            return f.body == collisionObject || f.secondBody == collisionObject;
+        });
+        if (auto* body = btRigidBody::upcast(collisionObject))
+        {
+            mActorIgnoreTimers.erase(body);
+            mImpactSoundCooldowns.erase(body);
+            mSettlingMissiles.erase(body);
+        }
+        for (auto& [rb, entry] : mActorIgnoreTimers)
+            if (entry.owner == collisionObject)
+                entry.owner = nullptr;
+    }
+
+    void PhysicsTaskScheduler::updateFlyingObjectsUnsafe(btScalar dt)
+    {
+        auto* world = static_cast<btDiscreteDynamicsWorld*>(mCollisionWorld);
+        btRigidBody* heldBody = nullptr;
+        {
+            std::lock_guard holdLock(mHoldStateMutex);
+            heldBody = mHeldState.body;
+        }
+
+        for (auto timerIt = mActorIgnoreTimers.begin(); timerIt != mActorIgnoreTimers.end();)
+        {
+            if (timerIt->first == heldBody)
+            {
+                ++timerIt;
+                continue;
+            }
+            timerIt->second.timer -= dt;
+            if (timerIt->second.timer <= 0.f)
+            {
+                auto* body = const_cast<btRigidBody*>(timerIt->first);
+                const bool stillFlying = std::any_of(mFlyingObjects.begin(), mFlyingObjects.end(),
+                    [body](const FlyingObjectState& f) { return f.body == body; });
+                if (!stillFlying && world && body && body->isInWorld())
+                {
+                    if (!mRagdollTransforms.contains(body))
+                    {
+                        if (timerIt->second.owner && mCollisionObjects.contains(timerIt->second.owner))
+                            body->setIgnoreCollisionCheck(timerIt->second.owner, false);
+                        setGrabCollisionFilter(world, body, sGrabHeldGroup, sGrabNormalMask);
+                    }
+                    invalidateReleasedPairs(*mCollisionWorld, body);
+                    body->activate(true);
+                }
+                timerIt = mActorIgnoreTimers.erase(timerIt);
+            }
+            else
+                ++timerIt;
+        }
+
+        for (auto it = mFlyingObjects.begin(); it != mFlyingObjects.end();)
+        {
+            btRigidBody* body = it->body;
+            if (!body || !body->isInWorld())
+            {
+                it = mFlyingObjects.erase(it);
+                continue;
+            }
+            it->age += dt;
+            const btTransform curTransform = body->getWorldTransform();
+            const btVector3 curOrigin = curTransform.getOrigin();
+            const btVector3 velocity = body->getLinearVelocity();
+            const btScalar speed = velocity.length();
+
+            const btCollisionObject* hitActor = nullptr;
+            btVector3 hitPos = curOrigin;
+            btVector3 hitNormal(0, 0, 1);
+
+            const auto findContact = [&](btRigidBody* part, const btVector3& previous) {
+                const btTransform current = part->getWorldTransform();
+                if ((current.getOrigin() - previous).length2() > btScalar(1e-4))
+                {
+                    const btCollisionShape* rawShape = part->getCollisionShape();
+                    const btTransform from(current.getRotation(), previous);
+                    FlyingActorSweepCallback sweep(previous, current.getOrigin(), part, it->owner);
+                    if (rawShape && rawShape->isConvex())
+                        mCollisionWorld->convexSweepTest(static_cast<const btConvexShape*>(rawShape), from, current, sweep);
+                    else
+                    {
+                        btBoxShape fallbackBox(btVector3(4.f, 4.f, 4.f));
+                        mCollisionWorld->convexSweepTest(&fallbackBox, from, current, sweep);
+                    }
+                    if (sweep.hasHit())
+                    {
+                        hitActor = sweep.m_hitCollisionObject;
+                        hitPos = sweep.m_hitPointWorld;
+                        hitNormal = sweep.m_hitNormalWorld;
+                        return;
+                    }
+                }
+                FlyingActorContactCallback contact(part, it->owner);
+                ContactTestWrapper::contactTest(mCollisionWorld, part, contact);
+                if (contact.mHitActor)
+                {
+                    hitActor = contact.mHitActor;
+                    hitPos = contact.mHitPoint;
+                    hitNormal = contact.mHitNormal;
+                }
+            };
+            findContact(body, it->prevOrigin);
+            if (!hitActor && it->secondBody)
+                findContact(it->secondBody, it->secondPrevOrigin);
+
+            if (hitActor)
+            {
+                {
+                    std::lock_guard qLock(mImpactQueueMutex);
+                    mFlyingHits.push_back(FlyingObjectHit{
+                        body, hitActor, it->owner,
+                        Misc::Convert::toOsg(hitPos),
+                        Misc::Convert::toOsg(velocity),
+                        Misc::Convert::toOsg(hitNormal),
+                        it->mass, it->adrenaline });
+                }
+                btVector3 bounce = velocity * btScalar(0.02) + hitNormal * btScalar(28.f) + btVector3(0, 0, 18.f);
+                body->setLinearVelocity(bounce);
+                body->setAngularVelocity(body->getAngularVelocity() * btScalar(0.25) + btVector3(1.5f, -1.2f, 1.f));
+                if (it->secondBody)
+                {
+                    it->secondBody->setLinearVelocity(bounce);
+                    it->secondBody->setAngularVelocity(body->getAngularVelocity());
+                }
+                mActorIgnoreTimers[body] = ActorIgnoreEntry{ .25f, it->owner };
+                it = mFlyingObjects.erase(it);
+                continue;
+            }
+
+            it->prevOrigin = curOrigin;
+            if (it->secondBody)
+                it->secondPrevOrigin = it->secondBody->getWorldTransform().getOrigin();
+            if (it->age > 4.0f || (it->age > .18f && speed < 65.f) || !body->isActive())
+            {
+                mActorIgnoreTimers[body] = ActorIgnoreEntry{ .1f, it->owner };
+                it = mFlyingObjects.erase(it);
+                continue;
+            }
+            ++it;
+        }
+    }
+
+    void PhysicsTaskScheduler::collectDynamicImpactsUnsafe(btScalar dt)
+    {
+        for (auto cdIt = mImpactSoundCooldowns.begin(); cdIt != mImpactSoundCooldowns.end();)
+        {
+            cdIt->second -= dt;
+            if (cdIt->second <= 0.f)
+                cdIt = mImpactSoundCooldowns.erase(cdIt);
+            else
+                ++cdIt;
+        }
+        auto* dispatcher = mCollisionWorld ? mCollisionWorld->getDispatcher() : nullptr;
+        if (!dispatcher)
+            return;
+        btRigidBody* heldBody = nullptr;
+        {
+            std::lock_guard holdLock(mHoldStateMutex);
+            heldBody = mHeldState.body;
+        }
+        const int numManifolds = dispatcher->getNumManifolds();
+        std::vector<DynamicObjectImpact> impacts;
+        for (int i = 0; i < numManifolds; ++i)
+        {
+            const auto* manifold = dispatcher->getManifoldByIndexInternal(i);
+            const auto* b0 = manifold->getBody0();
+            const auto* b1 = manifold->getBody1();
+            const auto* r0 = btRigidBody::upcast(b0);
+            const auto* r1 = btRigidBody::upcast(b1);
+            const bool track0 = r0 && r0 != heldBody && mDynamicTransforms.contains(r0);
+            const bool track1 = r1 && r1 != heldBody && mDynamicTransforms.contains(r1);
+            if (!track0 && !track1)
+                continue;
+            const auto* dyn = track0 ? r0 : r1;
+            if (mImpactSoundCooldowns.contains(dyn))
+                continue;
+            const auto* other = track0 ? b1 : b0;
+            if (!other || !other->getBroadphaseHandle()
+                || (other->getBroadphaseHandle()->m_collisionFilterGroup & CollisionType_Actor) != 0)
+                continue;
+            const btScalar invMass = dyn->getInvMass();
+            if (invMass <= 0.f)
+                continue;
+            btScalar maxImpulse = 0.f;
+            btVector3 bestPos(0, 0, 0);
+            btVector3 bestNorm(0, 0, 1);
+            for (int c = 0; c < manifold->getNumContacts(); ++c)
+            {
+                const auto& pt = manifold->getContactPoint(c);
+                if (pt.getDistance() <= 0.1f && pt.getAppliedImpulse() > maxImpulse)
+                {
+                    maxImpulse = pt.getAppliedImpulse();
+                    bestPos = track0 ? pt.getPositionWorldOnA() : pt.getPositionWorldOnB();
+                    bestNorm = track0 ? pt.m_normalWorldOnB : -pt.m_normalWorldOnB;
+                }
+            }
+            const float deltaSpeed = float(maxImpulse * invMass);
+            if (deltaSpeed >= 45.f)
+            {
+                mImpactSoundCooldowns[dyn] = .12f;
+                impacts.push_back(DynamicObjectImpact{
+                    dyn, Misc::Convert::toOsg(bestPos), Misc::Convert::toOsg(bestNorm), deltaSpeed });
+            }
+        }
+        if (!impacts.empty())
+        {
+            std::lock_guard qLock(mImpactQueueMutex);
+            const std::size_t budget = mDynamicImpacts.size() < 32 ? 32 - mDynamicImpacts.size() : 0;
+            const std::size_t count = std::min(impacts.size(), budget);
+            mDynamicImpacts.insert(mDynamicImpacts.end(), impacts.begin(), impacts.begin() + count);
+        }
     }
 
     std::vector<osg::Vec3f> PhysicsTaskScheduler::readReleasedObject(const std::shared_ptr<Object>& object) const
@@ -1254,8 +1881,7 @@ namespace MWPhysics
         mCollisionObjects.reserve(mCollisionObjects.size() + bodies.size());
         for (auto* body : bodies)
         {
-            world->addRigidBody(body, CollisionType_Dynamic,
-                CollisionType_World | CollisionType_Door | CollisionType_HeightMap | CollisionType_Dynamic);
+            world->addRigidBody(body, CollisionType_Dynamic, sRagdollMask);
             mCollisionObjects.insert(body);
             const auto transform = body->getWorldTransform();
             mRagdollTransforms.emplace(body, RagdollTransformHistory{ transform, transform });
@@ -1286,12 +1912,17 @@ namespace MWPhysics
                 world->getSolverInfo().m_solverMode = mRagdollBaselineSolverMode;
             }
         }
-        for (auto* constraint : constraints)
-            world->removeConstraint(constraint);
+        {
+            std::lock_guard holdLock(mHoldStateMutex);
+            for (auto* constraint : constraints)
+                if (constraint != mHeldState.joint)
+                    world->removeConstraint(constraint);
+        }
         for (auto* body : bodies)
         {
             forgetSuperKickObject(body);
             clearReleasedGripPairs(body);
+            clearObjectTrackingUnsafe(body);
             mRagdollTransforms.erase(body);
             mCollisionObjects.erase(body);
             world->removeRigidBody(body);
@@ -1661,6 +2292,7 @@ namespace MWPhysics
             auto* body = btRigidBody::upcast(object->getCollisionObject());
             if (body)
             {
+                clearObjectTrackingUnsafe(body);
                 clearReleasedGripPairs(body);
                 forgetSuperKickObject(body);
                 mCollisionObjects.erase(body);
@@ -1704,7 +2336,11 @@ namespace MWPhysics
                 const auto history = mDynamicTransforms.find(body);
                 if (history != mDynamicTransforms.end())
                 {
-                    DynamicObjectTransform snapshot{ object->getPtr(), {}, {}, false };
+                    const auto missile = mSettlingMissiles.find(body);
+                    const bool isMissile = missile != mSettlingMissiles.end();
+                    const bool settled = isMissile && !body->isStaticOrKinematicObject()
+                        && (body->getActivationState() == ISLAND_SLEEPING || missile->second.duration >= .45f);
+                    DynamicObjectTransform snapshot{ object->getPtr(), {}, {}, false, isMissile, settled };
                     if (object->takeDynamicTransforms(history->second.rendered(mRagdollInterpolation),
                             snapshot.authoritative, snapshot.rendered, snapshot.authoritativeChanged))
                         result.push_back(std::move(snapshot));
@@ -1720,6 +2356,7 @@ namespace MWPhysics
     void PhysicsTaskScheduler::removeCollisionObject(btCollisionObject* collisionObject)
     {
         MaybeExclusiveLock lock(mCollisionWorldMutex, mLockingPolicy);
+        clearObjectTrackingUnsafe(collisionObject);
         forgetSuperKickObject(collisionObject);
         clearReleasedGripPairs(collisionObject);
         mCollisionObjects.erase(collisionObject);
@@ -1948,19 +2585,41 @@ namespace MWPhysics
             // 1/60 s step solves their joints from too far apart: the elbows and neck opened
             // by up to 9 units. Step the dynamics world in quarters while any ragdoll exists.
             const int substeps = mRagdollTransforms.empty() ? 1 : 4;
+            const btScalar subDt = mPhysicsDt / substeps;
+            std::vector<std::pair<btRigidBody*, btTransform>> floorGuard;
+            floorGuard.reserve(mDynamicTransforms.size());
             for (int i = 0; i < substeps; ++i)
             {
                 updateReleasedGripPairs();
                 for (btActionInterface* action : mRagdollActions)
-                    static_cast<RagdollStepAction*>(action)->beforeStep(mPhysicsDt / substeps);
+                    static_cast<RagdollStepAction*>(action)->beforeStep(subDt);
                 beforeSuperKickStep();
-                static_cast<btDiscreteDynamicsWorld*>(mCollisionWorld)->stepSimulation(mPhysicsDt / substeps, 0);
-                afterSuperKickStep(mPhysicsDt / substeps);
+                floorGuard.clear();
+                for (const auto& [body, history] : mDynamicTransforms)
+                    if (body->isActive())
+                        floorGuard.emplace_back(const_cast<btRigidBody*>(body), body->getWorldTransform());
+                static_cast<btDiscreteDynamicsWorld*>(mCollisionWorld)->stepSimulation(subDt, 0);
+                keepDynamicObjectsAboveFloorUnsafe(floorGuard);
+                afterSuperKickStep(subDt);
+                updateFlyingObjectsUnsafe(subDt);
+                collectDynamicImpactsUnsafe(subDt);
             }
             for (auto& [body, history] : mRagdollTransforms)
                 history.current = body->getWorldTransform();
             for (auto& [body, history] : mDynamicTransforms)
                 history.advance(body->getWorldTransform());
+            for (auto& [body, rest] : mSettlingMissiles)
+            {
+                // Small props in a contact island can stay awake. Require a
+                // bounded pose over several completed physics steps, without
+                // counting a kinematic item the player is holding.
+                const auto& pose = body->getWorldTransform();
+                if (body->isStaticOrKinematicObject() || (pose.getOrigin() - rest.pose.getOrigin()).length2() > .64f
+                    || std::abs(pose.getRotation().dot(rest.pose.getRotation())) < .99965f)
+                    rest = { pose };
+                else
+                    rest.duration += mPhysicsDt;
+            }
             mRagdollInterpolation = std::clamp(mTimeAccum / mPhysicsDt + float(mRemainingSteps), 0.f, 1.f);
         }
         mNextJob.store(0, std::memory_order_release);

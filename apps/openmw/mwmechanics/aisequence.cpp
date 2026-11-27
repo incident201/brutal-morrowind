@@ -152,6 +152,15 @@ namespace MWMechanics
         return storage && storage->isFleeing();
     }
 
+    bool AiSequence::isBrutalFleeing() const
+    {
+        if (!isInCombat())
+            return false;
+
+        const AiCombatStorage* storage = mAiState.getPtr<AiCombatStorage>();
+        return storage && storage->isFleeing() && storage->mBrutalFleeing;
+    }
+
     bool AiSequence::isEngagedWithActor() const
     {
         if (!isInCombat())

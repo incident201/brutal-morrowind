@@ -6,6 +6,8 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace osgUtil
@@ -37,6 +39,8 @@ namespace SceneUtil
             osg::Node::NodeMask mask;
         };
 
+        using PatchId = std::uint64_t;
+
         explicit SurfaceDecals(std::size_t maxPatches = 24, std::size_t maxVerticesPerPatch = 3072);
         SurfaceDecals(const SurfaceDecals&) = delete;
         SurfaceDecals& operator=(const SurfaceDecals&) = delete;
@@ -44,12 +48,15 @@ namespace SceneUtil
         // StateSet and the objects it references must be treated as immutable
         // while attached, like ordinary shared renderer materials. Mutations
         // belong to scene update, never concurrent with cull traversal.
-        bool addPatch(const std::vector<Anchor>& vertices, osg::StateSet* state, osg::Node::NodeMask mask);
+        PatchId addPatch(const std::vector<Anchor>& vertices, osg::StateSet* state, osg::Node::NodeMask mask);
+        void removePatch(PatchId id);
+        void setPatchState(PatchId id, osg::StateSet* state);
         void clear();
 
         std::size_t patchCount() const { return mPatches.size(); }
         std::size_t vertexCount() const;
         std::size_t evictedPatchCount() const { return mEvicted; }
+        std::size_t evaluationCount() const { return mEvaluations; }
         const PatchData& getPatch(std::size_t index) const { return mPatches.at(index).data; }
 
         // Also usable when freezing a patch for a severed/released body part.
@@ -63,18 +70,36 @@ namespace SceneUtil
         void cull(const osg::Geometry& current, osgUtil::CullVisitor& visitor);
 
     private:
+        struct Source
+        {
+            const osg::Array* positions;
+            const osg::Array* normals;
+            unsigned int positionVersion;
+            unsigned int normalVersion;
+            osg::Geometry::AttributeBinding normalBinding;
+
+            bool operator==(const Source&) const = default;
+        };
+
+        struct Buffer
+        {
+            osg::ref_ptr<osg::Geometry> geometry;
+            std::optional<Source> source;
+            bool valid = false;
+        };
+
         struct Patch
         {
+            PatchId id;
             PatchData data;
-            std::array<osg::ref_ptr<osg::Geometry>, 2> geometry;
-            unsigned int lastTraversal = 0;
-            bool initialized = false;
-            bool valid = false;
+            std::array<Buffer, 2> buffers;
         };
 
         std::size_t mMaxPatches;
         std::size_t mMaxVerticesPerPatch;
         std::size_t mEvicted = 0;
+        std::size_t mEvaluations = 0;
+        PatchId mNextPatch = 1;
         std::vector<Patch> mPatches;
     };
 }

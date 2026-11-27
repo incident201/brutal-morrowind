@@ -27,6 +27,77 @@
 
 namespace
 {
+    struct BodyClearance
+    {
+        std::string_view start, end;
+        double radius;
+    };
+
+    // Keep the near plane clear of the posed body, including the space
+    // occupied by clothing over the limbs. The head itself is hidden.
+    constexpr BodyClearance sDeathBodyClearance[]{
+        { "Bip01 Neck", "Bip01 Head", 6. },
+        { "Bip01 Spine1", "Bip01 Neck", 12. },
+        { "Bip01 Pelvis", "Bip01 Spine1", 12. },
+        { "Bip01 L UpperArm", "Bip01 L Forearm", 8. },
+        { "Bip01 R UpperArm", "Bip01 R Forearm", 8. },
+        { "Bip01 L Forearm", "Bip01 L Hand", 8. },
+        { "Bip01 R Forearm", "Bip01 R Hand", 8. },
+        { "Bip01 L Thigh", "Bip01 L Calf", 8. },
+        { "Bip01 R Thigh", "Bip01 R Calf", 8. },
+        { "Bip01 L Calf", "Bip01 L Foot", 8. },
+        { "Bip01 R Calf", "Bip01 R Foot", 8. },
+    };
+
+    osg::Vec3d clearDeathBody(const MWRender::NpcAnimation& animation, const osg::Vec3d& eye,
+        const osg::Vec3d& up, double scale)
+    {
+        osg::Vec3d result = eye;
+        for (const auto& part : sDeathBodyClearance)
+        {
+            const auto start = animation.getBoneWorldMatrix(part.start);
+            const auto end = animation.getBoneWorldMatrix(part.end);
+            if (!start || !end)
+                continue;
+            const osg::Vec3d a(start->getTrans());
+            const osg::Vec3d axis = osg::Vec3d(end->getTrans()) - a;
+            const double along = std::clamp(((result - a) * axis) / std::max(axis.length2(), .001), 0., 1.);
+            osg::Vec3d normal = result - (a + axis * along);
+            const double distance = normal.normalize();
+            const double clearance = part.radius * scale + 2.;
+            if (distance < clearance)
+                result += (distance > .001 ? normal : up) * (clearance - distance);
+        }
+        return result;
+    }
+
+    osg::Quat boneRotation(const osg::Matrixf& matrix)
+    {
+        osg::Vec3f position, scale;
+        osg::Quat orientation, stretch;
+        matrix.decompose(position, orientation, scale, stretch);
+        return orientation;
+    }
+
+    double limitDeathNeckPitch(const osg::Quat& eyeOrientation, osg::Vec3d towardNeck, double droop)
+    {
+        if (towardNeck.normalize() <= .001)
+            return 0.;
+        const double across = towardNeck * (eyeOrientation * osg::Vec3d(0., 1., 0.));
+        const double down = towardNeck * (eyeOrientation * osg::Vec3d(0., 0., -1.));
+        const double projected = std::hypot(across, down);
+        // Stop the nod before the neck enters the view cone in front of the eyes.
+        const double limit = std::cos(osg::DegreesToRadians(65.));
+        if (projected <= limit)
+            return droop;
+        const double center = std::atan2(down, across);
+        const double halfSpan = std::acos(limit / projected);
+        const double first = center - halfSpan, last = center + halfSpan;
+        if (first <= droop && last > 0.)
+            return std::max(first, osg::DegreesToRadians(-20.));
+        return droop;
+    }
+
 
     class UpdateRenderCameraCallback : public SceneUtil::NodeCallback<UpdateRenderCameraCallback, osg::Camera*>
     {
@@ -121,7 +192,7 @@ namespace MWRender
         osg::Vec3d up = orient * osg::Vec3d(0, 0, 1);
 
         osg::Vec3d pos = mPosition;
-        if (mMode == Mode::FirstPerson)
+        if (mMode == Mode::FirstPerson && !mPlayerDeathView)
         {
             // It is a hack. Camera position depends on neck animation.
             // Animations are updated in OSG cull traversal and in order to avoid 1 frame delay we
@@ -132,6 +203,7 @@ namespace MWRender
             pos = calculateFirstPersonPosition(recalculatedTrackedPosition);
         }
         cam->setViewMatrixAsLookAt(pos, pos + forward, up);
+        mViewPosition = pos;
         mViewMatrix = cam->getViewMatrix();
         mProjectionMatrix = cam->getProjectionMatrix();
     }
@@ -139,18 +211,128 @@ namespace MWRender
     void Camera::update(float duration, bool paused)
     {
         mLockPitch = mLockYaw = false;
+        MWBase::WindowManager* wm = MWBase::Environment::get().getWindowManager();
+        if (mPlayerDeathView)
+        {
+            wm->showCrosshair(false);
+            if (!paused)
+                updatePlayerDeathView();
+            return;
+        }
+
         if (mQueuedMode && mAnimation->upperBodyReady())
             setMode(*mQueuedMode);
         if (mProcessViewChange)
             processViewChange();
 
         // only show the crosshair in game mode
-        MWBase::WindowManager* wm = MWBase::Environment::get().getWindowManager();
         wm->showCrosshair(!wm->isGuiMode() && mShowCrosshair);
 
         if (!paused)
             updateFocalPointOffset(duration);
         updatePosition();
+    }
+
+    void Camera::setPlayerDeathTime(std::optional<float> elapsed)
+    {
+        if (!elapsed)
+        {
+            mProcessViewChange |= mPlayerDeathView.has_value();
+            mPlayerDeathView.reset();
+            return;
+        }
+        if (!mPlayerDeathView)
+        {
+            const osg::Quat orientation = getOrient();
+            osg::Vec3d eyeInHead;
+            osg::Quat orientationInHead = orientation;
+            if (const auto head = mAnimation ? mAnimation->getBoneWorldMatrix("Bip01 Head") : std::nullopt)
+            {
+                osg::Vec3d eye = mPosition;
+                const osg::Vec3d fromHead = eye - osg::Vec3d(head->getTrans());
+                if (mMode != Mode::FirstPerson)
+                {
+                    const osg::Quat heading(mYaw + mExtraYaw, osg::Vec3d(0, 0, 1));
+                    eye = osg::Vec3d(head->getTrans()) + heading * osg::Vec3d(0, 5, 8);
+                }
+                else if (fromHead.length2() > 24. * 24.)
+                    eye = osg::Vec3d(head->getTrans()) + fromHead * (24. / fromHead.length());
+                // Convert the existing eye, including its gameplay offsets, to the
+                // death rig before Bullet advances it. The anchor moves with the head.
+                eyeInHead = eye * osg::Matrixd::inverse(*head);
+                orientationInHead = orientation * boneRotation(*head).inverse();
+            }
+            const float entryPitch = mPitch + mExtraPitch;
+            const float pitchDrop = std::clamp(entryPitch + osg::DegreesToRadians(83.f),
+                0.f, osg::DegreesToRadians(42.f));
+            mPlayerDeathView.emplace(PlayerDeathView{ orientationInHead, orientation, eyeInHead, pitchDrop });
+            mCameraDistance = 0.f;
+            mQueuedMode.reset();
+        }
+        mPlayerDeathView->elapsed = *elapsed;
+    }
+
+    void Camera::updatePlayerDeathView()
+    {
+        if (mTrackingPtr.isEmpty() || !mAnimation)
+            return;
+
+        auto& death = *mPlayerDeathView;
+        const float t = std::clamp(death.elapsed / .72f, 0.f, 1.f);
+        double droop = death.pitchDrop * t * t * (3.f - 2.f * t);
+        if (const auto head = mAnimation->getBoneWorldMatrix("Bip01 Head"))
+        {
+            mTrackedPosition = head->getTrans();
+            const osg::Vec3d eye = death.eyeInHead * osg::Matrixd(*head);
+            const osg::Vec3d up(0., 0., 1.);
+            mPosition = clearDeathBody(*mAnimation, eye, up, mHeightScale);
+            osg::Vec3d correction = mPosition - eye;
+            constexpr double maxBodyCorrection = 10.;
+            if (correction.normalize() > maxBodyCorrection)
+                mPosition = eye + correction * maxBodyCorrection;
+
+            const auto* rays = MWBase::Environment::get().getWorld()->getRayCasting();
+            constexpr float radius = 3.f;
+            constexpr int worldGeometry = (MWPhysics::CollisionType_Default & ~MWPhysics::CollisionType_Actor)
+                | MWPhysics::CollisionType_CameraOnly;
+            const auto findFloor = [&](const osg::Vec3d& point) {
+                return rays->castRay(point + up * 12., point - up * 36., worldGeometry);
+            };
+            const auto floor = findFloor(mPosition);
+            const bool hasFloor = floor.mHit && floor.mHitNormal.z() > .5f;
+            if (hasFloor)
+                mPosition.z() = std::max(mPosition.z(), static_cast<double>(floor.mHitPos.z()) + 6.);
+
+            // Begin above the surface if the head bone itself has settled
+            // into the floor. Sweep the final eye placement against walls.
+            osg::Vec3d anchor = mTrackedPosition;
+            const auto anchorFloor = findFloor(anchor);
+            if (anchorFloor.mHit && anchorFloor.mHitNormal.z() > .5f)
+                anchor.z() = std::max(anchor.z(), static_cast<double>(anchorFloor.mHitPos.z()) + 6.);
+            const osg::Vec3d offset = mPosition - anchor;
+            if (offset.length2() > .001)
+            {
+                const auto hit = rays->castSphere(anchor, mPosition, radius, worldGeometry);
+                if (hit.mHit)
+                {
+                    const osg::Vec3d safe = osg::Vec3d(hit.mHitPos + hit.mHitNormal * radius) - anchor;
+                    mPosition = anchor + offset * std::clamp((safe * offset) / offset.length2(), 0., 1.);
+                }
+            }
+
+            const osg::Quat eyes = death.orientationInHead * boneRotation(*head);
+            if (hasFloor)
+            {
+                const double height = mPosition.z() - floor.mHitPos.z();
+                const double room = std::clamp((height - 6.) / 30., 0., 1.);
+                const double limit = osg::DegreesToRadians(14. + 28. * room * room * (3. - 2. * room));
+                droop = std::min(droop, limit);
+            }
+            if (const auto neck = mAnimation->getBoneWorldMatrix("Bip01 Neck"))
+                droop = limitDeathNeckPitch(eyes, osg::Vec3d(neck->getTrans()) - mPosition, droop);
+
+            death.orientation = osg::Quat(-droop, osg::Vec3d(1., 0., 0.)) * eyes;
+        }
     }
 
     osg::Vec3d Camera::calculateFirstPersonPosition(const osg::Vec3d& trackedPosition) const
@@ -231,17 +413,27 @@ namespace MWRender
 
     osg::Quat Camera::getOrient() const
     {
+        if (mPlayerDeathView)
+            return mPlayerDeathView->orientation;
         return osg::Quat(mRoll + mExtraRoll, osg::Vec3d(0, 1, 0)) * osg::Quat(mPitch + mExtraPitch, osg::Vec3d(1, 0, 0))
             * osg::Quat(mYaw + mExtraYaw, osg::Vec3d(0, 0, 1));
     }
 
     void Camera::setMode(Mode newMode, bool force)
     {
+        if (mPlayerDeathView)
+            return;
         // Lua camera actions call setMode directly, bypassing toggleViewMode.
         // Static remains available for explicit scripted cameras.
         if ((Settings::game().mFirstPersonFullBody || MWMechanics::brutalDmFirstPerson()) && !Settings::game().mFirstPersonBodyAllowThirdPerson
             && (newMode == Mode::ThirdPerson || newMode == Mode::Preview || newMode == Mode::Vanity))
-            newMode = Mode::FirstPerson;
+        {
+            const bool classicDeath = newMode == Mode::ThirdPerson && !MWMechanics::brutalPlayerDeathScene()
+                && !mTrackingPtr.isEmpty() && mTrackingPtr == MWBase::Environment::get().getWorld()->getPlayerPtr()
+                && mTrackingPtr.getClass().getCreatureStats(mTrackingPtr).isDead();
+            if (!classicDeath)
+                newMode = Mode::FirstPerson;
+        }
         if (mMode == newMode)
         {
             mQueuedMode = std::nullopt;
@@ -373,10 +565,25 @@ namespace MWRender
                 mVisualSneakVelocity = 0.f;
             }
         }
+        // With the visible first-person body, the eye rides on that body's torso
+        // (NpcAnimation adds its displacement to the eye and arms): its crouch,
+        // sneak walk and stance changes lower the view exactly as far and as fast as
+        // the torso the player sees. A fixed sneak drop would leave the view
+        // standing over a crouched body, or sink it into an upright one.
+        const bool bodyEye = mAnimation && mMode == Mode::FirstPerson && mAnimation->hasBodyEyeFollow()
+            && mTrackingPtr == world->getPlayerPtr();
+        if (bodyEye)
+        {
+            mVisualSneakOffset = 0.f;
+            mVisualSneakVelocity = 0.f;
+        }
         // The authored slide eye already has its own blend. Preserve it exactly.
         mFullBodySneakOffset = mVisualSneakOffset * (1.f - slideBlend) + 70.f * slideBlend;
         if (mAnimation)
+        {
+            mAnimation->setBodyEyeFollowWeight(1.f - slideBlend);
             mAnimation->setFirstPersonOffset(osg::Vec3f(0, 0, -mFullBodySneakOffset));
+        }
     }
 
     void Camera::setYaw(float angle, bool force)

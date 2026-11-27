@@ -26,10 +26,20 @@ namespace Settings
         SettingValue<bool> mBestAttack{ mIndex, "Game", "best attack" };
         SettingValue<bool> mBrutalAdrenalineHud{ mIndex, "Game", "brutal adrenaline hud" };
         SettingValue<bool> mBrutalEnabled{ mIndex, "Game", "brutal enabled" };
+        SettingValue<bool> mBrutalPlayerDeathScene{ mIndex, "Game", "brutal player death scene" };
+        SettingValue<bool> mBrutalDamageFlash{ mIndex, "Game", "brutal damage flash" };
+        SettingValue<bool> mBrutalLowHealthVignette{ mIndex, "Game", "brutal low health vignette" };
         SettingValue<bool> mBrutalFirstPersonBody{ mIndex, "Game", "brutal first person body" };
         SettingValue<bool> mBrutalRagdoll{ mIndex, "Game", "brutal ragdoll" };
+        SettingValue<bool> mBrutalGroundFinisher{ mIndex, "Game", "brutal ground finisher" };
+        SettingValue<bool> mBrutalBackstab{ mIndex, "Game", "brutal backstab" };
+        SettingValue<int> mBrutalGroundFinisherHealth{ mIndex, "Game", "brutal ground finisher health",
+            makeClampSanitizerInt(0, 100) };
         SettingValue<bool> mBrutalDynamicProps{ mIndex, "Game", "brutal dynamic props" };
+        SettingValue<bool> mBrutalObjectGrab{ mIndex, "Game", "brutal object grab" };
         SettingValue<bool> mBrutalEquipmentPhysics{ mIndex, "Game", "brutal equipment physics" };
+        SettingValue<float> mBrutalRagdollWeaponDrop{ mIndex, "Game", "brutal ragdoll weapon drop",
+            makeClampSanitizerFloat(0, 1) };
         SettingValue<bool> mBrutalMeleeGeometry{ mIndex, "Game", "brutal melee geometry" };
         SettingValue<bool> mBrutalWallBounce{ mIndex, "Game", "brutal wall bounce" };
         SettingValue<bool> mBrutalStamina{ mIndex, "Game", "brutal stamina" };
@@ -38,14 +48,30 @@ namespace Settings
         SettingValue<bool> mBrutalFastAttacks{ mIndex, "Game", "brutal fast attacks" };
         SettingValue<bool> mBrutalClinch{ mIndex, "Game", "brutal clinch" };
         SettingValue<bool> mBrutalCombatSounds{ mIndex, "Game", "brutal combat sounds" };
+        SettingValue<bool> mBrutalHeroVoice{ mIndex, "Game", "brutal hero voice" };
         SettingValue<bool> mBrutalBloodEffects{ mIndex, "Game", "brutal blood effects" };
         SettingValue<bool> mBrutalSparkEffects{ mIndex, "Game", "brutal spark effects" };
         SettingValue<bool> mMeleeContactAlwaysHits{ mIndex, "Game", "melee contact always hits" };
         SettingValue<bool> mBrutalImpactEffects{ mIndex, "Game", "brutal impact effects" };
         SettingValue<bool> mNpcBloodDecals{ mIndex, "Game", "npc blood decals" };
+        SettingValue<bool> mBrutalWeaponBlood{ mIndex, "Game", "brutal weapon blood" };
+        SettingValue<bool> mBrutalWorldBlood{ mIndex, "Game", "brutal world blood" };
         SettingValue<bool> mKineticPlayerMovement{ mIndex, "Game", "kinetic player movement" };
         SettingValue<float> mNpcHurtHealthFraction{ mIndex, "Game", "npc hurt health fraction",
             makeClampSanitizerFloat(0, 1) };
+        SettingValue<bool> mBrutalWoundedNpcs{ mIndex, "Game", "brutal wounded npcs" };
+        SettingValue<float> mBrutalNpcWoundedHealthFraction{ mIndex, "Game", "brutal npc wounded health fraction",
+            makeClampSanitizerFloat(0, 1) };
+        SettingValue<bool> mBrutalNpcFlee{ mIndex, "Game", "brutal npc flee" };
+        SettingValue<float> mBrutalNpcFleeHealthFraction{ mIndex, "Game", "brutal npc flee health fraction",
+            makeClampSanitizerFloat(0, 1) };
+        SettingValue<float> mBrutalNpcFleeTime{ mIndex, "Game", "brutal npc flee time",
+            makeClampSanitizerFloat(0, 600) };
+        SettingValue<bool> mBrutalNpcWeaponPickup{ mIndex, "Game", "brutal npc weapon pickup" };
+        SettingValue<float> mBrutalNpcWeaponPickupRadius{ mIndex, "Game", "brutal npc weapon pickup radius",
+            makeClampSanitizerFloat(0, 4000) };
+        SettingValue<float> mBrutalNpcShieldPickupRadius{ mIndex, "Game", "brutal npc shield pickup radius",
+            makeClampSanitizerFloat(0, 4000) };
         SettingValue<bool> mPlayerHitRecovery{ mIndex, "Game", "player hit recovery" };
         SettingValue<float> mPlayerFatigueRegenFraction{ mIndex, "Game", "player fatigue regen fraction",
             makeClampSanitizerFloat(0, 10) };
@@ -67,6 +93,10 @@ namespace Settings
         SettingValue<bool> mBrutalClassicNpcAnimations{ mIndex, "Game", "brutal classic npc animations" };
         SettingValue<bool> mBrutalDismemberment{ mIndex, "Game", "brutal dismemberment" };
         SettingValue<bool> mBrutalKickAlwaysRagdoll{ mIndex, "Game", "brutal kick always ragdoll" };
+        SettingValue<float> mBrutalProjectileGravity{ mIndex, "Game", "brutal projectile gravity",
+            makeClampSanitizerFloat(0, 2) };
+        SettingValue<float> mBrutalProjectileSpeed{ mIndex, "Game", "brutal projectile speed",
+            makeClampSanitizerFloat(0.5f, 3) };
         SettingValue<bool> mFirstPersonRigidViewmodel{ mIndex, "Game", "first person rigid viewmodel" };
         SettingValue<int> mDifficulty{ mIndex, "Game", "difficulty", makeClampSanitizerInt(-500, 500) };
         // We have to cap it since using high values (larger than 7168) will make some quests harder or impossible to

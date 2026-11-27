@@ -9,6 +9,8 @@ engine reads. Each table line is
 Player events are Dark Messiah's surface events, "<surface>.step<side><gait><jump>"
 (gait: empty, stealth, run, sprint; jump: the landing variant). NPC events are the
 character-type events "guard.footstep<side>" and "villagermale.footstep<side>".
+"player.jump" is the hero's jump grunt; "player.jumpfemale" replaces it for a female
+player character with a female villager's grunt.
 """
 import argparse
 import hashlib
@@ -92,7 +94,7 @@ def main():
         return extract(archive, entry)
 
     events = {}
-    for script in ('game_sounds_footsteps', 'game_sounds_player', 'npc_sounds_common'):
+    for script in ('game_sounds_footsteps', 'game_sounds_player', 'npc_sounds_common', 'npc_sounds_villager_female'):
         for name, tree in keyvalues(read(f'mm/scripts/{script}.txt').decode('cp1252')):
             if isinstance(tree, list):
                 events[name.lower()] = tree
@@ -101,6 +103,11 @@ def main():
               for gait in GAITS for jump in ('', 'jump')]
     wanted += [f'{kind}.footstep{side}' for kind in NPC_TYPES for side in ('left', 'right')]
     wanted.append('player.jump')
+    # The hero is male in Dark Messiah. A female player character jumps with the
+    # first combat grunt of the second village woman, at the hero's jump levels.
+    events['player.jumpfemale'] = ([pair for pair in events.get('player.jump', []) if isinstance(pair[1], str)]
+                                   + [('wave', leaves(events.get('villager_femaleb_striking', []), 'wave')[0])])
+    wanted.append('player.jumpfemale')
     missing = [name for name in wanted if name not in events]
     if missing:
         raise ValueError('Dark Messiah sound scripts lack: ' + ', '.join(missing))

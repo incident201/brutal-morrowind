@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Add footstep keys to the imported NPC walk and run loops.
+"""Add footstep keys to the imported NPC walk and run loops, the wounded walk included.
 
 Dark Messiah plays an NPC footstep from animation events 6004 (left foot) and 6005 (right
 foot) in the guard's movement sequences. This step puts Morrowind's "soundgen: left/right"
@@ -18,8 +18,8 @@ sys.path.insert(0, str(ROOT / 'third_party/io_scene_mw/lib'))
 from es3 import nif  # noqa: E402
 
 # Fraction of the loop for the left and right foot: npc_guard_combat_animations.mdl Walk,
-# Combatwalk (the armed walk) and Run.
-PHASES = {'walk': (.278, .75), 'walk1h': (.219, .719), 'run': (.292, .625)}
+# Combatwalk (the armed walk), Run and Hurtwalk (the wounded walk, armed and unarmed).
+PHASES = {'walk': (.278, .75), 'walk1h': (.219, .719), 'run': (.292, .625), 'hurtwalk': (.25, .714)}
 GROUP = re.compile(r'(walk|run)(forward|back|left|right)(1h)?')
 
 
@@ -51,6 +51,10 @@ def main():
         if match:
             mode = match.group(1)
             add_keys(path, PHASES[mode + ('1h' if mode == 'walk' and match.group(3) else '')])
+            changed += 1
+    for path in sorted((args.data / 'Animations/brutal_npc_wounded').glob('walk*.kf')):
+        if GROUP.fullmatch(path.stem):
+            add_keys(path, PHASES['hurtwalk'])
             changed += 1
     if not changed:
         raise ValueError('No NPC walk or run loops found')

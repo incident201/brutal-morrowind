@@ -102,7 +102,9 @@ namespace MWLua
         void onHit(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, const MWWorld::Ptr& weapon,
             const MWWorld::Ptr& ammo, int attackType, float attackStrength, float damage, bool isHealth,
             const osg::Vec3f& hitPos, bool successful, MWMechanics::DamageSourceType sourceType,
-            uint64_t brutalAttackId = 0, bool brutalPowered = false, bool brutalBlocked = false, int contactPart = -1) override;
+            uint64_t brutalAttackId = 0, bool brutalPowered = false, bool brutalBlocked = false, int contactPart = -1,
+            bool brutalGroundFinisher = false, const osg::Vec3f* contactNormal = nullptr, bool brutalCharged = false) override;
+        void storeNpcBloodDecals(const MWWorld::Ptr& actor, const std::string& data) override;
         void meleeResolved(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, const MWWorld::Ptr& weapon,
             uint64_t attackId, const std::string& token, bool powered, bool successful, bool blocked,
             float damage, float strength, const osg::Vec3f& hitPos) override;
@@ -111,6 +113,18 @@ namespace MWLua
         void actorExternalImpact(const MWWorld::Ptr& actor, const MWWorld::Ptr& hitObject,
             const osg::Vec3f& position, const osg::Vec3f& normal, float speed) override;
         void npcKickRagdoll(const MWWorld::Ptr& attacker, const MWWorld::Ptr& target) override;
+        void missileLanded(const MWWorld::Ptr& caster, const MWWorld::Ptr& target, const MWWorld::Ptr& item,
+            const ESM::RefId& missile, std::string_view outcome, std::string_view material,
+            const osg::Vec3f& position) override;
+        void projectileFinisher(const MWWorld::Ptr& player, const MWWorld::Ptr& target, std::uint64_t attackId,
+            std::string_view phase, std::string_view token) override;
+        void objectThrowResolved(const MWWorld::Ptr& player, std::uint64_t throwId, bool released) override;
+        void thrownObjectHit(const MWWorld::Ptr& attacker, const MWWorld::Ptr& item,
+            const MWWorld::Ptr& victim, const osg::Vec3f& hitPos, const osg::Vec3f& normal,
+            const osg::Vec3f& velocity, float mass, bool adrenaline, bool headHit, bool knockedDown,
+            std::string_view reaction, float damage) override;
+        void dynamicObjectImpact(const MWWorld::Ptr& player, const MWWorld::Ptr& item,
+            const osg::Vec3f& position, const osg::Vec3f& normal, float speed) override;
         void exteriorCreated(MWWorld::CellStore& cell) override
         {
             mEngineEvents.addToQueue(EngineEvents::OnNewExterior{ cell });
@@ -152,6 +166,12 @@ namespace MWLua
         void readRecord(ESM::ESMReader& reader, uint32_t type) override;
         void loadLocalScripts(const MWWorld::Ptr& ptr, const ESM::LuaScripts& data) override;
         void setContentFileMapping(const std::map<int, int>& mapping) override { mContentFileMapping = mapping; }
+
+        // A Lua-only script reload reads freshly serialized data in the current plugin order.
+        const std::map<int, int>* getGlobalSaveFileMapping() const
+        {
+            return mGlobalScripts.getSavedDataDeserializer() == mGlobalLoader.get() ? &mContentFileMapping : nullptr;
+        }
 
         // At the end of the next `synchronizedUpdate` drops script cache and reloads all scripts.
         // Calls `onSave` and `onLoad` for every script.

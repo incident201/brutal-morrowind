@@ -74,6 +74,11 @@ def smooth(x):
     return x*x*(3-2*x)
 
 
+
+def clinch_head_layer(family):
+    """player_head_mvt layer prefix of a weapon family's contest camera."""
+    return {'staff': '@layer_staff_versus', 'dagger': '@layer_daggers_versus'}.get(family, '@layer_sword_versus_noshield')
+
 class Family(Viewmodel):
     # Staff data is emitted on the 1.0 source clock and then re-timed in place
     # by staff_combat_clock.py, which keeps section starts.
@@ -563,22 +568,24 @@ class Family(Viewmodel):
 
     def clinch_set(self, out):
         # Same contest as the sword: the source right idle, its exit, and the parry break on a
-        # loss. The camera motion stays the player's head clip used for the sword contest.
+        # loss. Each family has its own head clip in player_head_mvt (@layer_staff_versus_*,
+        # @layer_daggers_versus_*); the arms are solved against that camera, as in the game.
         c = self.config
         model, prefix = c['model'], c['versus']
+        head = clinch_head_layer(self.family)
         held = self.stance_pose(blocking=True)
         # DM flips the daggers as a separate item in .042 s; a blended 180 degree turn reads as a
         # crooked pose for the whole .2 s fade.
         self.fade_exempt = {'Weapon Bone', LEFT_WEAPON} if self.family == 'dagger' else set()
         times, poses, error = self.segment(model, prefix+'_r_idle', start_pose=held[0],
-            head_camera='@layer_sword_versus_noshield_r_idle')
+            head_camera=head+'_r_idle')
         final_pose = poses[-1]
         self.write(out, 'brutal_clinch', [(0, times, poses)], [(0, 'start'), (times[-1], 'stop')])
         errors = [error]
-        for group, arms, head, duration in [
-            ('brutal_clinch_win', prefix+'_r_out', '@layer_sword_versus_noshield_r_out', None),
-            ('brutal_clinch_lose', c['parry_break'], '@layer_sword_versus_noshield_out_loose', 40/30)]:
-            times, poses, error = self.segment(model, arms, duration=duration, start_pose=final_pose, head_camera=head)
+        for group, arms, camera, duration in [
+            ('brutal_clinch_win', prefix+'_r_out', head+'_r_out', None),
+            ('brutal_clinch_lose', c['parry_break'], head+'_out_loose', 40/30)]:
+            times, poses, error = self.segment(model, arms, duration=duration, start_pose=final_pose, head_camera=camera)
             self.write(out, group, [(0, times, poses)], [(0, 'start'), (times[-1], 'stop')])
             errors.append(error)
         self.fade_exempt = set()

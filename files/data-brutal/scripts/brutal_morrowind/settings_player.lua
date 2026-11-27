@@ -10,13 +10,15 @@ local native={
     dualWieldEnabled='dualWield',meleeGeometry='meleeGeometry',equipmentPhysics='equipmentPhysics',
     npcStandupEnabled='npcStandup',ragdollSoftStops='ragdollSoftStops',ragdollNeutralPose='ragdollNeutralPose',
     ragdollLimbResponse='ragdollLimbResponse',ragdollSelfCollision='ragdollSelfCollision',
-    ragdollEnabled='ragdoll',ragdollEnhancements='ragdollEnhancements',dynamicProps='dynamicProps',
-    bloodDecals='bloodDecals',movementEnabled='kineticMovement',activeBlockEnabled='activeBlocking',
+    ragdollEnabled='ragdoll',ragdollEnhancements='ragdollEnhancements',dynamicProps='dynamicProps',objectGrabEnabled='objectGrab',
+    bloodDecals='bloodDecals',weaponBlood='weaponBlood',worldBlood='worldBlood',movementEnabled='kineticMovement',activeBlockEnabled='activeBlocking',
     parryEnabled='swordParry',attackCombosEnabled='comboAttacks',npcAiTweaks='npcCombatTweaks',
-    npcStagger='npcStagger',hitRecovery='hitRecovery',staminaEnabled='stamina',
+    npcStagger='npcStagger',woundedNpcs='woundedNpcs',npcFlee='npcFlee',npcWeaponPickup='npcWeaponPickup',hitRecovery='hitRecovery',staminaEnabled='stamina',
     wallBounceEnabled='wallBounce',clinchEnabled='clinch',dismemberment='dismemberment',
-    slideEnabled='slide',combatSounds='combatSounds',fastAttacksEnabled='fastAttacks',
+    slideEnabled='slide',combatSounds='combatSounds',heroVoice='heroVoice',fastAttacksEnabled='fastAttacks',
     bloodEffects='bloodEffects',sparkEffects='sparkEffects',kickAlwaysRagdoll='kickAlwaysRagdoll',
+    groundFinisherEnabled='groundFinisher',backstabEnabled='backstab',
+    deathSceneEnabled='playerDeathScene',damageFlash='damageFlash',lowHealthVignette='lowHealthVignette',
 }
 local function apply()
     -- Storage callbacks are asynchronous; explicit apply must see this edit now.
@@ -29,6 +31,10 @@ local function apply()
     set(self,'classicFirstPerson',S.mode('firstPersonAnimations')=='morrowind')
     set(self,'classicNpcAnimations',S.mode('npcAnimations')=='morrowind')
     set(self,'impactEffects',S.mode('bloodEffects') or S.mode('sparkEffects'))
+    if types.Actor.setBrutalRagdollWeaponDrop then
+        types.Actor.setBrutalRagdollWeaponDrop(self,S.mode('ragdollWeaponDrop')/100)
+    end
+    types.Actor.setBrutalGroundFinisherHealth(self,S.mode('groundFinisherHealth'))
     set(self,'adrenalineHud',S.mode('adrenalineEnabled') and S.mode('adrenalineHudEnabled'))
     if S.raw('enabled') then set(self,'enabled',true) end
     core.sendGlobalEvent('BrutalSettingsChanged',{player=self,values=S.snapshot()})

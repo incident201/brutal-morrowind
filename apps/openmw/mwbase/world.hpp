@@ -65,6 +65,7 @@ namespace MWPhysics
 {
     class RayCastingResult;
     class RayCastingInterface;
+    struct HeldObjectInfo;
 }
 
 namespace MWRender
@@ -139,7 +140,6 @@ namespace MWBase
 
         virtual void readRecord(ESM::ESMReader& reader, uint32_t type) = 0;
 
-        virtual void useDeathCamera() = 0;
 
         virtual void setWaterHeight(const float height) = 0;
 
@@ -327,9 +327,14 @@ namespace MWBase
             const MWWorld::Ptr& attacker, std::uint64_t kickId) = 0;
         virtual std::map<std::string, double> getNpcSuperKickState(const MWWorld::Ptr& ptr) const = 0;
         virtual std::vector<osg::Vec3f> getNpcRagdollDynamics(const MWWorld::Ptr& ptr) const = 0;
+        virtual bool isNpcGroundedRagdoll(const MWWorld::Ptr& ptr) const = 0;
         virtual std::vector<osg::Vec3f> getNpcRagdollState(const MWWorld::Ptr& ptr) const = 0;
         virtual std::map<std::string, double> getNpcRagdollEnhancementState(const MWWorld::Ptr& ptr) const = 0;
-        virtual void releaseNpcRagdollEquipment(const MWWorld::Ptr& ptr) = 0;
+        virtual void releaseNpcRagdollEquipment(const MWWorld::Ptr& ptr, bool afterKnockdown = false) = 0;
+        virtual bool disarmNpcWeapon(const MWWorld::Ptr& ptr, const osg::Vec3f& velocity) = 0;
+        /// Enabled weapons and armor lying in the active cells within \a radius of \a center.
+        virtual void getLooseEquipmentInRange(
+            const osg::Vec3f& center, float radius, std::vector<MWWorld::Ptr>& out) = 0;
         virtual std::vector<MWWorld::RagdollDroppedItem> getNpcRagdollDroppedItems(const MWWorld::Ptr& ptr) const = 0;
         virtual std::vector<osg::Vec3f> getReleasedEquipmentState(const MWWorld::Ptr& ptr) const = 0;
         virtual bool applyNpcRagdollImpact(const MWWorld::Ptr& ptr, std::size_t part, const osg::Vec3f& point,
@@ -337,6 +342,14 @@ namespace MWBase
         virtual MWWorld::Ptr kickNpcRagdoll(const osg::Vec3f& origin, const osg::Vec3f& forward, float reach,
             float minimumDot, const osg::Vec3f& velocity, bool& headHit, osg::Vec3f& hitPoint, std::size_t& hitPart) = 0;
         virtual void applyObjectImpulse(const MWWorld::Ptr& ptr, const osg::Vec3f& impulse, float mass) = 0;
+        virtual bool canHoldObject(const MWWorld::ConstPtr& ptr) const = 0;
+        virtual std::pair<MWWorld::Ptr, unsigned> findDetachedGrabFragment(const MWWorld::Ptr& player,
+            const osg::Vec3f& from, const osg::Vec3f& to) const = 0;
+        virtual bool holdObject(const MWWorld::Ptr& ptr, const MWWorld::Ptr& holder,
+            MWPhysics::HeldObjectInfo* info = nullptr, unsigned fragment = 0) = 0;
+        virtual bool releaseHeldObject(const MWWorld::Ptr& holder, const osg::Vec3f& eyePos, const osg::Vec3f& throwDir,
+            float throwSpeed, bool adrenaline, std::uint64_t throwId = 0) = 0;
+        virtual MWWorld::Ptr getHeldObject() const = 0;
         virtual void syncDynamicObject(const MWWorld::Ptr& ptr, const osg::Vec3f& position, const osg::Quat& rotation,
             const osg::Vec3f& renderedPosition, const osg::Quat& renderedRotation, bool authoritativeChanged) = 0;
         virtual void queueMovement(const MWWorld::Ptr& ptr, const osg::Vec3f& velocity) = 0;

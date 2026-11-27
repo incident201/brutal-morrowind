@@ -17,6 +17,7 @@ local available = ok and type(request) == 'function' and type(query) == 'functio
 local previousSneak, previousPhase = false, 0
 local previousPosition, direction, seen, contactSpeed
 local previousSimulationTime
+local paidContact = false
 local starts, hits, tripRequests, result = 0, 0, 0, 'ready'
 
 local function status()
@@ -87,6 +88,7 @@ local function update(dt)
     if state.phase ~= 0 and previousPhase == 0 then
         starts, result = starts + 1, 'sliding'
         previousPosition, seen, contactSpeed = self.position, {}, 300
+        paidContact = false
         direction = self.rotation * util.vector3(0,1,0)
         direction = util.vector3(direction.x,direction.y,0):normalize()
     end
@@ -122,7 +124,7 @@ local function update(dt)
     previousPosition = self.position
     -- An adrenaline slide with a one-handed weapon is a clean trip: the boot
     -- leaves health alone so that a click can still deliver the finisher.
-    local finisherReady = handOwned or (hasHandWeapon() and I.BrutalAdrenaline
+    local finisherReady = handOwned or (settings.get('finisherEnabled') and hasHandWeapon() and I.BrutalAdrenaline
         and I.BrutalAdrenaline.status().ready)
     for id, target in pairs(candidates) do
         local speed=math.max(150,math.min(500,contactSpeed))
@@ -138,7 +140,8 @@ local function update(dt)
         tripRequests=tripRequests+1
         seen[id]=true
         -- An ordinary slide deals the boot's charge-free foot damage at contact.
-        if not finisherReady and I.BrutalMorrowind.slideHit(target,direction) then
+        if not finisherReady and I.BrutalMorrowind.slideHit(target,direction,not paidContact) then
+            paidContact = true
             hits, result = hits + 1, 'hit'
         end
     end

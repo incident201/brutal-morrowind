@@ -11,6 +11,8 @@
 #include "../mwworld/containerstore.hpp"
 #include "../mwworld/esmstore.hpp"
 
+#include "../mwrender/brutalblood.hpp"
+
 #include "actorutil.hpp"
 #include "creaturestats.hpp"
 
@@ -60,6 +62,10 @@ namespace MWMechanics
             int charge = itemToRepair.getClass().getItemHealth(itemToRepair);
             charge = std::min(charge + y, itemToRepair.getClass().getItemMaxHealth(itemToRepair));
             itemToRepair.getCellRef().setCharge(charge);
+
+            // Working the blade over also cleans off the blood.
+            if (auto* blood = MWRender::BrutalBlood::get())
+                blood->clearItem(itemToRepair.getCellRef().getRefNum());
 
             // attempt to re-stack item, in case it was fully repaired
             MWWorld::ContainerStoreIterator stacked = player.getClass().getContainerStore(player).restack(itemToRepair);

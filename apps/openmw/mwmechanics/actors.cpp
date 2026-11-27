@@ -1,6 +1,8 @@
 #include "actors.hpp"
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <optional>
 
 #include <components/esm3/esmreader.hpp>
@@ -38,12 +40,14 @@
 
 #include "../mwmechanics/aibreathe.hpp"
 
+
 #include "../mwrender/vismask.hpp"
 
 #include "../mwsound/constants.hpp"
 
 #include "actor.hpp"
 #include "actorutil.hpp"
+#include "aicombat.hpp"
 #include "aicombataction.hpp"
 #include "aifollow.hpp"
 #include "aipursue.hpp"
@@ -408,14 +412,14 @@ namespace MWMechanics
         }
     }
 
-    void Actors::updateActor(const MWWorld::Ptr& ptr, float duration) const
+    void Actors::updateActor(const MWWorld::Ptr& ptr, float duration, bool deferFatigue) const
     {
         ptr.getClass().getCreatureStats(ptr).updateAwareness(duration);
         // magic effects
         adjustMagicEffects(ptr, duration);
 
-        // fatigue restoration
-        calculateRestoration(ptr, duration);
+        if (!deferFatigue)
+            updateFatigue(ptr, duration, false);
     }
 
     void Actors::playIdleDialogue(const MWWorld::Ptr& actor) const
@@ -910,24 +914,50 @@ namespace MWMechanics
         stats.setFatigue(fatigue);
     }
 
-    void Actors::calculateRestoration(const MWWorld::Ptr& ptr, float duration) const
+    void Actors::updateFatigue(const MWWorld::Ptr& ptr, float duration, bool sprinting) const
     {
-        if (ptr.getClass().getCreatureStats(ptr).isDead())
+        const auto& cls = ptr.getClass();
+        CreatureStats& stats = cls.getCreatureStats(ptr);
+        if (stats.isDead())
             return;
 
-        MWMechanics::CreatureStats& stats = ptr.getClass().getCreatureStats(ptr);
-
-        // Current fatigue can be above base value due to a fortify effect.
-        // In that case stop here and don't try to restore.
         DynamicStat<float> fatigue = stats.getFatigue();
-        if (fatigue.getCurrent() >= fatigue.getBase())
+        const auto& game = Settings::game();
+        const bool player = ptr == getPlayer();
+        const bool brutalStamina = player && game.mBrutalEnabled && game.mBrutalStamina;
+        const bool spendingSprintFatigue = sprinting && brutalStamina && game.mKineticPlayerMovement
+            && !MWBase::Environment::get().getWorld()->getGodModeState();
+
+        // A fortify effect can raise current fatigue above its base value.
+        if (!spendingSprintFatigue && fatigue.getCurrent() >= fatigue.getBase())
             return;
 
-        const float regenFraction = Settings::game().mPlayerFatigueRegenFraction;
-        if (regenFraction > 0.f && ptr == getPlayer())
+        const float athleticsBonus = brutalStamina
+            ? (std::clamp(cls.getSkill(ptr, ESM::Skill::Athletics), 0.f, 100.f) - 50.f) * (0.20f / 50.f)
+            : 0.f;
+        if (spendingSprintFatigue)
         {
-            fatigue.setCurrent(std::min(fatigue.getModified(),
-                fatigue.getCurrent() + regenFraction * fatigue.getModified() * duration));
+            const float cost = fatigue.getBase() * (1.f - athleticsBonus) * duration / 6.f;
+            if (fatigue.getCurrent() > 0.f)
+            {
+                fatigue.setCurrent(fatigue.getCurrent() - cost);
+                stats.setFatigue(fatigue);
+            }
+            // Leave exhaustion visible until the sprint input controller selects a new gait.
+            return;
+        }
+
+        if (brutalStamina && stats.mBrutalBlockRequested && stats.mBrutalBlockRaised)
+        {
+            const float blockSkill = std::clamp(cls.getSkill(ptr, ESM::Skill::Block), 0.f, 100.f);
+            duration *= .25f + blockSkill / 600.f;
+        }
+
+        const float regenFraction = game.mPlayerFatigueRegenFraction;
+        if (regenFraction > 0.f && player)
+        {
+            const float recovered = regenFraction * (1.f + athleticsBonus) * fatigue.getModified() * duration;
+            fatigue.setCurrent(std::min(fatigue.getModified(), fatigue.getCurrent() + recovered));
             stats.setFatigue(fatigue);
             return;
         }
@@ -1015,7 +1045,8 @@ namespace MWMechanics
                 static const float fSuffocationDamage
                     = world->getStore().get<ESM::GameSetting>().find("fSuffocationDamage")->mValue.getFloat();
                 DynamicStat<float> health = stats.getHealth();
-                health.setCurrent(health.getCurrent() - fSuffocationDamage * duration);
+                const float damage = fSuffocationDamage * duration;
+                health.setCurrent(health.getCurrent() - damage);
                 stats.setHealth(health);
 
                 // Play a drowning sound
@@ -1025,7 +1056,7 @@ namespace MWMechanics
                     sndmgr->playSound3D(ptr, soundDrown, 1.0f, 1.0f);
 
                 if (isPlayer)
-                    MWBase::Environment::get().getWindowManager()->activateHitOverlay(false);
+                    MWBase::Environment::get().getWindowManager()->activateHitOverlay(damage, false);
             }
         }
         else
@@ -1129,6 +1160,54 @@ namespace MWMechanics
         }
     }
 
+    void Actors::updateBrutalAdrenalineArrest(const MWWorld::Ptr& guard, SidingCache& cachedAllies) const
+    {
+        const MWWorld::Ptr player = getPlayer();
+        auto& stats = guard.getClass().getCreatureStats(guard);
+        auto& sequence = stats.getAiSequence();
+        const auto& playerStats = player.getClass().getNpcStats(player);
+        const bool charged = Settings::game().mBrutalEnabled && playerStats.mBrutalAdrenalineEffectActive
+            && !playerStats.isDead();
+        if (stats.mBrutalAdrenalineArrestCombat)
+        {
+            if (!sequence.isInCombat(player))
+            {
+                stats.mBrutalAdrenalineArrestCombat = false;
+                return;
+            }
+            if (charged)
+                return;
+            // The adrenaline has faded: the guard goes back to the arrest, unless the
+            // bounty has meanwhile reached the level guards attack on sight.
+            stats.mBrutalAdrenalineArrestCombat = false;
+            const auto& gmst = MWBase::Environment::get().getESMStore()->get<ESM::GameSetting>();
+            static const int cutoff = gmst.find("iCrimeThreshold")->mValue.getInteger();
+            static const int multiplier = gmst.find("iCrimeThresholdMultiplier")->mValue.getInteger();
+            const int bounty = playerStats.getBounty();
+            if (bounty < cutoff * multiplier)
+            {
+                sequence.stopCombat({ player });
+                if (stats.getHitAttemptActor() == player.getCellRef().getRefNum())
+                    stats.setHitAttemptActor({});
+                if (bounty > 0)
+                    sequence.stack(AiPursue(player), guard);
+            }
+            return;
+        }
+        if (!charged || playerStats.mBrutalClinchActive || !sequence.isInPursuit() || sequence.isInCombat(player))
+            return;
+        // A player charged with adrenaline who is already fighting someone else is not
+        // stopped for a conversation: the pursuing guard joins the fight.
+        bool fighting = false;
+        for (const MWWorld::Ptr& enemy : getActorsFighting(player))
+            fighting = fighting || enemy != guard;
+        if (!fighting)
+            return;
+        sequence.stopPursuit();
+        MWBase::Environment::get().getMechanicsManager()->startCombat(
+            guard, player, &cachedAllies.getActorsSidingWith(player), true);
+    }
+
     void Actors::updateCrimePursuit(const MWWorld::Ptr& ptr, float duration, SidingCache& cachedAllies) const
     {
         const MWWorld::Ptr player = getPlayer();
@@ -1150,6 +1229,10 @@ namespace MWMechanics
 
         const auto mechanicsManager = MWBase::Environment::get().getMechanicsManager();
         const auto world = MWBase::Environment::get().getWorld();
+
+        if (actorClass.isClass(ptr, "Guard") && (Settings::game().mBrutalEnabled
+                || creatureStats.mBrutalAdrenalineArrestCombat))
+            updateBrutalAdrenalineArrest(ptr, cachedAllies);
 
         if (actorClass.isClass(ptr, "Guard") && !creatureStats.getAiSequence().isInPursuit()
             && !creatureStats.getAiSequence().isInCombat()
@@ -1309,8 +1392,15 @@ namespace MWMechanics
         return false;
     }
 
-    void Actors::updateActor(const MWWorld::Ptr& old, const MWWorld::Ptr& ptr) const
+    void Actors::updateActor(const MWWorld::Ptr& old, const MWWorld::Ptr& ptr)
     {
+        if (mSwordClinch)
+        {
+            if (mSwordClinch->player == old)
+                mSwordClinch->player = ptr;
+            if (mSwordClinch->opponent == old)
+                mSwordClinch->opponent = ptr;
+        }
         const auto iter = mIndex.find(old.mRef);
         if (iter != mIndex.end())
             iter->second->updatePtr(ptr);
@@ -1547,6 +1637,8 @@ namespace MWMechanics
                     player.getClass().getCreatureStats(player).setHitAttemptActor({});
             }
             const int actorsProcessingRange = Settings::game().mActorsProcessingRange;
+            const auto& game = Settings::game();
+            const bool deferPlayerFatigue = game.mBrutalEnabled && game.mBrutalStamina && game.mKineticPlayerMovement;
 
             // AI and magic effects update
             for (Actor& actor : mActors)
@@ -1591,7 +1683,7 @@ namespace MWMechanics
                     const bool cellChanged = worldScene->hasCellChanged();
                     const MWWorld::Ptr actorPtr = actor.getPtr(); // make a copy of the map key to avoid it being
                                                                   // invalidated when the player teleports
-                    updateActor(actorPtr, duration);
+                    updateActor(actorPtr, duration, isPlayer && deferPlayerFatigue);
 
                     // Looping magic VFX update
                     // Note: we need to do this before any of the animations are updated.
@@ -1735,6 +1827,8 @@ namespace MWMechanics
             {
                 MWBase::Environment::get().getWorld()->applyDeferredPreviewRotationToPlayer(duration);
                 playerCharacter->update(duration);
+                if (deferPlayerFatigue)
+                    updateFatigue(player, duration, playerCharacter->isBrutalSprinting());
                 playerCharacter->setVisibility(1.f);
                 MWBase::LuaManager::ActorControls* luaControls
                     = MWBase::Environment::get().getLuaManager()->getActorControls(player);
@@ -1815,7 +1909,13 @@ namespace MWMechanics
                 // Play dying words
                 // Note: It's not known whether the soundgen tags scream, roar, and moan are reliable
                 // for NPCs since some of the npc death animation files are missing them.
-                MWBase::Environment::get().getDialogueManager()->say(actor.getPtr(), ESM::RefId::stringRefId("hit"));
+                if (!stats.mBrutalSilentBackstab)
+                    MWBase::Environment::get().getDialogueManager()->say(actor.getPtr(), ESM::RefId::stringRefId("hit"));
+                else
+                {
+                    stats.mBrutalSilentBackstab = false;
+                    stats.mBrutalBackstabTarget = {};
+                }
 
                 // Apply soultrap
                 if (actor.getPtr().getType() == ESM::Creature::sRecordId)
@@ -1841,8 +1941,10 @@ namespace MWMechanics
 
                 if (isPlayer)
                 {
-                    // player's death animation is over
-                    MWBase::Environment::get().getStateManager()->askLoadRecent();
+                    const auto state = MWBase::Environment::get().getStateManager();
+                    // The classic death path ends the game at the start of the animation.
+                    if (state->getState() == MWBase::StateManager::State_Ended)
+                        state->askLoadRecent();
                 }
                 else
                 {
@@ -2352,6 +2454,7 @@ namespace MWMechanics
     void Actors::clear()
     {
         finishSwordClinch("loaded");
+        AiCombat::clearBrutalPickupClaims();
         mSwordClinchUseHeld = false;
         mIndex.clear();
         mActors.clear();

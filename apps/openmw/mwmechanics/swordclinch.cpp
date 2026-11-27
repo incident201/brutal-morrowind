@@ -37,13 +37,13 @@ namespace MWMechanics
             if (right == inventory.end() || right->getType() != ESM::Weapon::sRecordId)
                 return {};
             const int type = right->get<ESM::Weapon>()->mBase->mData.mType;
-            // The player's dagger and staff sets carry their own contest clips; an NPC opponent
-            // still needs the sword it has clips for.
-            const bool playerSet = player && (type == ESM::Weapon::SpearTwoWide || type == ESM::Weapon::BluntTwoWide);
+            // The player can use the imported two-handed contest. The NPC still
+            // needs a sword suitable for its side of the paired animation.
+            const bool playerSet = player && (brutalStaffWeapon(type) || brutalPairedWeapon(type));
             if (!playerSet && type != ESM::Weapon::ShortBladeOneHand && type != ESM::Weapon::LongBladeOneHand
                 && (player || type != ESM::Weapon::LongBladeTwoHand))
                 return {};
-            if (player)
+            if (player && !playerSet)
             {
                 const auto left = inventory.getSlot(MWWorld::InventoryStore::Slot_CarriedLeft);
                 if (left != inventory.end() && left->getType() == ESM::Armor::sRecordId)
@@ -97,6 +97,14 @@ namespace MWMechanics
         const auto playerWeapon = clinchSword(player, true), opponentWeapon = clinchSword(opponent, false);
         if (playerWeapon.isEmpty() || opponentWeapon.isEmpty())
             return false;
+        // The contest is authored for a pair on one level. With the opponent a step or
+        // more above or below (stairs, a ledge, a crate) the level camera loses it and
+        // the blade fit would drag the arms off the shoulders; the timed parry then
+        // ends as an ordinary deflection with the attacker's recoil.
+        constexpr float maximumHeightDifference = 24.f;
+        if (std::abs(opponent.getRefData().getPosition().pos[2] - player.getRefData().getPosition().pos[2])
+            > maximumHeightDifference)
+            return false;
         auto world = MWBase::Environment::get().getWorld();
         auto* playerAnimation = dynamic_cast<MWRender::NpcAnimation*>(world->getAnimation(player));
         auto* opponentAnimation = dynamic_cast<MWRender::NpcAnimation*>(world->getAnimation(opponent));
@@ -130,8 +138,8 @@ namespace MWMechanics
         }
         // Claim both actors at the contact callback. Ordinary combat cannot steal
         // the pending pair before its authored animation starts next update.
-        player.getClass().getCreatureStats(player).mBrutalClinchOpponent = opponent;
-        opponent.getClass().getCreatureStats(opponent).mBrutalClinchOpponent = player;
+        player.getClass().getCreatureStats(player).mBrutalClinchOpponent = MWWorld::SafePtr(opponent);
+        opponent.getClass().getCreatureStats(opponent).mBrutalClinchOpponent = MWWorld::SafePtr(player);
         // Deliberately defer animation changes until the next actor update. This
         // request is called inside the opponent's running melee text-key callback.
         return true;
@@ -146,6 +154,9 @@ namespace MWMechanics
         };
         if (!mSwordClinch)
             return invalid("missing_session");
+        if (!Settings::game().mBrutalEnabled || !Settings::game().mBrutalClinch
+            || !Settings::game().mDarkMessiahSwordParry)
+            return invalid("settings");
         const auto& session = *mSwordClinch;
         auto world = MWBase::Environment::get().getWorld();
         for (const MWWorld::Ptr& actor : { session.player, session.opponent })
@@ -230,7 +241,7 @@ namespace MWMechanics
             auto& stats = actor.getClass().getCreatureStats(actor);
             stats.mBrutalClinchActive = true;
             stats.mBrutalClinchId = session.id;
-            stats.mBrutalClinchOpponent = actor == session.player ? session.opponent : session.player;
+            stats.mBrutalClinchOpponent = MWWorld::SafePtr(actor == session.player ? session.opponent : session.player);
             stats.mBrutalClinchPhase = session.phase;
             stats.mBrutalClinchClicks = session.clicks;
             stats.mBrutalClinchTarget = session.requiredClicks;
@@ -289,9 +300,7 @@ namespace MWMechanics
 
     void Actors::cancelSwordClinch(const MWWorld::Ptr& participant, std::string_view reason)
     {
-        // Gameplay events never cancel an accepted contest. Scene teardown
-        // still releases references when an actor is actually removed.
-        if (reason == "removed" && mSwordClinch
+        if (mSwordClinch
             && (participant == mSwordClinch->player || participant == mSwordClinch->opponent))
             finishSwordClinch(reason);
     }
@@ -300,20 +309,14 @@ namespace MWMechanics
     {
         if (!mSwordClinch)
             return;
+        std::string reason;
+        if (!validSwordClinch(false, &reason))
+        {
+            finishSwordClinch(reason);
+            return;
+        }
         if (paused || MWBase::Environment::get().getWindowManager()->isGuiMode())
             return;
-        // Eligibility was decided by the parry. Once accepted, only Attack
-        // presses and the original animation deadline decide its outcome.
-        for (const auto& actor : { mSwordClinch->player, mSwordClinch->opponent })
-        {
-            const auto it = mIndex.find(actor.mRef);
-            if (it == mIndex.end() || it->second->isInvalid() || !actor.isInCell()
-                || !actor.getRefData().isEnabled() || !actor.getRefData().getBaseNode())
-            {
-                finishSwordClinch("actor_unavailable");
-                return;
-            }
-        }
         auto& session = *mSwordClinch;
         auto world = MWBase::Environment::get().getWorld();
         auto& playerController = mIndex.at(session.player.mRef)->getCharacterController();

@@ -109,10 +109,17 @@ return function(registerRenderer)
         registerRenderer('number', function(value, set, argument)
             argument = applyDefaults(argument, defaultArgument)
             local lastInput = nil
+            local text = tostring(value)
+            if argument.precision then
+                text = string.format('%.' .. argument.precision .. 'f', value)
+                if argument.precision > 0 then
+                    text = text:gsub('0+$', ''):gsub('%.$', '')
+                end
+            end
             return disable(argument.disabled, paddedBox {
                 template = I.MWUI.templates.textEditLine,
                 props = {
-                    text = tostring(value),
+                    text = text,
                     size = util.vector2(80, 0),
                 },
                 events = {

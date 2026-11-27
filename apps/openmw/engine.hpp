@@ -2,6 +2,7 @@
 #define ENGINE_H
 
 #include <filesystem>
+#include <optional>
 
 #include <components/compiler/extensions.hpp>
 #include <components/debug/debuglog.hpp>
@@ -139,6 +140,7 @@ namespace OMW
         std::unique_ptr<MWDialogue::Journal> mJournal;
         std::unique_ptr<MWInput::InputManager> mInputManager;
         std::unique_ptr<MWState::StateManager> mStateManager;
+        std::optional<float> mPlayerDeathElapsed;
         std::unique_ptr<MWLua::LuaManager> mLuaManager;
         std::unique_ptr<MWLua::Worker> mLuaWorker;
         std::unique_ptr<L10n::Manager> mL10nManager;
@@ -193,6 +195,7 @@ namespace OMW
         void executeLocalScripts();
 
         bool frame(unsigned frameNumber, float dt);
+        void updatePlayerDeath(float duration, bool paused);
 
         /// Prepare engine for game play
         void prepareEngine();

@@ -37,7 +37,6 @@ namespace SceneUtil
         mShadowTechnique->enableShadows();
 
         mShadowSettings->setLightNum(0);
-        mShadowSettings->setReceivesShadowTraversalMask(~0u);
 
         const int numberOfShadowMapsPerLight = settings.mNumberOfShadowMaps;
 
@@ -110,6 +109,7 @@ namespace SceneUtil
 
     ShadowManager::ShadowManager(osg::ref_ptr<osg::Group> sceneRoot, osg::ref_ptr<osg::Group> rootNode,
         unsigned int outdoorShadowCastingMask, unsigned int indoorShadowCastingMask, unsigned int worldMask,
+        unsigned int shadowOnlyMask,
         const Settings::ShadowsCategory& settings, Shader::ShaderManager& shaderManager)
         : mShadowedScene(new osgShadow::ShadowedScene)
         , mShadowTechnique(new MWShadowTechnique)
@@ -129,10 +129,12 @@ namespace SceneUtil
         mShadowedScene->setNodeMask(sceneRoot->getNodeMask());
 
         mShadowSettings = mShadowedScene->getShadowSettings();
+        mShadowSettings->setReceivesShadowTraversalMask(~shadowOnlyMask);
         setupShadowSettings(settings, shaderManager);
 
         mShadowTechnique->setupCastingShader(shaderManager);
         mShadowTechnique->setWorldMask(worldMask);
+        mShadowTechnique->setShadowOnlyMask(shadowOnlyMask);
 
         enableOutdoorMode();
 

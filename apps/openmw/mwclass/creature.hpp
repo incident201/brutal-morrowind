@@ -62,14 +62,15 @@ namespace MWClass
         ///< Return creature stats
 
         bool evaluateHit(const MWWorld::Ptr& ptr, MWWorld::Ptr& victim, osg::Vec3f& hitPosition, int* contactPart,
-            std::string_view swing) const override;
+            std::string_view swing, std::vector<MWMechanics::MeleeFollowThrough>*) const override;
 
         void hit(const MWWorld::Ptr& ptr, float attackStrength, int type, const MWWorld::Ptr& victim,
-            const osg::Vec3f& hitPosition, bool success, int contactPart) const override;
+            const osg::Vec3f& hitPosition, bool success, int contactPart, bool groundFinisher,
+            const MWWorld::Ptr*) const override;
 
         void onHit(const MWWorld::Ptr& ptr, const std::map<std::string, float>& damages, ESM::RefId object,
             const MWWorld::Ptr& attacker, bool successful,
-            const MWMechanics::DamageSourceType sourceType) const override;
+            MWMechanics::DamageSourceType sourceType, bool charged) const override;
 
         std::unique_ptr<MWWorld::Action> activate(const MWWorld::Ptr& ptr, const MWWorld::Ptr& actor) const override;
         ///< Generate action for activation

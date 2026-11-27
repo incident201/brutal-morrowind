@@ -1,13 +1,16 @@
 #include "datetimemanager.hpp"
 
 #include <components/l10n/manager.hpp>
+#include <components/settings/values.hpp>
 
 #include "../mwbase/environment.hpp"
 #include "../mwbase/soundmanager.hpp"
 #include "../mwbase/statemanager.hpp"
 #include "../mwbase/windowmanager.hpp"
 #include "../mwbase/world.hpp"
+#include "../mwmechanics/creaturestats.hpp"
 
+#include "class.hpp"
 #include "duration.hpp"
 #include "globals.hpp"
 #include "timestamp.hpp"
@@ -254,9 +257,17 @@ namespace MWWorld
 
     void DateTimeManager::updateIsPaused()
     {
-        auto stateManager = MWBase::Environment::get().getStateManager();
+        const auto state = MWBase::Environment::get().getStateManager()->getState();
         auto wm = MWBase::Environment::get().getWindowManager();
-        mPaused = !mPausedTags.empty() || wm->isConsoleMode() || wm->isPostProcessorHudVisible()
-            || wm->isInteractiveMessageBoxActive() || stateManager->getState() == MWBase::StateManager::State_NoGame;
+        const auto uiPauseTag = mPausedTags.count("ui");
+        bool guiPauses = uiPauseTag != 0 || wm->isInteractiveMessageBoxActive();
+        if (guiPauses && state == MWBase::StateManager::State_Ended && Settings::game().mBrutalEnabled)
+        {
+            const auto player = MWBase::Environment::get().getWorld()->getPlayerPtr();
+            // Keep the world running behind the death menu and the load-last-save prompt.
+            guiPauses = player.isEmpty() || !player.getClass().getCreatureStats(player).isDead();
+        }
+        mPaused = guiPauses || mPausedTags.size() > uiPauseTag || wm->isConsoleMode()
+            || wm->isPostProcessorHudVisible() || state == MWBase::StateManager::State_NoGame;
     }
 }

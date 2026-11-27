@@ -9,7 +9,6 @@ return {
     kickStaminaNeeded = 3, -- mm_player_stamina_needed_for_kick
     kickStaminaNpc = 3, -- stamina_kick_npc: a kick that strikes an NPC
     kickStaminaOther = 1, -- stamina_kick_all: a kick that strikes anything else
-    sprintStaminaPerSecond = 2, -- mm_player_stamina_megasprint_cost_per_second
     sprintStaminaNeeded = 3, -- needed to start; an active sprint spends down to zero
     cooldown = 0.95,
     windup = 0.375,

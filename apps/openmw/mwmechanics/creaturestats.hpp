@@ -108,7 +108,7 @@ namespace MWMechanics
         struct PowerStrike
         {
             std::string token;
-            MWWorld::Ptr weapon;
+            MWWorld::SafePtr weapon;
             float multiplier = 1.f;
             float minimumStrength = 0.8f;
         };
@@ -116,9 +116,14 @@ namespace MWMechanics
         std::string mLastConsumedPowerStrikeToken;
         // Transient Lua presentation state: defer automatic arrest while adrenaline is visible.
         bool mBrutalAdrenalineEffectActive = false;
+        // Transient: this guard left an arrest to fight an adrenaline-charged player who was
+        // already fighting; it returns to the arrest when the player's adrenaline fades.
+        bool mBrutalAdrenalineArrestCombat = false;
+        bool mBrutalCarryingObject = false; // Player is gripping/throwing a physics world object.
         bool mBrutalBlockRequested = false; // Player is holding the block control (Lua).
         bool mBrutalBlockRaised = false; // Controller-owned: the shield is up this frame.
         bool mBrutalBlockImpact = false; // A blow landed on the raised shield; consumed by the controller.
+        bool mBrutalPerfectShieldBlock = false; // The last shield block met the blow inside the parry window.
         bool mBrutalParry = false; // Controller-owned: the raised guard is a weapon parry (no shield).
         double mBrutalBlockRaisedAt = -1.0; // Simulation time the current guard started rising.
         double mBrutalBlockLoweredAt = -1e9; // Simulation time the previous guard ended.
@@ -149,7 +154,7 @@ namespace MWMechanics
         std::string mBrutalClinchInterruptReason;
         bool mBrutalClinchReleaseUse = false;
         float mBrutalClinchBlendOut = 0.f;
-        MWWorld::Ptr mBrutalClinchOpponent;
+        MWWorld::SafePtr mBrutalClinchOpponent;
         uint64_t mBrutalClinchId = 0;
         int mBrutalClinchPhase = 0; // 0 idle, 1 aligning, 2 contest, 3 win, 4 lose.
         int mBrutalClinchClicks = 0;
@@ -161,6 +166,39 @@ namespace MWMechanics
         std::string mBrutalClinchLastReason;
         osg::Vec3f mBrutalClinchVelocity; // World-space collision-resolved alignment only.
         bool mBrutalParried = false; // NPC: the player timed a parry of this actor's blow; recoil next update.
+        // A wounded NPC knocked down by a blow (WoundedFallChance): the push, applied next update.
+        osg::Vec3f mBrutalWoundedFall;
+        MWWorld::SafePtr mBrutalWoundedFallAttacker;
+        double mBrutalFleeUntil = 0.0;
+        // The player's lethal blow, consumed by the physical death handoff.
+        osg::Vec3f mBrutalPlayerDeathPush;
+        // Transient adaptive defence: pressure is observed from actual fast contacts,
+        // not the player's input; none of these decisions survives a saved game.
+        int mBrutalFastPressure = 0;
+        double mBrutalLastFastPressureAt = -1e9;
+        double mBrutalGuardReactAt = 0.0;
+        bool mBrutalNpcGuardRequested = false;
+        double mBrutalGuardUntil = 0.0;
+        double mBrutalGuardCooldownUntil = 0.0;
+        double mBrutalGuardBrokenUntil = 0.0;
+        bool mBrutalGuardBreakingAttack = false; // Latched when the NPC chooses its next attack.
+        int mBrutalGuardBlocks = 0;
+        // ACT_GRAB_WEAPON, transient and observed by the audit: 0 none, 1 going to the item,
+        // 2 crouching for it; the record of the item and the count of items taken.
+        int mBrutalPickupPhase = 0;
+        ESM::RefId mBrutalPickupTarget;
+        int mBrutalPickups = 0;
+        bool mBrutalPickupTable = false; // the last pickup reached to a table rather than the floor
+        // Dual-dagger stealth backstab, transient runtime state:
+        // phase 0 none, 1 entering, 2 ready, 3 canceling, 4 executing.
+        int mBrutalBackstabPhase = 0;
+        MWWorld::SafePtr mBrutalBackstabTarget; // Player's target, or victim's attacker during execution.
+        bool mBrutalBackstabVictim = false; // NPC is locked in synchronized brutal_backstabbed clip.
+        bool mBrutalSilentBackstab = false; // Suppresses vanilla cry & telepathic unseen murder crime.
+        float mBrutalBackstabEyeLift = 0.f; // Shared first-person eye and arm offset during the paired pose.
+        float mBrutalBackstabLastDamage = 0.f;
+        int mBrutalBackstabKills = 0;
+        int mBrutalAttackKind = 1; // Transient observed stroke: 0 chop, 1 slash, 2 thrust.
         // Kinetic player gait chosen by Lua (0 = Morrowind run stance, 1 walk, 2 run, 3 sprint).
         int mBrutalGait = 0;
 

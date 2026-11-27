@@ -12,37 +12,53 @@ local currentAttack, selectedArmor
 local bloodRequests, sparkRequests = 0, 0
 local bloodDecalData, restoreBloodDecals = '', false
 local bloodRestoreWait = 0
+local bloodRestoreSerial, bloodRestoreRequest = 0, nil
 local decapitation = require('scripts.brutal_morrowind.decapitation')
 local decapSelected, restoreDecapitation = false, false
 local torsoSelected, restoreBisection = false, false
 local torsoPoseData = ''
 local torsoPoseWait = 0
 local limbMask, limbPose, limbPoseWait, restoreLimbs = 0, '', 0, false
+-- A selected cut is only a request. Only a cut the engine actually made is saved
+-- and restored, so a corpse that stayed whole never splits later (on load, on
+-- becoming active again or after its clothes change through looting).
+local headDone, torsoDone, limbsDone = false, false, false
+local function confirmCuts()
+    if decapSelected and not headDone and type(types.Actor.isHeadSevered)=='function' then
+        headDone = types.Actor.isHeadSevered(self) == true
+    end
+    if torsoSelected and not torsoDone and type(types.Actor.isTorsoSevered)=='function' then
+        torsoDone = types.Actor.isTorsoSevered(self) == true
+    end
+    if limbMask~=0 and not limbsDone and type(types.Actor.getSeveredLimbsMask)=='function' then
+        limbsDone = types.Actor.getSeveredLimbsMask(self) == limbMask
+    end
+end
 local limbSelections, legRoll = 0, nil
 local bisectionEligible, bisectionSelections = 0, 0
 local decapEligible, decapSelections, decapRoll, decapAttackId = 0, 0, nil, nil
-local pendingDecapitation = {}
 -- Dark Messiah life_tohurt: a blow removing this share of maximum health staggers
 -- the whole body. Every smaller damaging hit keeps the native small flinch.
 local HEAVY_HIT_FRACTION = 0.1
+local rangedDamageMultiplier = { head = 2, body = 1, limb = 0.65 }
 local hasStagger, stagger = pcall(function() return types.Actor.stagger end)
 local heavyStaggers = 0
 
-local function requestDecapitation(velocity, cutDirection)
+local function requestDecapitation(velocity, cutDirection, fromSave)
     if not settings.get('dismemberment') then return end
     core.sendGlobalEvent('BrutalDecapitationDeath', {actor = self, velocity = velocity,
-        cutDirection = cutDirection or util.vector3(0, 0, 0)})
+        cutDirection = cutDirection or util.vector3(0, 0, 0), fromSave=fromSave==true})
 end
-local function requestBisection(velocity, cutDirection, savedPose)
+local function requestBisection(velocity, cutDirection, savedPose, fromSave)
     if not settings.get('dismemberment') then return end
     core.sendGlobalEvent('BrutalBisectionDeath', {actor=self, velocity=velocity,
-        cutDirection=cutDirection or util.vector3(0, 0, 0), savedPose=savedPose or ''})
+        cutDirection=cutDirection or util.vector3(0, 0, 0), savedPose=savedPose or '', fromSave=fromSave==true})
 end
-local function requestLimbs(mask, cutDirection, savedPose)
+local function requestLimbs(mask, cutDirection, savedPose, fromSave)
     if not settings.get('dismemberment') then return end
     core.sendGlobalEvent('BrutalLimbSeveringDeath', {actor=self, mask=mask,
         velocity=util.vector3(0,0,0), cutDirection=cutDirection or util.vector3(0,0,0),
-        savedPose=savedPose or ''})
+        savedPose=savedPose or '', fromSave=fromSave==true})
 end
 local function validLimbMask(mask)
     return type(mask)=='number' and mask>=1 and mask<=15 and mask==math.floor(mask)
@@ -72,6 +88,7 @@ local function burst(kind, position, attack)
     if kind=='blood' and not (settings.get('bloodEffects') or settings.get('bloodDecals'))
         or kind=='sparks' and not settings.get('sparkEffects') then return end
     if not available or not position then return end
+    local projectileNormal = attack and attack.brutalContactNormal
     local outward = direction(attack)
     if kind == 'sparks' then
         -- Reflect metal fragments toward the incoming blade, clear of the shield.
@@ -80,16 +97,16 @@ local function burst(kind, position, attack)
     else
         -- Spray back out of the wound toward the attacker, where the view can see
         -- it; drops thrown away from the camera are hidden behind the body.
-        outward = (-outward + util.vector3(0, 0, 0.6)):normalize()
+        outward = projectileNormal or (-outward + util.vector3(0, 0, 0.6)):normalize()
     end
     core.sendGlobalEvent('BrutalImpact', {
         actor = self, kind = kind, position = position, direction = outward,
-        woundKind = attack and attack.brutalAttackType or '',
+        woundKind = projectileNormal and 'projectile' or (attack and attack.brutalAttackType or ''),
         woundPart = attack and attack.brutalContactPart or nil,
         attachment = kind == 'sparks' and attack and attack.brutalBlocked and 'shield' or nil,
         contactExact = attack and attack.brutalContactExact == true or false,
-        power = attack and attack.brutalPowered or false,
-        intensity = types.Player.objectIsInstance(self) and 0.65 or (kind == 'blood' and 2 or 1),
+        power = not projectileNormal and attack and attack.brutalPowered or false,
+        intensity = (projectileNormal or types.Player.objectIsInstance(self)) and 0.65 or (kind == 'blood' and 2 or 1),
     })
     if kind == 'blood' then bloodRequests = bloodRequests + 1 else sparkRequests = sparkRequests + 1 end
 end
@@ -105,38 +122,80 @@ interface.spawnBloodEffect = function(position)
     if not available or not types.NPC.objectIsInstance(self) then return previous.spawnBloodEffect(position) end
     -- Marks have their own switch. Native placement can record a wound without
     -- emitting our blood particles; keep stock blood in that combination.
-    if not types.Player.objectIsInstance(self) then burst('blood', position, currentAttack) end
+    if not types.Player.objectIsInstance(self) and not (currentAttack and currentAttack.brutalContactNormal) then
+        burst('blood', position, currentAttack)
+    end
     if not settings.get('bloodEffects') then return previous.spawnBloodEffect(position) end
     -- Keep the stock first-person choice: world blood belongs on the opponent,
     -- while the normal damage vignette communicates wounds to the player.
 end
 
+local function weaponSkillDamageMultiplier(skill)
+    skill = math.max(0, math.min(100, skill))
+    if skill <= 50 then
+        local t = skill / 50
+        return 0.30 + 0.30 * t + 0.40 * t * t
+    end
+    local t = (skill - 50) / 50
+    return 1 + 0.20 * (2 * t - t * t)
+end
+
 interface.adjustDamageForDifficulty = function(attack)
     previous.adjustDamageForDifficulty(attack)
-    -- DM's manual describes a full-adrenaline Power Strike as a finishingmove.
-    -- Apply this after ordinary armor/difficulty in the same Combat damage path,
-    -- so death, killer attribution and ragdoll still receive one ordinary hit.
-    if settings.get('finisherEnabled') and settings.get('adrenalineEnabled') and attack.brutalPowered and attack.successful and not attack.brutalBlocked
-        and attack.sourceType=='melee' and attack.attacker and attack.attacker:isValid()
+    local multiplier = rangedDamageMultiplier[attack.brutalRangedZone]
+    if attack.brutalWeaponDamageSkill then
+        multiplier = (multiplier or 1) * weaponSkillDamageMultiplier(attack.brutalWeaponDamageSkill)
+    end
+    if multiplier and attack.damage and attack.damage.health then
+        attack.damage.health = attack.damage.health * multiplier
+    end
+    -- Apply lethal damage after armor and difficulty so the normal hit owns the
+    -- kill, including attribution, ragdoll, and the equipment drop.
+    local ground = attack.brutalGroundFinisher and settings.get('groundFinisherEnabled')
+    local powered = attack.brutalPowered and settings.get('finisherEnabled') and settings.get('adrenalineEnabled')
+    local ranged = powered and attack.sourceType == 'ranged'
+    if (ranged or ((ground or powered) and attack.sourceType == 'melee'))
+        and attack.successful and not attack.brutalBlocked and attack.attacker and attack.attacker:isValid()
         and types.Player.objectIsInstance(attack.attacker)
         and not types.Player.objectIsInstance(self)
-        and not types.Actor.isDead(self) and attack.damage and (attack.damage.health or 0)>0 then
-        attack.damage.health=math.max(attack.damage.health,types.Actor.stats.dynamic.health(self).current)
+        and not types.Actor.isDead(self) and attack.damage and (ground or ranged or (attack.damage.health or 0)>0) then
+        attack.damage.health=math.max(attack.damage.health or 0,types.Actor.stats.dynamic.health(self).current)
     end
+end
+
+local function reportDamagingHit(attack, receipt)
+    local attacker = attack.attacker
+    if not attacker or not attacker:isValid() then return end
+    if attack.brutalGroundFinisher then return end
+    local damage = math.min(receipt.actualHealthDamage, math.max(0, receipt.healthBefore))
+    attacker:sendEvent('BrutalDamagingHit', {
+        target = self, weapon = attack.weapon, sourceType = attack.sourceType,
+        successful = attack.successful, healthDamage = damage,
+        targetMaxHealth = receipt.maximumHealth,
+        targetWasAlive = receipt.aliveBefore, powered = attack.brutalPowered or false,
+        attackId = attack.brutalAttackId,
+    })
 end
 
 interface.onHit = function(attack)
     local aliveBefore = not types.Actor.isDead(self)
+    -- Physical contact can leave a mark even if resistance absorbs all damage.
+    if aliveBefore and attack.successful and attack.brutalContactNormal and not attack.brutalBlocked then
+        burst('blood', attack.hitPos, attack)
+    end
     local outerAttack, outerArmor = currentAttack, selectedArmor
     currentAttack, selectedArmor = attack, nil
     previous.onHit(attack)
     local hitArmor = selectedArmor
     currentAttack, selectedArmor = outerAttack, outerArmor
     local healthDamage = (attack.damage or {}).health or 0
-    if settings.get('finisherEnabled') and settings.get('adrenalineEnabled') and attack.brutalAttackId and attack.brutalPowered then
-        -- Combat queues native damage. Confirm the outcome of THIS damage action,
-        -- rather than sampling death before it runs or attributing a later death.
-        pendingDecapitation[attack.brutalAttackId] = {attack = attack, age = 0}
+    if aliveBefore and attack.successful and attack.sourceType == 'ranged' and attack.brutalBlocked then
+        -- An arrow, bolt or thrown weapon met the held guard.
+        local guard = types.Actor.getEquipment(self)[types.Actor.EQUIPMENT_SLOT.CarriedLeft]
+        if not (guard and types.Armor.objectIsInstance(guard)) then
+            guard = types.Actor.getEquipment(self)[types.Actor.EQUIPMENT_SLOT.CarriedRight]
+        end
+        if metal(guard) then burst('sparks', attack.hitPos, attack) end
     end
     if aliveBefore and attack.successful and attack.sourceType == 'melee' and (attack.weapon or attack.brutalBlocked) then
         if attack.brutalBlocked then
@@ -145,18 +204,23 @@ interface.onHit = function(attack)
         if (healthDamage > 0 or attack.brutalBlocked) and metal(hitArmor) then
             burst('sparks', attack.hitPos, attack)
         end
+        if healthDamage > 0 and not attack.brutalBlocked and attack.weapon and attack.attacker
+            and attack.attacker:isValid() and settings.get('weaponBlood') then
+            core.sendGlobalEvent('BrutalWeaponBlood', {
+                attacker = attack.attacker, victim = self, weapon = attack.weapon,
+                position = attack.hitPos or (self.position + util.vector3(0, 0, 80)),
+                kind = attack.brutalAttackType or '',
+                power = attack.brutalPowered or false,
+            })
+        end
         if settings.get('finisherEnabled') and settings.get('adrenalineEnabled') and attack.brutalPowered and healthDamage > 0 and not types.Actor.isDead(self) then
             -- This is a physical recoil on the existing actor, not extra damage.
             types.Actor.addExternalVelocity(self, direction(attack) * 420 + util.vector3(0, 0, 70))
         end
     end
-    if attack.attacker and attack.attacker:isValid() then
-        attack.attacker:sendEvent('BrutalDamagingHit', {
-            target = self, weapon = attack.weapon, sourceType = attack.sourceType,
-            successful = attack.successful, healthDamage = healthDamage,
-            targetWasAlive = aliveBefore, powered = attack.brutalPowered or false,
-            attackId = attack.brutalAttackId, fast = attack.brutalFast or false,
-        })
+    -- The player's shield met the blow inside the parry window.
+    if attack.brutalPerfectBlock and aliveBefore and types.Player.objectIsInstance(self) then
+        self:sendEvent('BrutalPerfectShieldBlock', {attackId = attack.brutalAttackId, attacker = attack.attacker})
     end
 end
 interface.brutalFeedbackStats = function()
@@ -170,9 +234,15 @@ return {
     interfaceName = 'Combat', interface = interface,
     eventHandlers = {
         BrutalBloodDecalsStored = function(data)
-            if data.restored and type(data.data) == 'string' then
-                bloodDecalData, restoreBloodDecals = data.data, false
-            else bloodRestoreWait = 1 end
+            if not data.restored or type(data.data) ~= 'string' then return end
+            if bloodRestoreRequest and data.requestId == bloodRestoreRequest then
+                bloodDecalData, restoreBloodDecals, bloodRestoreRequest = data.data, false, nil
+            elseif restoreBloodDecals then
+                -- A projectile can mark the new animation before the saved wounds have been restored.
+                bloodDecalData = types.Actor._mergeBloodDecalData(bloodDecalData, data.data)
+            else
+                bloodDecalData = data.data
+            end
         end,
         BrutalFeedbackAvailable = function(data) available = data.available == true end,
         BrutalHitApplied = function(data)
@@ -182,11 +252,13 @@ return {
                 and damage >= HEAVY_HIT_FRACTION * types.Actor.stats.dynamic.health(self).base then
                 if stagger(self) then heavyStaggers = heavyStaggers + 1 end
             end
-            local entry = pendingDecapitation[data.attackId]
-            if not entry then return end
-            pendingDecapitation[data.attackId] = nil
-            if (data.actualHealthDamage or 0) <= 0 then return end
-            local attack = entry.attack
+            local attack = data.attack
+            if not attack or damage <= 0 then return end
+            attack.damage = {health = damage}
+            reportDamagingHit(attack, data)
+            if attack.sourceType == 'ranged' then
+                return
+            end
             -- Notify from this native damage action, never from a delayed sample
             -- that could accidentally attribute a later death to this attack.
             if data.aliveBefore and data.deadAfter and attack.brutalPowered
@@ -244,21 +316,21 @@ return {
     },
     engineHandlers = {
         onUpdate = function(dt)
+            confirmCuts()
             bloodRestoreWait = math.max(0, bloodRestoreWait - dt)
             if settings.get('bloodDecals') and restoreBloodDecals and bloodRestoreWait == 0 then
-                core.sendGlobalEvent('BrutalRestoreBloodDecals', {actor=self, data=bloodDecalData})
+                bloodRestoreSerial = bloodRestoreSerial + 1
+                bloodRestoreRequest = bloodRestoreSerial
+                core.sendGlobalEvent('BrutalRestoreBloodDecals', {actor=self, data=bloodDecalData,
+                    requestId=bloodRestoreRequest})
                 bloodRestoreWait = 1
             end
-            for id, entry in pairs(pendingDecapitation) do
-                entry.age = entry.age + dt
-                if entry.age > 2 then pendingDecapitation[id] = nil end
-            end
             if torsoSelected and not types.Actor.isDead(self) then
-                torsoSelected, restoreBisection = false, false
+                torsoSelected, restoreBisection, torsoDone = false, false, false
                 torsoPoseData = ''
             end
             if limbMask~=0 and not types.Actor.isDead(self) then
-                limbMask, limbPose, restoreLimbs = 0, '', false
+                limbMask, limbPose, restoreLimbs, limbsDone = 0, '', false, false
             end
             limbPoseWait = math.max(0, limbPoseWait-dt)
             if limbMask~=0 and limbPoseWait==0 and type(types.Actor.getLimbSeveringPoseData)=='function' then
@@ -268,7 +340,7 @@ return {
             end
             if restoreLimbs then
                 restoreLimbs=false
-                if limbMask~=0 then requestLimbs(limbMask,nil,limbPose) end
+                if limbMask~=0 then requestLimbs(limbMask,nil,limbPose,true) end
             end
             torsoPoseWait = math.max(0, torsoPoseWait-dt)
             if torsoSelected and torsoPoseWait==0 and type(types.Actor.getTorsoSeveredPoseData)=='function' then
@@ -280,14 +352,14 @@ return {
             end
             if restoreBisection then
                 restoreBisection = false
-                if torsoSelected then requestBisection(util.vector3(0, 0, 0), nil, torsoPoseData) end
+                if torsoSelected then requestBisection(util.vector3(0, 0, 0), nil, torsoPoseData,true) end
             end
             if decapSelected and not types.Actor.isDead(self) then
-                decapSelected, restoreDecapitation = false, false
+                decapSelected, restoreDecapitation, headDone = false, false, false
             end
             if restoreDecapitation then
                 restoreDecapitation = false
-                if decapSelected then requestDecapitation(util.vector3(0, 0, 0)) end
+                if decapSelected then requestDecapitation(util.vector3(0, 0, 0),nil,true) end
             end
             if requestAvailability then
                 requestAvailability = false
@@ -295,13 +367,14 @@ return {
             end
         end,
         onSave = function()
+            confirmCuts()
             -- Native/scripted cuts share the same persisted corpse state.
             -- The chosen policy flag also survives while an actor is inactive.
             local nativeCut = type(types.Actor.isHeadSevered) == 'function' and types.Actor.isHeadSevered(self)
             local nativeTorso = type(types.Actor.isTorsoSevered) == 'function' and types.Actor.isTorsoSevered(self)
             local nativeLimbs = type(types.Actor.getSeveredLimbsMask)=='function'
                 and types.Actor.getSeveredLimbsMask(self) or 0
-            if validLimbMask(nativeLimbs) then limbMask=nativeLimbs end
+            if validLimbMask(nativeLimbs) then limbMask, limbsDone = nativeLimbs, true end
             if limbMask~=0 and type(types.Actor.getLimbSeveringPoseData)=='function' then
                 local pose=types.Actor.getLimbSeveringPoseData(self)
                 if #pose>0 and #pose<=2048 then limbPose=pose end
@@ -310,14 +383,16 @@ return {
                 local pose = types.Actor.getTorsoSeveredPoseData(self)
                 if #pose == 60 then torsoPoseData = pose end
             end
-            return {headSevered = decapSelected or nativeCut, torsoSevered = torsoSelected or nativeTorso,
+            return {headSevered = (decapSelected and headDone) or nativeCut == true,
+                torsoSevered = (torsoSelected and torsoDone) or nativeTorso == true,
                 torsoPoseData = torsoPoseData, bloodDecals = bloodDecalData,
-                limbsMask=limbMask, limbPoseData=limbPose}
+                bloodRestoreSerial = bloodRestoreSerial,
+                limbsMask=limbsDone and limbMask or 0, limbPoseData=limbPose}
         end,
         onLoad = function(data)
-            pendingDecapitation = {}
             bloodDecalData = data and type(data.bloodDecals) == 'string' and data.bloodDecals or ''
             restoreBloodDecals, bloodRestoreWait = bloodDecalData ~= '', 0
+            bloodRestoreSerial, bloodRestoreRequest = data and data.bloodRestoreSerial or 0, nil
             available, requestAvailability = false, true
             decapSelected = data and data.headSevered == true or false
             torsoSelected = data and data.torsoSevered == true or false
@@ -333,12 +408,15 @@ return {
             if torsoSelected then decapSelected = false end
             restoreDecapitation = decapSelected
             restoreBisection = torsoSelected
+            headDone, torsoDone, limbsDone = decapSelected, torsoSelected, limbMask~=0
         end,
         onActive = function()
-            restoreLimbs = limbMask~=0
-            restoreDecapitation = decapSelected
-            restoreBisection = torsoSelected
+            confirmCuts()
+            restoreLimbs = limbMask~=0 and limbsDone
+            restoreDecapitation = decapSelected and headDone
+            restoreBisection = torsoSelected and torsoDone
             restoreBloodDecals, bloodRestoreWait = bloodDecalData ~= '', 0
+            bloodRestoreRequest = nil
         end,
     },
 }

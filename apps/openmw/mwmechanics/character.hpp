@@ -2,6 +2,7 @@
 #define GAME_MWMECHANICS_CHARACTER_HPP
 
 #include <deque>
+#include <optional>
 
 #include <components/esm3/loadweap.hpp>
 
@@ -125,6 +126,7 @@ namespace MWMechanics
     };
 
     struct WeaponInfo;
+    struct MeleeFollowThrough;
 
     class CharacterController : public MWRender::Animation::TextKeyListener
     {
@@ -149,6 +151,7 @@ namespace MWMechanics
 
         CharacterState mIdleState{ CharState_None };
         std::string mCurrentIdle;
+        std::string mCurrentThrownLeftIdle;
 
         CharacterState mMovementState{ CharState_None };
         std::string mCurrentMovement;
@@ -156,6 +159,13 @@ namespace MWMechanics
         bool mAdjustMovementAnimSpeed{ false };
         bool mBrutalSprinting{ false }; // kinetic player sprints forward this frame
         bool mBrutalSprintAnim{ false }; // the current movement clip is the sprint
+        bool mBrutalWounded{ false }; // the NPC plays Dark Messiah's wounded clips
+        // ACT_GRAB_WEAPON: the world item this NPC takes into its hand at "pickup contact".
+        MWWorld::SafePtr mBrutalPickupItem;
+        std::string mBrutalPickupGroup; // the crouch from the ground or the reach to a table
+        MWWorld::SafePtr mBrutalBowKickTarget;
+        MWWorld::SafePtr mBrutalBowKickWeapon;
+        double mBrutalBowKickReadyAt = 0.;
         float mBrutalStepPhase{ 0.f }; // player footstep clock, a fraction of the leg cycle
         int mBrutalStepGait{ 0 }; // BrutalFootsteps::Gait of the last player step
         bool mMovementAnimationHasMovement{ false };
@@ -177,6 +187,7 @@ namespace MWMechanics
             Lowering
         };
         BrutalBlock mBrutalBlock{ BrutalBlock::None };
+        std::string mBrutalNpcGuardGroup; // Owned shield/weapon guard layer; stock block reactions remain separate.
 
         // Dark Messiah player combos: Rush_Attack and Falling_Attack (In, Idle, Out).
         enum class BrutalCombo
@@ -190,6 +201,48 @@ namespace MWMechanics
         BrutalCombo mBrutalCombo{ BrutalCombo::None };
         bool mBrutalComboRelease{ false }; // The attack that started a combo must be released first.
         bool mBrutalRushLanded{ false }; // The rush's first blow struck; the charge stops at the target.
+        struct GroundFinisher
+        {
+            MWWorld::SafePtr mVictim;
+            MWWorld::SafePtr mWeapon;
+            osg::Vec3f mContact;
+            osg::Vec3f mTorsoOffset;
+            std::optional<osg::Vec3f> mStrikeOffset;
+            float mStrikePitch, mEyeHeight, mAuthoredDrop, mLowering;
+            float mInitialYaw, mInitialPitch;
+            float mFocusYaw, mFocusPitch;
+        };
+        std::optional<GroundFinisher> mGroundFinisher;
+        enum class BrutalBackstabPhase
+        {
+            None,
+            Entering,
+            Ready,
+            Canceling,
+            Executing
+        };
+        struct BrutalBackstab
+        {
+            BrutalBackstabPhase mPhase = BrutalBackstabPhase::None;
+            MWWorld::SafePtr mVictim;
+            MWWorld::SafePtr mWeapon;
+            MWWorld::SafePtr mOffhandWeapon;
+            osg::Vec3f mPlayerOrigin;
+            osg::Vec3f mVictimOrigin;
+            osg::Vec3f mVictimGoal;
+            float mPlayerYaw = 0.f;
+            float mPlayerPitch = 0.f;
+            float mVictimYaw = 0.f;
+            float mPairYaw = 0.f;
+            float mNeckPitch = 0.f;
+            float mEyeLift = 0.f;
+            float mTotalDamage = 0.f;
+            float mDealtDamage = 0.f;
+            bool mAttackQueued = false;
+            bool mLethal = false;
+            bool mReleased = false;
+        };
+        BrutalBackstab mBackstab;
         // Dark Messiah clicks: a release before the windup ends strikes the fixed fast attack chain.
         enum class BrutalFast
         {
@@ -201,6 +254,7 @@ namespace MWMechanics
         };
         BrutalFast mBrutalFast{ BrutalFast::None };
         int mBrutalFastIndex{ 0 }; // First_basic chain counter: 1 is A.
+        std::string mBrutalFastClip;
         bool mBrutalFastQueued{ false };
         bool mBrutalFastButton{ false };
         float mBrutalFastHeld{ 0.f };
@@ -209,6 +263,8 @@ namespace MWMechanics
         float mBrutalFastGrace{ 0.f };
         int mBrutalFastResumeIndex{ 0 };
         int mBrutalFastWindupIndex{ 0 };
+        int mBrutalSpearStrafe{ 0 }; // Side sampled when the next stroke is pressed.
+        int mBrutalLastSpearJab{ 0 }; // Keep the jab variation across a return to idle.
         bool mBrutalNeutralAttack{ false }; // Stationary charged swing: its own source clip.
         bool mBrutalGuardPress{ false }; // Attack pressed while the guard is up.
         std::uint64_t mBrutalWallSwing = 0;
@@ -236,6 +292,10 @@ namespace MWMechanics
 
         int mWeaponType{ ESM::Weapon::None };
         std::string mCurrentWeapon;
+        ESM::RefNum mBrutalWipeWeapon;
+        double mBrutalBowRepeatUntil = -1.;
+        bool mBrutalBowRepeatQueued = false;
+        bool mBrutalBowFastDraw = false;
 
         float mAttackStrength{ -1.f };
         bool mReadyToHit{ false };
@@ -278,6 +338,7 @@ namespace MWMechanics
 
         void refreshCurrentAnims(CharacterState idle, CharacterState movement, JumpingState jump, bool force = false);
         void refreshHitRecoilAnims();
+        bool collapseIntoRagdoll(bool swimming);
         void refreshJumpAnims(JumpingState jump, bool force = false);
         void refreshMovementAnims(CharacterState movement, bool force = false);
         void refreshIdleAnims(CharacterState idle, bool force = false);
@@ -326,7 +387,25 @@ namespace MWMechanics
         std::string_view getDesiredAttackType() const;
 
         void prepareHit();
-        void resolveMeleeHit();
+        void resolveMeleeHit(std::vector<MeleeFollowThrough>* followThrough = nullptr);
+        void applyMeleeImpact(int attackType);
+        bool canPlayGroundFinisher() const;
+        std::optional<osg::Vec3f> groundFinisherContact(const MWWorld::Ptr& target, bool lockedTarget) const;
+        bool startGroundFinisher();
+        bool updateGroundFinisher();
+        void cancelGroundFinisher();
+        void hitGroundFinisher();
+        bool canPlayBackstab(bool executing = false) const;
+        bool isValidBackstabTarget(const MWWorld::Ptr& target, bool maintain) const;
+        MWWorld::Ptr findBackstabTarget(bool maintain) const;
+        void enterBackstabStance(const MWWorld::Ptr& target);
+        bool startBackstabExecution(const MWWorld::Ptr& victim);
+        bool updateBackstab();
+        void cancelBackstab(bool playCancelAnim = false);
+        void onBackstabStab(int step);
+        void onBackstabRelease();
+        bool updateBackstabVictim(float duration);
+        void releaseBackstabVictim(const MWWorld::Ptr& victim);
 
         void unpersistAnimationState();
 
@@ -383,6 +462,16 @@ namespace MWMechanics
         void forceStateUpdate();
         // Full-body recovery; group is a preferred reaction clip (falls back to brutal_hit).
         bool stagger(std::string_view group = {});
+        // Dark Messiah's ACT_GRAB_WEAPON: the NPC crouches and, at the clip's "pickup contact",
+        // takes this loose weapon or shield straight into its hand without drawing it.
+        bool canBrutalPickup() const;
+        bool hasClearBrutalPickupReach(const MWWorld::Ptr& item) const;
+        bool startBrutalPickup(const MWWorld::Ptr& item);
+        // The pickup clip is playing, including the rise after the item was taken.
+        bool isBrutalPickingUp() const;
+        bool isBrutalSprinting() const { return mBrutalSprinting; }
+        bool startBrutalBowKick(const MWWorld::Ptr& target);
+        bool isBrutalBowKicking() const;
         bool canSwordClinch() const;
         bool hasPhysicalDeath() const;
         void playSwordClinch(std::string_view group, float speed = 1.f);
@@ -390,8 +479,17 @@ namespace MWMechanics
         bool updateSwordClinch(float duration);
 
         void cancelAttackForKick();
+        void hitBrutalBowKick();
+        void updateBrutalWounded();
+        void updateBrutalPickup();
+        bool takeBrutalPickup(const MWWorld::Ptr& item);
         void updateBrutalShieldBlock();
+        void updateBrutalNpcGuard();
+        void updateBrutalNpcGuardTarget(bool enabled, bool shield);
         void updateBrutalPlayerSteps(float duration, CharacterState movestate, bool grounded);
+        ESM::RefNum getWeaponWipeItem() const;
+        bool updateBrutalWeaponWipe(bool requested);
+        void cancelBrutalWeaponWipe();
         bool updateBrutalCombo();
         void updateBrutalSlide(float duration);
         void cancelBrutalSlide();
@@ -401,8 +499,11 @@ namespace MWMechanics
         bool brutalActiveKey(const std::string& key) const;
         bool isBrutalDaggerSet() const;
         bool isBrutalChainStaff() const;
+        bool usesBrutalPairedWeapon() const;
+        bool isBrutalWallWeapon() const;
         void startBrutalFastClip(const std::string& key, BrutalFast phase);
         void startBrutalFastNext();
+        int getBrutalSpearStrafe() const;
         void resetBrutalFastContinuation();
         bool startBrutalChargedHold();
         void updateBrutalFast(bool& animPlaying, float& complete);
@@ -432,6 +533,8 @@ namespace MWMechanics
 
         bool readyToPrepareAttack() const;
         bool readyToStartAttack() const;
+        // Adaptive defence may replace a small upper-body flinch, never a full stagger.
+        bool readyToStartBrutalGuard() const;
 
         float calculateWindUp() const;
 

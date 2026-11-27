@@ -377,6 +377,8 @@ namespace MWMechanics
         const MWWorld::Ptr& ptr, float duration, Collection::iterator& spellIt, UpdateContext& context)
     {
         const auto caster = MWBase::Environment::get().getWorldModel()->getPtr(spellIt->mCaster);
+        const MWWorld::Ptr player = MWMechanics::getPlayer();
+        const auto& health = ptr.getClass().getCreatureStats(ptr).getHealth();
         bool removedSpell = false;
         std::optional<ActiveSpellParams> reflected;
         for (auto it = spellIt->mEffects.begin(); it != spellIt->mEffects.end();)
@@ -387,6 +389,7 @@ namespace MWMechanics
                 ++it;
                 continue;
             }
+            const float healthBefore = health.getCurrent();
             auto result = applyMagicEffect(ptr, caster, *spellIt, *it, duration, context.mPlayNonLooping);
             if (result.mType == MagicApplicationResult::Type::REFLECTED)
             {
@@ -406,7 +409,6 @@ namespace MWMechanics
                 it = spellIt->mEffects.erase(it);
             else
             {
-                const MWWorld::Ptr player = MWMechanics::getPlayer();
                 ++it;
                 if (!context.mUpdatedEnemy && result.mShowHealth && caster == player && ptr != player)
                 {
@@ -415,7 +417,7 @@ namespace MWMechanics
                 }
                 if (!context.mUpdatedHitOverlay && result.mShowHit && ptr == player)
                 {
-                    MWBase::Environment::get().getWindowManager()->activateHitOverlay(false);
+                    MWBase::Environment::get().getWindowManager()->activateHitOverlay(healthBefore - health.getCurrent(), false);
                     context.mUpdatedHitOverlay = true;
                 }
             }

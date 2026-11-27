@@ -153,6 +153,7 @@ namespace LuaUtil
         void setSerializer(const UserdataSerializer* serializer) { mSerializer = serializer; }
 
         // Special deserializer to use when load data from saves. Can be used to remap content files in Refnums.
+        const UserdataSerializer* getSavedDataDeserializer() const { return mSavedDataDeserializer; }
         void setSavedDataDeserializer(const UserdataSerializer* serializer) { mSavedDataDeserializer = serializer; }
 
         // Starts scripts according to `autoStartMode` and calls `onInit` for them. Not needed if `load` is used.

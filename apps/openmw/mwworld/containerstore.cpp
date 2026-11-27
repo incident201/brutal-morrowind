@@ -16,6 +16,7 @@
 #include "../mwbase/windowmanager.hpp"
 #include "../mwbase/world.hpp"
 
+#include "../mwrender/brutalblood.hpp"
 #include "../mwmechanics/levelledlist.hpp"
 #include "../mwmechanics/recharge.hpp"
 #include "../mwmechanics/spellutil.hpp"
@@ -363,6 +364,15 @@ MWWorld::ContainerStoreIterator MWWorld::ContainerStore::restack(const MWWorld::
     return retval;
 }
 
+namespace
+{
+    bool bloody(const MWWorld::ConstPtr& ptr)
+    {
+        const auto* blood = MWRender::BrutalBlood::get();
+        return blood && blood->isBloody(ptr.getCellRef().getRefNum());
+    }
+}
+
 bool MWWorld::ContainerStore::stacks(const ConstPtr& ptr1, const ConstPtr& ptr2) const
 {
     const MWWorld::Class& cls1 = ptr1.getClass();
@@ -394,6 +404,11 @@ bool MWWorld::ContainerStore::stacks(const ConstPtr& ptr1, const ConstPtr& ptr2)
         && cls1.getScript(ptr1).empty()
         && cls2.getScript(ptr2).empty()
 
+        // a weapon with blood on it keeps its own blood
+        && !bloody(ptr1) && !bloody(ptr2)
+        && ptr1.getRefData().getAnimationState().mEquippedShieldProjectiles.empty()
+        && ptr2.getRefData().getAnimationState().mEquippedShieldProjectiles.empty()
+
         // item that is already partly used up never stacks
         && (!cls1.hasItemHealth(ptr1)
             || (cls1.getItemHealth(ptr1) == cls1.getItemMaxHealth(ptr1)
@@ -421,6 +436,10 @@ MWWorld::ContainerStoreIterator MWWorld::ContainerStore::add(
     item.getRefData().setBaseNode(
         nullptr); // Especially important, otherwise scripts on the item could think that it's actually in a cell
     item.getRefData().setReleasedEquipment(nullptr);
+    auto& animation = item.getRefData().getAnimationState();
+    animation.mShieldProjectiles.clear();
+    if (count < itemPtr.getCellRef().getCount())
+        animation.mEquippedShieldProjectiles.clear();
     ESM::Position pos;
     pos.rot[0] = 0;
     pos.rot[1] = 0;
@@ -467,6 +486,23 @@ MWWorld::ContainerStoreIterator MWWorld::ContainerStore::add(
     if (mListener && typeid(*this) == typeid(ContainerStore))
         mListener->itemAdded(item, count);
     MWBase::Environment::get().getWindowManager()->inventoryUpdated(contPtr);
+
+    // Taking a dropped shield also takes any missiles still in it. A missile
+    // plucked out earlier has already been removed from the world.
+    if (itemPtr.isInCell() && itemPtr.getContainerStore() == nullptr)
+    {
+        auto& environment = MWBase::Environment::get();
+        for (const auto& link : itemPtr.getRefData().getAnimationState().mShieldProjectiles)
+        {
+            Ptr projectile = environment.getWorldModel()->getPtr(link.mReference);
+            if (!projectile.isEmpty() && projectile.isInCell() && projectile.getType() == ESM::Weapon::sRecordId
+                && !projectile.mRef->isDeleted())
+            {
+                add(projectile, projectile.getCellRef().getCount(), false);
+                environment.getWorld()->deleteObject(projectile);
+            }
+        }
+    }
 
     return it;
 }

@@ -5,6 +5,7 @@ local util=require('openmw.util')
 local core=require('openmw.core')
 local S=require('scripts.brutal_morrowind.settings')
 local bindings=require('scripts.brutal_morrowind.input_bindings')
+S.migrateLegacyPhysics()
 local L='BrutalMorrowind'
 local D=S.DEFAULTS
 local labels=core.l10n(L)
@@ -31,20 +32,27 @@ local function setting(key,renderer,argument)
 end
 local options={setting('enabled','checkbox'),setting('allowThirdPerson','checkbox'),
     {key='kickBinding',renderer='inputBinding',argument={key=bindings.KICK,type='trigger'},name='Blank',default=D.kickBinding},
+    {key='grabBinding',renderer='inputBinding',argument={key=bindings.GRAB,type='trigger'},name='Blank',default=D.grabBinding},
     {key='sprintBinding',renderer='inputBinding',argument={key=bindings.SPRINT,type='action'},name='Blank',default=D.sprintBinding},
 }
 for _,key in ipairs({
-    'firstPersonBody','firstPersonAnimations','dualWieldEnabled','npcAnimations','guaranteedHits','meleeGeometry','equipmentPhysics',
-    'ragdollEnabled','ragdollEnhancements','npcStandupEnabled','ragdollSoftStops','ragdollNeutralPose','ragdollLimbResponse','ragdollSelfCollision','dynamicProps','movementEnabled','staminaEnabled',
+    'firstPersonBody','firstPersonAnimations','cameraMotionMovement','dualWieldEnabled','npcAnimations','guaranteedHits','meleeGeometry',
+    'ragdollEnabled','ragdollWeaponDrop','deathSceneEnabled','dynamicProps','objectGrabEnabled','movementEnabled','staminaEnabled',
     'kickEnabled','kickAlwaysRagdoll','slideEnabled','activeBlockEnabled','shieldBashEnabled','parryEnabled',
-    'clinchEnabled','attackCombosEnabled','fastAttacksEnabled','wallBounceEnabled','npcAiTweaks','npcStagger','hitRecovery',
-    'adrenalineEnabled','finisherEnabled','superKickEnabled','slowMotionEnabled','dismemberment','bloodEffects','sparkEffects',
-    'bloodDecals','combatSounds','adrenalineHudEnabled','adrenalineFxEnabled','slideFxEnabled','clinchFxEnabled',
+    'clinchEnabled','attackCombosEnabled','fastAttacksEnabled','wallBounceEnabled','npcAiTweaks','npcStagger','woundedNpcs','npcFlee','npcWeaponPickup','hitRecovery',
+    'adrenalineEnabled','finisherEnabled','groundFinisherEnabled','backstabEnabled','groundFinisherHealth',
+    'superKickEnabled','slowMotionEnabled','dismemberment','damageFlash','lowHealthVignette','bloodEffects','sparkEffects',
+    'bloodDecals','weaponBlood','worldBlood','combatSounds','heroVoice','adrenalineHudEnabled','adrenalineFxEnabled','slideFxEnabled','clinchFxEnabled',
 }) do
-    options[#options+1]=setting(key,type(D[key])=='string' and 'select' or 'checkbox',
-        type(D[key])=='string' and {l10n=L,items={'darkMessiah','morrowind'}} or nil)
+    if key=='ragdollWeaponDrop' or key=='groundFinisherHealth' then
+        options[#options+1]=setting(key,'number',{integer=true,min=0,max=100})
+    else
+        options[#options+1]=setting(key,type(D[key])=='string' and 'select' or 'checkbox',
+            type(D[key])=='string' and {l10n=L,items={'darkMessiah','morrowind'}} or nil)
+    end
 end
 options[#options+1]=setting('superKickSpeed','number',{integer=true,min=460,max=1000})
-options[#options+1]=setting('adrenalineHits','number',{integer=true,min=1,max=30})
+options[#options+1]=setting('adrenalineMinDamage','number',{min=1,max=10000,precision=4})
+options[#options+1]=setting('adrenalineHealthFraction','number',{min=.1,max=2,precision=4})
 options[#options+1]=setting('adrenalineDecay','checkbox')
 I.Settings.registerGroup{key=S.GROUP,page='BrutalMorrowind',l10n=L,name='GroupName',permanentStorage=true,settings=options}

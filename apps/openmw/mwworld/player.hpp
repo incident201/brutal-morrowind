@@ -55,6 +55,7 @@ namespace MWWorld
         std::array<float, ESM::Attribute::Length> mSaveAttributes;
 
         bool mJumping;
+        bool mWeaponWipeRequested = false;
 
     public:
         Player(const ESM::NPC* player);
@@ -85,6 +86,8 @@ namespace MWWorld
 
         void setDrawState(MWMechanics::DrawState state);
         MWMechanics::DrawState getDrawState(); /// \todo constness
+        void requestWeaponWipe();
+        bool takeWeaponWipeRequest();
 
         /// Activate the object under the crosshair, if any
         void activate();

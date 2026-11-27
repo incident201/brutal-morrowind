@@ -1,4 +1,5 @@
--- The configured number of damaging hits fills one charge; a charged strike spends it.
+-- Physical health lost fills the gauge relative to the victim's maximum health.
+-- A power strike or a locked projectile spends a full charge.
 local self=require('openmw.self')
 local core=require('openmw.core')
 local types=require('openmw.types')
@@ -8,7 +9,9 @@ local hud=require('scripts.brutal_morrowind.adrenaline_ui')
 local fx=require('scripts.brutal_morrowind.adrenaline_fx')
 local settings=require('scripts.brutal_morrowind.settings')
 local CAPACITY,MULTIPLIER,MIN_STRENGTH=100,1,.8
-local function gain() return CAPACITY/settings.get('adrenalineHits') end
+local PERFECT_BLOCK_GAIN=100*2/15
+-- A won clinch or a kick that sends a living opponent into a fall.
+local BONUS_SHARE=1/3
 -- DM's base charge is20 points: its1-point loss every20 simulation seconds
 -- becomes5 points on this percent gauge. An actual increase resets the timer.
 local DECAY_INTERVAL,DECAY_AMOUNT=20,5
@@ -20,7 +23,9 @@ local decayElapsed=0
 local slowAttackId
 local slowActive,slowStarted,slowEnded=false,0,0
 local reservation,reservedWeapon=nil,nil
+local reservedProjectile=false
 local pendingKick
+local pendingThrow, loadingThrow
 local superKicks,rejectedKicks,lastKickId=0,0,nil
 local seen,seenOrder={},{}
 local seenFinishers,finisherOrder={},{}
@@ -40,12 +45,14 @@ local function melee(weapon)
     return weapon~=nil and weapon:isValid() and types.Weapon.objectIsInstance(weapon)
         and MELEE[types.Weapon.record(weapon).type]==true
 end
-local function fastShare(weapon)
-    if not melee(weapon) then return 1 end
+local function projectile(weapon)
+    if not settings.get('dynamicProps') or not weapon or not weapon:isValid()
+        or not types.Weapon.objectIsInstance(weapon) then return false end
     local kind=types.Weapon.record(weapon).type
-    if kind==types.Weapon.TYPE.ShortBladeOneHand then return .5/1.5 end
-    if kind==types.Weapon.TYPE.SpearTwoWide or kind==types.Weapon.TYPE.BluntTwoWide then return .5 end
-    return .5/3
+    return kind==types.Weapon.TYPE.MarksmanBow or kind==types.Weapon.TYPE.MarksmanThrown
+end
+local function projectileSpent()
+    return reservedProjectile and reservation and available and query(self,true)==reservation
 end
 local function visible()
     return settings.get('adrenalineEnabled') and not types.Actor.isDead(self) and not I.UI.getMode() and I.UI.isHudVisible()
@@ -65,7 +72,7 @@ local function clearReservation()
         if nativeToken~='' then cancel(self,nativeToken) end
         if reservation and reservation~=nativeToken then cancel(self,reservation) end
     end
-    reservation,reservedWeapon=nil,nil
+    reservation,reservedWeapon,reservedProjectile=nil,nil,false
 end
 local function cancelSlowMotion(reason)
     if slowAttackId then
@@ -75,16 +82,19 @@ local function cancelSlowMotion(reason)
     slowAttackId,slowActive=nil,false
 end
 local function disable()
-    meter,decayElapsed,pendingKick=0,0,nil
+    meter,decayElapsed,pendingKick,pendingThrow=0,0,nil,nil
     clearReservation()
     cancelSlowMotion('disabled')
     hud.destroy();fx.destroy();syncArrestEffect(false)
 end
 local function update(dt)
+    -- Loaded events are delivered before onUpdate. A release that succeeded
+    -- before saving has already been handled, and an unlaunched prop is gone.
+    if loadingThrow then pendingThrow,loadingThrow=nil,false end
     if not settings.get('adrenalineEnabled') then disable();return end
     if not settings.get('slowMotionEnabled') or not settings.get('finisherEnabled') then cancelSlowMotion('disabled') end
-    if types.Actor.isDead(self) then meter,decayElapsed,pendingKick=0,0,nil;cancelSlowMotion('death')
-    elseif meter>0 and not pendingKick and settings.get('adrenalineDecay') then
+    if types.Actor.isDead(self) then meter,decayElapsed,pendingKick,pendingThrow=0,0,nil,nil;cancelSlowMotion('death')
+    elseif meter>0 and not pendingKick and not pendingThrow and settings.get('adrenalineDecay') then
         decayElapsed=decayElapsed+dt
         while decayElapsed>=DECAY_INTERVAL do
             decayElapsed=decayElapsed-DECAY_INTERVAL
@@ -93,16 +103,19 @@ local function update(dt)
     end
     local weapon=types.Actor.getEquipment(self)[types.Actor.EQUIPMENT_SLOT.CarriedRight]
     if not settings.get('superKickEnabled') then pendingKick=nil end
-    local eligible=settings.get('finisherEnabled') and available and not pendingKick and meter>=CAPACITY and visible() and types.Actor.canMove(self)
+    local ranged=projectile(weapon)
+    local eligible=settings.get('finisherEnabled') and available and not pendingKick and not pendingThrow
+        and meter>=CAPACITY and visible() and types.Actor.canMove(self)
         and not (I.BrutalClinch and I.BrutalClinch.status().active)
         and not types.Actor.isSwimming(self) and types.Actor.getStance(self)==types.Actor.STANCE.Weapon
-        and melee(weapon)
+        and (ranged or melee(weapon))
     if not eligible then clearReservation();return end
     if reservedWeapon and reservedWeapon~=weapon then clearReservation() end
     if not reservation then
         serial=serial+1
         reservation=('brutal:%s:%d'):format(tostring(core.getSimulationTime()),serial)
         reservedWeapon=weapon
+        reservedProjectile=ranged
     end
     if query(self)~=reservation then arm(self,reservation,MULTIPLIER,MIN_STRENGTH) end
 end
@@ -111,7 +124,7 @@ end
 -- retain the charge; a miss never reserves it in the first place.
 local function reserveSuperKick(id)
     if not settings.get('superKickEnabled') or not settings.get('adrenalineEnabled') or not settings.get('ragdollEnabled')
-        or pendingKick or meter<CAPACITY or not visible() or not types.Actor.canMove(self)
+        or pendingKick or pendingThrow or projectileSpent() or meter<CAPACITY or not visible() or not types.Actor.canMove(self)
         or types.Actor.isSwimming(self) or type(id)~='number' or id<1 or id%1~=0
         or id>9007199254740991 then return false end
     clearReservation()
@@ -128,24 +141,49 @@ local function superKickResolved(e)
     clearReservation()
     self:sendEvent('BrutalAdrenalineSpent',{kickId=e.kickId,superKick=true})
 end
-local function damaged(e)
-    if not settings.get('adrenalineEnabled') then return end
-    if types.Actor.isDead(self) or not e.successful or not e.targetWasAlive
-        or e.sourceType~='melee' or not e.target or not e.target:isValid()
-        or not types.Actor.objectIsInstance(e.target) or not melee(e.weapon)
-        or type(e.healthDamage)~='number' or e.healthDamage<=0 then return end
-    if e.powered then return end
-    -- Native attack ids distinguish real swings and prevent duplicate delivery.
-    if not e.attackId or e.attackId==0 or seen[e.attackId] then return end
-    seen[e.attackId]=true;seenOrder[#seenOrder+1]=e.attackId
-    if #seenOrder>128 then seen[table.remove(seenOrder,1)]=nil end
+local perfectBlocks=0
+local function add(amount)
     local before=meter
-    -- first_basic.qct adrenalineadd: a click gives .5 where a charged swing gives 3 (sword), 1.5 (daggers), 1 (staff).
-    meter=meter+gain()*(e.fast and fastShare(e.weapon) or 1)
+    meter=math.min(CAPACITY,meter+amount)
     if meter>=CAPACITY-.001 then meter=CAPACITY end
     if meter>before then decayElapsed=0 end
     gains=gains+1
     if before<CAPACITY and meter>=CAPACITY then self:sendEvent('BrutalAdrenalineReady',{}) end
+end
+local function damaged(e)
+    if not settings.get('adrenalineEnabled') then return end
+    if types.Actor.isDead(self) or not e.successful or not e.targetWasAlive
+        or not e.target or not e.target:isValid() or not types.Actor.objectIsInstance(e.target)
+        or type(e.healthDamage)~='number' or not (e.healthDamage>0)
+        or type(e.targetMaxHealth)~='number' or not (e.targetMaxHealth>0) then return end
+    if e.sourceType~='ranged' and (e.sourceType~='melee' or not melee(e.weapon)) then return end
+    if e.powered then return end
+    -- Native attack IDs deduplicate hits and tie guided shots to their launch receipt.
+    if not e.attackId or e.attackId==0 or seen[e.attackId] then return end
+    seen[e.attackId]=true;seenOrder[#seenOrder+1]=e.attackId
+    if #seenOrder>128 then seen[table.remove(seenOrder,1)]=nil end
+    local damageToFill=math.max(settings.get('adrenalineMinDamage'),
+        settings.get('adrenalineHealthFraction')*e.targetMaxHealth)
+    add(CAPACITY*e.healthDamage/damageToFill)
+end
+-- The player's shield met a blow inside the perfect window (native receipt).
+local seenBlocks,blockOrder={},{}
+local function perfectBlock(e)
+    if not settings.get('adrenalineEnabled') or types.Actor.isDead(self) then return end
+    local id=e and e.attackId
+    if id and id~=0 then
+        if seenBlocks[id] then return end
+        seenBlocks[id]=true;blockOrder[#blockOrder+1]=id
+        if #blockOrder>64 then seenBlocks[table.remove(blockOrder,1)]=nil end
+    end
+    perfectBlocks=perfectBlocks+1
+    add(PERFECT_BLOCK_GAIN)
+end
+local function beginSlowMotion(attackId)
+    if slowAttackId or not visible() then return end
+    slowAttackId=attackId
+    core.sendGlobalEvent('BrutalAdrenalineSlowMotion',
+        {player=self,attackId=attackId,duration=SLOW_DURATION,factor=SLOW_FACTOR})
 end
 local function confirmedFinisher(e)
     if not settings.get('finisherEnabled') or not settings.get('adrenalineEnabled') or not settings.get('slowMotionEnabled') then return end
@@ -156,12 +194,9 @@ local function confirmedFinisher(e)
         or not e.attackId or e.attackId==0 or seenFinishers[e.attackId] then return end
     seenFinishers[e.attackId]=true;finisherOrder[#finisherOrder+1]=e.attackId
     if #finisherOrder>128 then seenFinishers[table.remove(finisherOrder,1)]=nil end
-    if slowAttackId or not visible() then return end
-    slowAttackId=e.attackId
-    core.sendGlobalEvent('BrutalAdrenalineSlowMotion',
-        {player=self,attackId=slowAttackId,duration=SLOW_DURATION,factor=SLOW_FACTOR})
+    beginSlowMotion(e.attackId)
 end
--- Fill the gauge at once (a confirmed ledge kick, or the console), or set it to an
+-- Fill the gauge at once (the console), or set it to an
 -- amount. Readiness plays the usual cue and the fullscreen effect follows the ready state.
 local function fill(amount)
     if not settings.get('adrenalineEnabled') or types.Actor.isDead(self) then return false end
@@ -172,35 +207,80 @@ local function fill(amount)
     syncArrestEffect(visible())
     return true
 end
-local function resolved(e)
+local function resolved(e,ranged)
     if not settings.get('adrenalineEnabled') or not settings.get('finisherEnabled') then clearReservation();return end
-    if not e.powered or not e.attackId or e.attackId==0 or seen[e.attackId] then return end
+    if not (ranged or e.powered) or not e.attackId or e.attackId==0 or seen[e.attackId] then return end
     seen[e.attackId]=true;seenOrder[#seenOrder+1]=e.attackId
     if #seenOrder>128 then seen[table.remove(seenOrder,1)]=nil end
     -- Native receipts authenticate the swing. DM spends on a living opponent's
     -- contact (including a parry), while an empty swing retains the charge.
-    if not e.successful and not e.blocked then clearReservation();return end
+    if not ranged and not e.successful and not e.blocked then clearReservation();return end
     -- Do not require a current reservation: a menu/cancel event can arrive after
     -- an already-resolved native strike but before its notification reaches Lua.
     meter,decayElapsed=0,0;spent=spent+1
     clearReservation()
-    self:sendEvent('BrutalAdrenalineSpent',{attackId=e.attackId,token=e.token})
+    self:sendEvent('BrutalAdrenalineSpent',{attackId=e.attackId,token=e.token,source=ranged and 'projectile' or nil})
+end
+local function projectileFinisher(e)
+    if e.phase=='launched' then
+        resolved(e,true)
+    elseif e.phase=='approach' and settings.get('finisherEnabled') and settings.get('slowMotionEnabled')
+        and settings.get('dynamicProps') then
+        beginSlowMotion(e.attackId)
+    end
+end
+local function applyThrowSpend()
+    meter,decayElapsed=0,0;spent=spent+1
+    clearReservation()
+    self:sendEvent('BrutalAdrenalineSpent',{source='throw'})
+    syncArrestEffect(visible())
+    return true
+end
+local function canReserveThrow()
+    return settings.get('adrenalineEnabled') and not types.Actor.isDead(self)
+        and meter>=CAPACITY and not pendingKick and not pendingThrow and not projectileSpent()
+end
+local function spendThrow()
+    return canReserveThrow() and applyThrowSpend()
+end
+local function reserveThrow(id)
+    if not canReserveThrow() or type(id)~='number' or id<1 or id%1~=0 or id>9007199254740991 then return false end
+    clearReservation()
+    pendingThrow=id
+    return true
+end
+local function throwResolved(e)
+    if not pendingThrow or e.throwId~=pendingThrow then return end
+    pendingThrow=nil
+    if e.released==true and settings.get('adrenalineEnabled') and not types.Actor.isDead(self) then
+        applyThrowSpend()
+    end
 end
 return {
     interfaceName='BrutalAdrenaline',
-    interface={version=4,fill=fill,reserveSuperKick=reserveSuperKick,status=function()
-        return {amount=meter,capacity=CAPACITY,ready=meter>=CAPACITY and not pendingKick,apiAvailable=available,
+    interface={version=9,bonus=function() self:sendEvent('BrutalAdrenalineBonus',{}) end,fill=fill,
+        reserveSuperKick=reserveSuperKick,spendThrow=spendThrow,reserveThrow=reserveThrow,
+        cancelThrow=function(id) throwResolved({throwId=id,released=false}) end,status=function()
+        return {amount=meter,capacity=CAPACITY,ready=meter>=CAPACITY and not pendingKick and not pendingThrow and not projectileSpent(),apiAvailable=available,
             superKickPending=pendingKick,superKicks=superKicks,rejectedKicks=rejectedKicks,lastKickId=lastKickId,
             token=available and query(self) or '',gains=gains,spent=spent,hudVisible=hud.isVisible(),
             fxVisible=fx.isVisible(),decayElapsed=decayElapsed,decayInterval=DECAY_INTERVAL,
             arrestDeferred=arrestEffectState==true,
-            decayAmount=DECAY_AMOUNT,hitsToReady=math.ceil((CAPACITY-meter)/gain()-.001),
+            decayAmount=DECAY_AMOUNT,minDamage=settings.get('adrenalineMinDamage'),
+            healthFraction=settings.get('adrenalineHealthFraction'),perfectBlocks=perfectBlocks,
             slowPending=slowAttackId~=nil and not slowActive,slowActive=slowActive,slowStarted=slowStarted,slowEnded=slowEnded,
             slowDelay=SLOW_DELAY,slowDuration=SLOW_DURATION,slowFactor=SLOW_FACTOR}
     end},
     eventHandlers={BrutalDamagingHit=damaged,BrutalMeleeResolved=resolved,
+        BrutalProjectileFinisher=projectileFinisher,
         BrutalSuperKickResolved=superKickResolved,
+        BrutalObjectThrowResolved=throwResolved,
         BrutalAdrenalineFill=function() fill() end,
+        -- A won clinch, or a kick that drops an opponent over a ledge or an obstacle: a third of the gauge.
+        BrutalAdrenalineBonus=function()
+            if settings.get('adrenalineEnabled') and not types.Actor.isDead(self) then add(CAPACITY*BONUS_SHARE) end
+        end,
+        BrutalPerfectShieldBlock=perfectBlock,
         BrutalFinisherConfirmed=confirmedFinisher,
         BrutalAdrenalineSlowMotionStarted=function(e)
             if not settings.get('adrenalineEnabled') or not settings.get('slowMotionEnabled') then cancelSlowMotion('disabled');return end
@@ -239,9 +319,13 @@ return {
         end,
         -- A save between contact and its queued receipt must not duplicate a
         -- reserved charge. Pending attacks themselves are transient on reload.
-        onSave=function() return {amount=pendingKick and 0 or meter,decayElapsed=decayElapsed} end,
+        onSave=function()
+            return {amount=(pendingKick or projectileSpent()) and 0 or meter,decayElapsed=decayElapsed,throwId=pendingThrow}
+        end,
         onLoad=function(data)
             pendingKick,lastKickId=nil,nil
+            pendingThrow=data and type(data.throwId)=='number' and data.throwId or nil
+            loadingThrow=pendingThrow~=nil
             superKicks,rejectedKicks=0,0
             clearReservation()
             cancelSlowMotion('load')
@@ -252,11 +336,12 @@ return {
             gains,spent,serial=0,0,0
             slowStarted,slowEnded=0,0
             seen,seenOrder={},{}
+            seenBlocks,blockOrder,perfectBlocks={},{},0
             seenFinishers,finisherOrder={},{}
             hud.destroy()
             fx.destroy()
             arrestEffectState=nil
-            syncArrestEffect(false)
+            syncArrestEffect(visible())
         end,
     },
 }

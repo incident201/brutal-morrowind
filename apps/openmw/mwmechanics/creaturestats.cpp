@@ -265,6 +265,7 @@ namespace MWMechanics
     {
         if (mDead)
         {
+            mBrutalPlayerDeathPush = {};
             mDynamic[0].setCurrent(mDynamic[0].getBase());
             mDead = false;
             mDeathAnimationFinished = false;
@@ -526,6 +527,8 @@ namespace MWMechanics
         // state.mFriendlyHits = mFriendlyHits;
         state.mTalkedTo = mTalkedTo;
         state.mAlarmed = mAlarmed;
+        state.mAdrenalineArrestCombat = mBrutalAdrenalineArrestCombat;
+        state.mAdrenalineEffectActive = mBrutalAdrenalineEffectActive;
         state.mAttacked = mAttacked;
         // TODO: rewrite. does this really need 3 separate bools?
         state.mKnockdown = mKnockdown;
@@ -560,6 +563,14 @@ namespace MWMechanics
 
     void CreatureStats::readState(const ESM::CreatureStats& state)
     {
+        mBrutalPlayerDeathPush = {};
+        mBrutalWoundedFall = {};
+        mBrutalWoundedFallAttacker = {};
+        mBrutalFleeUntil = 0.0;
+        mBrutalBackstabTarget = {};
+        mBrutalBackstabPhase = 0;
+        mBrutalBackstabVictim = mBrutalSilentBackstab = false;
+        mBrutalBackstabEyeLift = 0.f;
         mPowerStrike = {};
         mLastConsumedPowerStrikeToken.clear();
         mBrutalAdrenalineEffectActive = false;
@@ -596,6 +607,8 @@ namespace MWMechanics
         mDied = state.mDied;
         mMurdered = state.mMurdered;
         mAlarmed = state.mAlarmed;
+        mBrutalAdrenalineArrestCombat = state.mAdrenalineArrestCombat;
+        mBrutalAdrenalineEffectActive = state.mAdrenalineEffectActive;
         // TODO: rewrite. does this really need 3 separate bools?
         mKnockdown = state.mKnockdown;
         mKnockdownOneFrame = state.mKnockdownOneFrame;

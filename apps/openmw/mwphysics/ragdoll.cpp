@@ -1093,6 +1093,56 @@ namespace MWPhysics
         return mHeadDetached && part == sHeadPart;
     }
 
+    unsigned Ragdoll::detachedFragment(const btCollisionObject* body) const
+    {
+        const auto found = std::find(mBodies.begin(), mBodies.end(), body);
+        if (found == mBodies.end())
+            return 0;
+        const auto part = std::distance(mBodies.begin(), found);
+        const unsigned limb = LimbSevering::fragment(part, mSeveredLimbsMask);
+        return limb ? 1u << (limb - 1) : (isDetachedHeadPart(part) ? HeadFragment : 0);
+    }
+
+    std::vector<btRigidBody*> Ragdoll::detachedBodies(unsigned fragment) const
+    {
+        std::vector<btRigidBody*> bodies;
+        if (fragment)
+            for (auto* body : mBodies)
+                if (detachedFragment(body) == fragment)
+                    bodies.push_back(body);
+        return bodies;
+    }
+
+    btTypedConstraint* Ragdoll::detachedJoint(unsigned fragment) const
+    {
+        for (auto* joint : mConstraints)
+            if (detachedFragment(&joint->getRigidBodyA()) == fragment
+                && detachedFragment(&joint->getRigidBodyB()) == fragment)
+                return joint;
+        return nullptr;
+    }
+
+    std::vector<std::pair<std::string, osg::Matrixf>> Ragdoll::detachedBonePoses(unsigned fragment) const
+    {
+        const auto bodies = detachedBodies(fragment);
+        const auto transforms = mTaskScheduler->readRigidBodyTransforms(bodies);
+        std::vector<std::pair<std::string, osg::Matrixf>> poses;
+        for (std::size_t i = 0; i < bodies.size(); ++i)
+        {
+            const auto part = std::distance(mBodies.begin(), std::find(mBodies.begin(), mBodies.end(), bodies[i]));
+            const auto& pose = transforms[i];
+            poses.emplace_back(mParts[part]->mBone, mParts[part]->mRenderFromBody
+                * osg::Matrixf::rotate(Misc::Convert::toOsg(pose.getRotation()))
+                * osg::Matrixf::translate(Misc::Convert::toOsg(pose.getOrigin())));
+        }
+        return poses;
+    }
+
+    const osg::Matrixf& Ragdoll::getHeadBoneFromBody() const
+    {
+        return mParts[sHeadPart]->mRenderFromBody;
+    }
+
     bool Ragdoll::applyKick(std::size_t part, const osg::Vec3f& velocity, const osg::Vec3f& point)
     {
         if (!mRegistered || part >= mParts.size()) return false;
@@ -1255,11 +1305,21 @@ namespace MWPhysics
         osg::Vec3f center, velocity; float mass = 0.f;
         for (size_t i=0; i<mParts.size(); ++i)
         {
-            const float m = 1.f/mParts[i]->mBody->getInvMass(); mass += m;
+            const auto* body = mParts[i]->mBody;
+            const float inverseMass = body->getInvMass();
+            if (inverseMass <= 0.f || body->isStaticOrKinematicObject())
+                continue;
+            const float m = 1.f / inverseMass;
+            mass += m;
             center += Misc::Convert::toOsg(mLastTransforms[i].getOrigin())*m;
             velocity += Misc::Convert::toOsg(mLinearVelocities[i])*m;
         }
-        return {center/mass, velocity/mass, mInheritedVelocity, mInitialCOMVelocity,
+        if (mass > 0.f)
+        {
+            center /= mass;
+            velocity /= mass;
+        }
+        return {center, velocity, mInheritedVelocity, mInitialCOMVelocity,
             mImpulse, mContact, osg::Vec3f(mInitialPoseError, mMaxSpeed, mMaxAngularSpeed)};
     }
 

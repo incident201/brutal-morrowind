@@ -33,6 +33,8 @@ namespace ESM
         mMurdered = false;
         mTalkedTo = false;
         mAlarmed = false;
+        mAdrenalineArrestCombat = false;
+        mAdrenalineEffectActive = false;
         mAttacked = false;
         mKnockdown = false;
         mKnockdownOneFrame = false;
@@ -64,6 +66,8 @@ namespace ESM
             mMurdered = flags & Murdered;
             mTalkedTo = flags & TalkedTo;
             mAlarmed = flags & Alarmed;
+            mAdrenalineArrestCombat = flags & AdrenalineArrestCombat;
+            mAdrenalineEffectActive = flags & AdrenalineEffectActive;
             mAttacked = flags & Attacked;
             mKnockdown = flags & Knockdown;
             mKnockdownOneFrame = flags & KnockdownOneFrame;
@@ -209,6 +213,10 @@ namespace ESM
             flags |= TalkedTo;
         if (mAlarmed)
             flags |= Alarmed;
+        if (mAdrenalineArrestCombat)
+            flags |= AdrenalineArrestCombat;
+        if (mAdrenalineEffectActive)
+            flags |= AdrenalineEffectActive;
         if (mAttacked)
             flags |= Attacked;
         if (mKnockdown)
@@ -285,6 +293,8 @@ namespace ESM
         mMurdered = false;
         mTalkedTo = false;
         mAlarmed = false;
+        mAdrenalineArrestCombat = false;
+        mAdrenalineEffectActive = false;
         mAttacked = false;
         mKnockdown = false;
         mKnockdownOneFrame = false;
