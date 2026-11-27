@@ -457,13 +457,15 @@ namespace MWLua
             auto* store = MWRender::BrutalBlood::get();
             return store ? store->save() : std::string();
         };
-        api["setBrutalBloodData"] = [context](std::string data) {
-            if (data.size() > 2000000)
+        api["setBrutalBloodData"] = [context](std::string data, sol::optional<bool> fromSave) {
+            const bool restoring = fromSave.value_or(false);
+            if (!restoring && data.size() > MWRender::BrutalBlood::MaxSaveBytes)
                 throw std::runtime_error("Blood data exceeds bounded save size");
+            const auto* mapping = restoring ? context.mLuaManager->getGlobalSaveFileMapping() : nullptr;
             context.mLuaManager->addAction(
-                [data = std::move(data)] {
+                [data = std::move(data), mapping] {
                     if (auto* store = MWRender::BrutalBlood::get())
-                        store->load(data);
+                        store->load(data, mapping);
                 },
                 "SetBrutalBloodData");
         };

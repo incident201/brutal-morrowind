@@ -1158,6 +1158,13 @@ namespace MWWorld
             state.mBowId = projectile.mBowId;
             state.mVelocity = projectile.mVelocity;
             state.mAttackStrength = projectile.mAttackStrength;
+            state.mFinisherAttackId = projectile.mFinisherAttackId;
+            if (projectile.mFinisher)
+            {
+                state.mFinisherTarget = projectile.mFinisher->mTarget.id();
+                state.mFinisherSpeed = projectile.mFinisher->mSpeed;
+                state.mFinisherTimeLeft = projectile.mFinisher->mTimeLeft;
+            }
 
             state.save(writer);
 
@@ -1196,6 +1203,15 @@ namespace MWWorld
             state.mVelocity = esm.mVelocity;
             state.mIdArrow = esm.mId;
             state.mAttackStrength = esm.mAttackStrength;
+            state.mFinisherAttackId = esm.mFinisherAttackId;
+            MWMechanics::restoreCombatAttackId(state.mFinisherAttackId);
+            if (esm.mFinisherTarget.isSet() && esm.mFinisherAttackId != 0 && std::isfinite(esm.mFinisherSpeed)
+                && esm.mFinisherSpeed > 0.f && std::isfinite(esm.mFinisherTimeLeft) && esm.mFinisherTimeLeft > 0.f)
+            {
+                // Lua resets its slow-motion lease on load. Let the restored shot request it again on approach.
+                state.mFinisher = ProjectileState::Finisher{
+                    SafePtr(esm.mFinisherTarget), esm.mFinisherSpeed, esm.mFinisherTimeLeft };
+            }
             state.mToDelete = false;
 
             VFS::Path::Normalized model;

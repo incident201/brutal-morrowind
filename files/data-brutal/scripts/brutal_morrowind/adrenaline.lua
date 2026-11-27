@@ -311,7 +311,7 @@ return {
             hud.destroy()
             fx.destroy()
             arrestEffectState=nil
-            syncArrestEffect(false)
+            syncArrestEffect(visible())
         end,
     },
 }

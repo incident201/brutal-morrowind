@@ -21,6 +21,7 @@ namespace MWMechanics
     inline constexpr float sNpcProjectileGuardContactMargin = 1.f;
 
     std::uint64_t nextCombatAttackId();
+    void restoreCombatAttackId(std::uint64_t id);
     bool supportsRangedFinisher(int weaponType);
 
     bool applyOnStrikeEnchantment(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, const MWWorld::Ptr& object,

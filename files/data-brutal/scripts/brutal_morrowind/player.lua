@@ -67,13 +67,19 @@ local function chooseTarget()
     return target, forward
 end
 
+local function canKick()
+    local switches = types.Player.CONTROL_SWITCH
+    return types.Player.getControlSwitch(self, switches.Controls)
+        and types.Player.getControlSwitch(self, switches.Fighting) and not I.UI.getMode()
+        and not types.Actor.isDead(self) and types.Actor.canMove(self) and not types.Actor.isSwimming(self)
+end
+
 local function tryKick()
     if not settings.get('kickEnabled') then
         lastResult = 'disabled'
         return false, lastResult
     end
-    if I.UI.getMode() or types.Actor.isDead(self) or not types.Actor.canMove(self)
-        or types.Actor.isSwimming(self) then
+    if not canKick() then
         lastResult = 'unavailable'
         return false, lastResult
     end
@@ -266,7 +272,10 @@ local function update(dt)
         windup = windup - kickDt
         if windup <= 0 then
             windup = nil
-            if types.Actor.isDead(self) or not types.Actor.canMove(self) or types.Actor.isSwimming(self) then return end
+            if not canKick() then
+                lastResult = 'unavailable'
+                return
+            end
             local target, direction = chooseTarget()
             if not target then
                 -- No living actor: the same kick can still strike a ragdoll corpse or head.

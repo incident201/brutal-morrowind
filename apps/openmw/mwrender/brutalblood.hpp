@@ -166,8 +166,9 @@ namespace MWRender
         void clear();
         void unloadSplats();
 
+        static constexpr std::size_t MaxSaveBytes = 2000000;
         std::string save() const;
-        bool load(std::string_view data);
+        bool load(std::string_view data, const std::map<int, int>* contentFiles = nullptr);
         std::map<std::string, double> stats() const;
 
         EffectManager* effects() const { return mEffects; }

@@ -527,6 +527,8 @@ namespace MWMechanics
         // state.mFriendlyHits = mFriendlyHits;
         state.mTalkedTo = mTalkedTo;
         state.mAlarmed = mAlarmed;
+        state.mAdrenalineArrestCombat = mBrutalAdrenalineArrestCombat;
+        state.mAdrenalineEffectActive = mBrutalAdrenalineEffectActive;
         state.mAttacked = mAttacked;
         // TODO: rewrite. does this really need 3 separate bools?
         state.mKnockdown = mKnockdown;
@@ -605,6 +607,8 @@ namespace MWMechanics
         mDied = state.mDied;
         mMurdered = state.mMurdered;
         mAlarmed = state.mAlarmed;
+        mBrutalAdrenalineArrestCombat = state.mAdrenalineArrestCombat;
+        mBrutalAdrenalineEffectActive = state.mAdrenalineEffectActive;
         // TODO: rewrite. does this really need 3 separate bools?
         mKnockdown = state.mKnockdown;
         mKnockdownOneFrame = state.mKnockdownOneFrame;

@@ -166,6 +166,12 @@ namespace MWLua
         void loadLocalScripts(const MWWorld::Ptr& ptr, const ESM::LuaScripts& data) override;
         void setContentFileMapping(const std::map<int, int>& mapping) override { mContentFileMapping = mapping; }
 
+        // A Lua-only script reload reads freshly serialized data in the current plugin order.
+        const std::map<int, int>* getGlobalSaveFileMapping() const
+        {
+            return mGlobalScripts.getSavedDataDeserializer() == mGlobalLoader.get() ? &mContentFileMapping : nullptr;
+        }
+
         // At the end of the next `synchronizedUpdate` drops script cache and reloads all scripts.
         // Calls `onSave` and `onLoad` for every script.
         void reloadAllScripts() override { mReloadAllScriptsRequested = true; }

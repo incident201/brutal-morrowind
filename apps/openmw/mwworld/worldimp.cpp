@@ -2075,10 +2075,13 @@ namespace MWWorld
         return mPhysics && mPhysics->canHoldObject(ptr);
     }
 
+    // Allow one unit for motion between the Lua targeting frame and the queued native pickup.
+    static constexpr float sGrabReach = 156.f;
+
     std::pair<Ptr, unsigned> World::findDetachedGrabFragment(const Ptr& player,
         const osg::Vec3f& from, const osg::Vec3f& to) const
     {
-        if (!mPhysics || player != mPlayer->getPlayer() || (to - from).length2() > 156.f * 156.f)
+        if (!mPhysics || player != mPlayer->getPlayer() || (to - from).length2() > sGrabReach * sGrabReach)
             return {};
         return mPhysics->findDetachedGrabFragment(player, from, to);
     }
@@ -2086,13 +2089,29 @@ namespace MWWorld
     bool World::holdObject(const Ptr& ptr, const Ptr& holder, MWPhysics::HeldObjectInfo* info, unsigned fragment)
     {
         if (!mPhysics || holder != getPlayerPtr() || mPhysics->hasHeldObject()
-            || !ptr.isInCell() || !holder.isInCell() || ptr.getCell() != holder.getCell()
+            || !ptr.isInCell() || !holder.isInCell()
+            || ptr.getCell()->getCell()->getWorldSpace() != holder.getCell()->getCell()->getWorldSpace()
             || !ptr.getRefData().getBaseNode() || !ptr.getRefData().isEnabled())
             return false;
+        const auto* camera = mRendering->getCamera();
+        const osg::Vec3f eye(camera->getPosition());
         if (fragment)
         {
             const auto* corpse = dynamic_cast<const MWRender::NpcAnimation*>(getAnimation(ptr));
-            if (!corpse || corpse->getDetachedFragmentNodes(fragment).empty())
+            const osg::Vec3f end = eye + camera->getOrient() * osg::Vec3f(0, sGrabReach, 0);
+            if (!corpse || corpse->getDetachedFragmentNodes(fragment).empty()
+                || mPhysics->findDetachedGrabFragment(holder, eye, end) != std::make_pair(ptr, fragment))
+                return false;
+        }
+        else
+        {
+            const auto bounds = mRendering->getCullSafeBoundingBox(ptr);
+            if (!bounds.valid())
+                return false;
+            osg::Vec3f closest;
+            for (unsigned axis = 0; axis < 3; ++axis)
+                closest[axis] = std::clamp(eye[axis], bounds._min[axis], bounds._max[axis]);
+            if ((closest - eye).length2() > sGrabReach * sGrabReach)
                 return false;
         }
         mHeldThrow.reset();

@@ -33,6 +33,7 @@
 #include <osgUtil/IncrementalCompileOperation>
 
 #include <algorithm>
+#include <bitset>
 #include <tuple>
 #include <chrono>
 #include <cmath>
@@ -47,7 +48,10 @@ namespace MWRender
     {
         BrutalBlood* sInstance = nullptr;
         constexpr int FadeLevels = 12, DryLevels = 6;
-        constexpr std::size_t MaxSaveBytes = 2000000;
+        constexpr std::size_t MaxBloodString = 1024;
+        constexpr std::size_t MaxSavedItems = 4096;
+        // Three indices, three weights, and two UV coordinates per serialized anchor.
+        constexpr std::size_t AnchorBytes = 8 * sizeof(std::uint32_t);
         // Splatters are rebuilt only near the player; farther ones stay as records.
         constexpr float BuildRange = 6000.f, UnloadRange = 7500.f;
         constexpr std::size_t MaxPools = 96, MaxPrints = 384, MaxShoeOwners = 128, MaxQueuedSteps = 96;
@@ -69,7 +73,7 @@ namespace MWRender
 
         struct Writer
         {
-            std::string data = "BWB3";
+            std::string data;
             void u32(std::uint32_t n)
             {
                 for (unsigned i = 0; i < 4; ++i)
@@ -142,7 +146,7 @@ namespace MWRender
             std::string string()
             {
                 const auto size = u32();
-                if (size > 1024 || p + size > data.size())
+                if (size > MaxBloodString || size > data.size() - p)
                     throw std::runtime_error("Invalid blood record string");
                 std::string s(data.substr(p, size));
                 p += size;
@@ -1415,21 +1419,98 @@ namespace MWRender
 
     std::string BrutalBlood::save() const
     {
-        Writer out;
-        std::uint32_t items = 0;
-        for (const auto& [key, blood] : mItems)
-            items += !blood.marks.empty();
-        out.u32(items);
-        for (const auto& [key, blood] : mItems)
+        Writer world;
+        // The world sections have fixed entry limits. Reserve their actual encoded size before
+        // selecting weapon marks, whose meshes can vary by thousands of vertices per hit.
+        world.u32(std::count_if(mSplats.begin(), mSplats.end(),
+            [](const Splat& s) { return s.worldspace.size() <= MaxBloodString; }));
+        for (const auto& s : mSplats)
         {
-            if (blood.marks.empty())
+            if (s.worldspace.size() > MaxBloodString)
                 continue;
+            world.string(s.worldspace);
+            world.u32(s.exterior);
+            world.vec(s.position);
+            world.vec(s.normal);
+            world.vec(s.tangent);
+            world.f32(s.width);
+            world.u32(s.style);
+            world.f64(s.hour);
+            world.f64(s.wash);
+            world.u32(std::uint32_t(s.mark));
+            world.f32(s.height);
+            world.f32(s.opacity);
+            world.u32(s.seed);
+            world.u32(s.porous);
+            world.f32(std::clamp(mRealTime - s.started, 0.f, PoolGrowthSeconds));
+        }
+        world.u32(mShoes.size());
+        for (const auto& [id, soles] : mShoes)
+        {
+            world.u32(id.mIndex);
+            world.u32(std::uint32_t(id.mContentFile));
+            for (const auto& sole : soles)
+            {
+                world.f32(sole.blood);
+                world.f32(std::clamp(sole.driesAt - mRealTime, 0.f, SoleDrySeconds));
+                world.f64(sole.stainedHour);
+            }
+        }
+        world.u32(mPoolSources.size());
+        for (const auto& [key, source] : mPoolSources)
+        {
+            const auto [id, outlet] = key;
+            world.u32(id.mIndex);
+            world.u32(std::uint32_t(id.mContentFile));
+            world.string(source.bone);
+            world.vec(source.offset);
+            world.f32(source.width);
+            const float lifetime = outlet == BloodPoolOutlet::Impact ? PoolSourceSeconds : CutPoolSourceSeconds;
+            world.f32(std::clamp(source.expires - mRealTime, 0.f, lifetime));
+            world.u32(std::uint32_t(outlet));
+        }
+        Writer out{ "BWB3" };
+        struct Candidate
+        {
+            ESM::RefNum item;
+            std::size_t index;
+            const WeaponMark* mark;
+        };
+        std::vector<Candidate> candidates;
+        for (const auto& [item, blood] : mItems)
+            for (std::size_t i = 0; i < blood.marks.size(); ++i)
+                candidates.push_back({ item, i, &blood.marks[i] });
+        std::stable_sort(candidates.begin(), candidates.end(),
+            [](const Candidate& a, const Candidate& b) { return a.mark->hour > b.mark->hour; });
+
+        std::map<ESM::RefNum, std::bitset<MaxWeaponMarks>> selected;
+        std::size_t remaining = MaxSaveBytes - world.data.size() - out.data.size() - sizeof(std::uint32_t);
+        for (const Candidate& c : candidates)
+        {
+            const auto& m = *c.mark;
+            if (m.model.size() > MaxBloodString)
+                continue;
+            // Fixed fields in an item header and a mark, plus the two variable length fields.
+            const bool newItem = selected.find(c.item) == selected.end();
+            const std::size_t bytes = (newItem ? 20 : 0) + 32 + m.model.size() + AnchorBytes * m.anchors->size();
+            if (bytes > remaining || (newItem && selected.size() >= MaxSavedItems))
+                continue;
+            selected[c.item].set(c.index);
+            remaining -= bytes;
+        }
+        out.u32(selected.size());
+        for (const auto& [key, mask] : selected)
+        {
+            const auto& blood = mItems.at(key);
             out.u32(key.mIndex);
             out.u32(std::uint32_t(key.mContentFile));
             out.f64(blood.wash);
-            out.u32(blood.marks.size());
-            for (const auto& m : blood.marks)
+            out.u32(mask.count());
+            for (std::size_t i = 0; i < blood.marks.size(); ++i)
             {
+                if (!mask[i])
+                    continue;
+                const auto& m = blood.marks[i];
                 out.u32(m.style);
                 out.string(m.model);
                 out.u32(m.ordinal);
@@ -1448,54 +1529,11 @@ namespace MWRender
                 }
             }
         }
-        out.u32(mSplats.size());
-        for (const auto& s : mSplats)
-        {
-            out.string(s.worldspace);
-            out.u32(s.exterior);
-            out.vec(s.position);
-            out.vec(s.normal);
-            out.vec(s.tangent);
-            out.f32(s.width);
-            out.u32(s.style);
-            out.f64(s.hour);
-            out.f64(s.wash);
-            out.u32(std::uint32_t(s.mark));
-            out.f32(s.height);
-            out.f32(s.opacity);
-            out.u32(s.seed);
-            out.u32(s.porous);
-            out.f32(std::clamp(mRealTime - s.started, 0.f, PoolGrowthSeconds));
-        }
-        out.u32(mShoes.size());
-        for (const auto& [id, soles] : mShoes)
-        {
-            out.u32(id.mIndex);
-            out.u32(std::uint32_t(id.mContentFile));
-            for (const auto& sole : soles)
-            {
-                out.f32(sole.blood);
-                out.f32(std::clamp(sole.driesAt - mRealTime, 0.f, SoleDrySeconds));
-                out.f64(sole.stainedHour);
-            }
-        }
-        out.u32(mPoolSources.size());
-        for (const auto& [key, source] : mPoolSources)
-        {
-            const auto [id, outlet] = key;
-            out.u32(id.mIndex);
-            out.u32(std::uint32_t(id.mContentFile));
-            out.string(source.bone);
-            out.vec(source.offset);
-            out.f32(source.width);
-            const float lifetime = outlet == BloodPoolOutlet::Impact ? PoolSourceSeconds : CutPoolSourceSeconds;
-            out.f32(std::clamp(source.expires - mRealTime, 0.f, lifetime));
-            out.u32(std::uint32_t(outlet));
-        }
+        out.data += world.data;
         return out.data;
     }
 
-    bool BrutalBlood::load(std::string_view data)
+    bool BrutalBlood::load(std::string_view data, const std::map<int, int>* contentFiles)
     {
         clear();
         if (data.empty())
@@ -1503,20 +1541,32 @@ namespace MWRender
         const auto version = data.substr(0, 4);
         const bool legacy = version == "BWB1";
         const bool hasCutOutlets = version == "BWB3";
-        if (data.size() > MaxSaveBytes || (!legacy && version != "BWB2" && !hasCutOutlets))
+        if (!legacy && version != "BWB2" && !hasCutOutlets)
             return false;
         try
         {
             Reader in{ data };
+            auto readRef = [&]() {
+                ESM::RefNum id{ in.u32(), std::int32_t(in.u32()) };
+                if (contentFiles && id.hasContentFile())
+                {
+                    const auto it = contentFiles->find(id.mContentFile);
+                    if (it == contentFiles->end())
+                        return ESM::RefNum{};
+                    id.mContentFile = it->second;
+                }
+                return id;
+            };
+            // Older writers could exceed the size budget. Consume their complete record while
+            // bounding the retained geometry, so that the following world sections still load.
+            std::size_t remainingGeometry = MaxSaveBytes;
             std::map<ESM::RefNum, ItemBlood> items;
             const auto itemCount = in.u32();
-            if (itemCount > 4096)
+            if (itemCount > (data.size() - in.p) / 20)
                 return false;
             for (unsigned i = 0; i < itemCount; ++i)
             {
-                ESM::RefNum key;
-                key.mIndex = in.u32();
-                key.mContentFile = std::int32_t(in.u32());
+                const auto key = readRef();
                 ItemBlood blood;
                 blood.wash = in.f64();
                 const auto marks = in.u32();
@@ -1534,6 +1584,15 @@ namespace MWRender
                     const auto size = in.u32();
                     if (m.style >= Style_Count || m.ordinal > 4096 || !size || size % 3 || size > MaxWeaponMarkVertices)
                         return false;
+                    const std::size_t bytes = size * AnchorBytes;
+                    if (bytes > data.size() - in.p)
+                        return false;
+                    if (!key.isSet() || bytes > remainingGeometry || items.size() >= MaxSavedItems)
+                    {
+                        in.p += bytes;
+                        continue;
+                    }
+                    remainingGeometry -= bytes;
                     auto anchors = std::make_shared<WeaponAnchors>();
                     anchors->reserve(size);
                     for (unsigned k = 0; k < size; ++k)
@@ -1554,7 +1613,7 @@ namespace MWRender
                     m.anchors = std::move(anchors);
                     blood.marks.push_back(std::move(m));
                 }
-                if (key.isSet())
+                if (!blood.marks.empty())
                     items[key] = std::move(blood);
             }
             std::deque<Splat> splats;
@@ -1606,7 +1665,7 @@ namespace MWRender
                     return false;
                 for (unsigned i = 0; i < shoeCount; ++i)
                 {
-                    const ESM::RefNum id{ in.u32(), std::int32_t(in.u32()) };
+                    const auto id = readRef();
                     std::array<Sole, 2> soles{};
                     for (auto& sole : soles)
                     {
@@ -1622,20 +1681,21 @@ namespace MWRender
                     return false;
                 for (unsigned i = 0; i < sourceCount; ++i)
                 {
-                    const ESM::RefNum id{ in.u32(), std::int32_t(in.u32()) };
+                    const auto id = readRef();
                     PoolSource source;
                     source.bone = in.string();
                     source.offset = in.vec();
                     source.width = in.f32();
                     const float remaining = in.f32();
                     const auto outlet = hasCutOutlets ? in.u32() : std::uint32_t(BloodPoolOutlet::Impact);
-                    if (!id.isSet() || !(source.width > 0.f && source.width <= 200.f)
+                    if (!(source.width > 0.f && source.width <= 200.f)
                         || outlet > std::uint32_t(BloodPoolOutlet::RightArmFragment))
                         return false;
                     const float lifetime = outlet == std::uint32_t(BloodPoolOutlet::Impact)
                         ? PoolSourceSeconds : CutPoolSourceSeconds;
                     source.expires = mRealTime + std::clamp(remaining, 0.f, lifetime);
-                    sources.emplace(std::make_pair(id, BloodPoolOutlet(outlet)), std::move(source));
+                    if (id.isSet())
+                        sources.emplace(std::make_pair(id, BloodPoolOutlet(outlet)), std::move(source));
                 }
             }
             if (in.p != data.size())

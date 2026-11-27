@@ -1967,7 +1967,8 @@ namespace MWPhysics
                 if (const unsigned fragment = ragdoll->detachedFragment(ray.m_collisionObject))
                 {
                     const auto ptr = ragdoll->getPtr();
-                    if (ptr.isInCell() && ptr.getCell() == player.getCell() && ptr.getRefData().isEnabled())
+                    if (ptr.isInCell() && player.isInCell() && ptr.getRefData().isEnabled()
+                        && ptr.getCell()->getCell()->getWorldSpace() == player.getCell()->getCell()->getWorldSpace())
                         return { ptr, fragment };
                 }
             return {};

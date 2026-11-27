@@ -845,10 +845,19 @@ namespace MWMechanics
         return weaponClass == ESM::WeaponType::Ammo || weaponClass == ESM::WeaponType::Thrown;
     }
 
+    namespace
+    {
+        std::uint64_t sLastCombatAttackId = 0;
+    }
+
     std::uint64_t nextCombatAttackId()
     {
-        static std::uint64_t id = 0;
-        return ++id;
+        return ++sLastCombatAttackId;
+    }
+
+    void restoreCombatAttackId(std::uint64_t id)
+    {
+        sLastCombatAttackId = std::max(sLastCombatAttackId, id);
     }
 
     bool supportsRangedFinisher(int weaponType)

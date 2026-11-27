@@ -10,8 +10,8 @@ local function available()
     -- Combat scripts cache this capability and must resume after re-enabling.
     return state.bloodAvailable == true and state.sparksAvailable == true
 end
-local function setBloodData(data)
-    if type(world.setBrutalBloodData) == 'function' then world.setBrutalBloodData(data or '') end
+local function setBloodData(data, fromSave)
+    if type(world.setBrutalBloodData) == 'function' then world.setBrutalBloodData(data or '', fromSave) end
 end
 return {
 engineHandlers = {
@@ -19,7 +19,7 @@ engineHandlers = {
     onSave = function()
         return {blood = type(world.getBrutalBloodData) == 'function' and world.getBrutalBloodData() or ''}
     end,
-    onLoad = function(data) setBloodData(type(data) == 'table' and type(data.blood) == 'string' and data.blood or '') end,
+    onLoad = function(data) setBloodData(type(data) == 'table' and type(data.blood) == 'string' and data.blood or '', true) end,
 },
 eventHandlers = {
     BrutalWeaponBlood = function(data)

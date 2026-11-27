@@ -1,6 +1,8 @@
 #ifndef OPENMW_ESM_PROJECTILESTATE_H
 #define OPENMW_ESM_PROJECTILESTATE_H
 
+#include <cstdint>
+
 #include <osg/Quat>
 #include <osg/Vec3f>
 
@@ -45,6 +47,10 @@ namespace ESM
         RefId mBowId;
         Vector3 mVelocity;
         float mAttackStrength;
+        RefNum mFinisherTarget;
+        float mFinisherSpeed = 0.f;
+        float mFinisherTimeLeft = 0.f;
+        std::uint64_t mFinisherAttackId = 0;
 
         void load(ESMReader& esm);
         void save(ESMWriter& esm) const;

@@ -64,7 +64,9 @@ namespace ESM
             KnockdownOverOneFrame = 0x0200,
             HitRecovery = 0x0400,
             Block = 0x0800,
-            RecalcDynamicStats = 0x1000
+            RecalcDynamicStats = 0x1000,
+            AdrenalineArrestCombat = 0x2000,
+            AdrenalineEffectActive = 0x4000
         };
         bool mDead;
         bool mDeathAnimationFinished;
@@ -72,6 +74,8 @@ namespace ESM
         bool mMurdered;
         bool mTalkedTo;
         bool mAlarmed;
+        bool mAdrenalineArrestCombat = false;
+        bool mAdrenalineEffectActive = false;
         bool mAttacked;
         bool mKnockdown;
         bool mKnockdownOneFrame;

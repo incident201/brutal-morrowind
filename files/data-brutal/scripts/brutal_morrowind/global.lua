@@ -6,6 +6,7 @@ local vfs = require('openmw.vfs')
 local C = require('scripts.brutal_morrowind.config')
 local S = require('scripts.brutal_morrowind.settings')
 local storage = require('openmw.storage')
+local soundPrefix = 'sound/brutal_dm/'
 assert(type(world.applyObjectImpulse) == 'function', 'Brutal Morrowind requires native dynamic props')
 return {
     engineHandlers = {onPlayerAdded = function(player)
@@ -35,7 +36,7 @@ return {
         if not S.get('enabled') or not S.get('objectGrabEnabled') then return end
         local item, player = data.object, data.player
         if not item or not item:isValid() or not player or not player:isValid()
-            or item.cell ~= player.cell or types.Actor.isDead(player) then return end
+            or not item.cell or not item.cell:isInSameSpace(player) or types.Actor.isDead(player) then return end
         world.holdObject(item, player, data.fragment)
     end, BrutalGrabRelease = function(data)
         if type(world.releaseHeldObject) ~= 'function' then return end
@@ -44,7 +45,7 @@ return {
         world.releaseHeldObject(player, data.eyePos, data.throwDir, data.throwSpeed or 0, data.adrenaline == true)
     end, BrutalPlayObjectSound3d = function(data)
         if not S.get('combatSounds') or type(data) ~= 'table' or type(data.file) ~= 'string' then return end
-        if data.file:sub(1, 15) ~= 'sound/brutal_dm/' or not vfs.fileExists(data.file) then return end
+        if data.file:sub(1, #soundPrefix) ~= soundPrefix or not vfs.fileExists(data.file) then return end
         local target = data.object
         if not target or not target:isValid() or not target.enabled or not target.cell then return end
         core.sound.playSoundFile3d(data.file, target, {
