@@ -1,6 +1,7 @@
 Brutal Morrowind (unreleased)
 ----------------------------
 
+    Thrown objects follow the player's aim at release without being deflected into the floor by the throw animation's camera tilt. Turning during the windup still changes the throw direction.
     The game writes save format 38. Saves from earlier Brutal Morrowind versions and vanilla OpenMW 0.51 still load.
     One option controls physical projectiles and impacts on loose objects. If either older option was off, the combined option starts off.
     Successful melee weapon blocks and timed parries train Block, like shield and projectile blocks. With Dark Messiah stamina enabled, Block reduces defensive stamina costs and the recovery penalty while holding a guard. Skill 50 retains the previous balance, and skills 0–100 bound impact costs to 125–75% of that value.

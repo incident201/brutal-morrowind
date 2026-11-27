@@ -2118,7 +2118,7 @@ namespace MWWorld
         if (throwSpeed > 0.f && grabControlsEnabled() && Settings::game().mBrutalObjectGrab
             && !holder.getClass().getCreatureStats(holder).isDead())
         {
-            mHeldThrow = HeldThrow{ SafePtr(mPhysics->getHeldObject()), throwDir, throwSpeed, adrenaline, throwId };
+            mHeldThrow = HeldThrow{ SafePtr(mPhysics->getHeldObject()), throwSpeed, adrenaline, throwId };
             return true;
         }
         rejectThrow();
@@ -2549,12 +2549,15 @@ namespace MWWorld
         if (release >= 0.f && !atRelease && mHeldThrow->wait < .45f)
             return;
         clearHeldVisual();
-        const auto viewToWorld = osg::Matrixf::inverse(camera->getViewMatrix());
-        const auto aim = osg::Matrixf::transform3x3(osg::Vec3f(0, 0, -1), viewToWorld);
+        // Follow live player aim at release, without the throw animation's camera
+        // pitch/yaw/roll. Its downward follow-through must not steer the object
+        // into the floor. Use the same aim when the release-key fallback fires.
+        const auto aimOrientation = osg::Quat(camera->getPitch(), osg::Vec3f(1, 0, 0))
+            * osg::Quat(camera->getYaw(), osg::Vec3f(0, 0, 1));
+        const osg::Vec3f aim = aimOrientation * osg::Vec3f(0, 1, 0);
         const osg::Vec3f eye(camera->getViewPosition());
-        const bool released = mPhysics->releaseHeldObject(player, eye,
-            atRelease ? aim : mHeldThrow->direction,
-            mHeldThrow->speed, mHeldThrow->adrenaline);
+        const bool released
+            = mPhysics->releaseHeldObject(player, eye, aim, mHeldThrow->speed, mHeldThrow->adrenaline);
         resolveHeldThrow(released);
     }
 

@@ -109,7 +109,6 @@ namespace MWWorld
         struct HeldThrow
         {
             SafePtr item;
-            osg::Vec3f direction;
             float speed;
             bool adrenaline;
             std::uint64_t id;
