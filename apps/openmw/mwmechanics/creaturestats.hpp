@@ -171,8 +171,6 @@ namespace MWMechanics
         MWWorld::SafePtr mBrutalWoundedFallAttacker;
         // The player's lethal blow, consumed by the physical death handoff.
         osg::Vec3f mBrutalPlayerDeathPush;
-        // The attacker of the charged melee blow now being resolved against this actor.
-        MWWorld::SafePtr mBrutalChargedBlowBy;
         // Transient adaptive defence: pressure is observed from actual fast contacts,
         // not the player's input; none of these decisions survives a saved game.
         int mBrutalFastPressure = 0;

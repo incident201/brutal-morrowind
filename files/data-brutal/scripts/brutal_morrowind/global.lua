@@ -8,13 +8,17 @@ local S = require('scripts.brutal_morrowind.settings')
 local storage = require('openmw.storage')
 local soundPrefix = 'sound/brutal_dm/'
 assert(type(world.applyObjectImpulse) == 'function', 'Brutal Morrowind requires native dynamic props')
+local function sendPhysicsAvailability(player)
+    player:sendEvent('BrutalPhysicsAvailable', {available = true,
+        superKick = type(world.applyNpcSuperKick) == 'function',
+        objectGrab = type(world.holdObject) == 'function'})
+end
+
 return {
-    engineHandlers = {onPlayerAdded = function(player)
-        player:sendEvent('BrutalPhysicsAvailable', {available = true,
-            superKick = type(world.applyNpcSuperKick) == 'function',
-            objectGrab = type(world.holdObject) == 'function'})
-    end},
-    eventHandlers = {BrutalSettingsChanged = function(data)
+    engineHandlers = {onPlayerAdded = sendPhysicsAvailability},
+    eventHandlers = {BrutalPhysicsQuery = function(data)
+        if data.player == world.players[1] then sendPhysicsAvailability(data.player) end
+    end, BrutalSettingsChanged = function(data)
         if data.player ~= world.players[1] or type(data.values) ~= 'table' then return end
         storage.globalSection(S.SYNC):set('values', data.values)
     end, BrutalPropImpulse = function(data)
@@ -22,7 +26,7 @@ return {
         local item, attacker = data.item, data.attacker
         if not item or not item:isValid() or not item.enabled or not item.cell
             or not attacker or not attacker:isValid() or types.Actor.isDead(attacker)
-            or item.cell ~= attacker.cell or not types.Item.objectIsInstance(item)
+            or not item.cell:isInSameSpace(attacker) or not types.Item.objectIsInstance(item)
             or types.Light.objectIsInstance(item) or (item.position-attacker.position):length() > C.reach+20 then return end
         local direction = util.vector3(data.direction.x, data.direction.y, 0)
         if direction:length() < 0.1 then return end

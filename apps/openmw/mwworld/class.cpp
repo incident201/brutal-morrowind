@@ -126,7 +126,7 @@ namespace MWWorld
     }
 
     void Class::onHit(const Ptr& ptr, const std::map<std::string, float>& damages, ESM::RefId object,
-        const Ptr& attacker, bool successful, const MWMechanics::DamageSourceType sourceType) const
+        const Ptr& attacker, bool successful, const MWMechanics::DamageSourceType sourceType, bool) const
     {
         throw std::runtime_error("class cannot be hit");
     }
@@ -385,7 +385,9 @@ namespace MWWorld
         newPtr.getCellRef().unsetRefNum(); // This RefNum is only valid within the original cell of the reference
         newPtr.getCellRef().setCount(count);
         newPtr.getRefData().setLuaScripts(nullptr);
-        newPtr.getRefData().getAnimationState().mShieldProjectiles.clear();
+        auto& animation = newPtr.getRefData().getAnimationState();
+        animation.mShieldProjectiles.clear();
+        animation.mEquippedShieldProjectiles.clear();
         MWBase::Environment::get().getWorldModel()->registerPtr(newPtr);
         return newPtr;
     }

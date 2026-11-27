@@ -1062,6 +1062,28 @@ namespace MWRender
         }
     }
 
+    std::optional<osg::Matrixf> NpcAnimation::getLeftWeaponGrip() const
+    {
+        const auto hand = getBoneWorldMatrix("Bip01 L Hand");
+        const auto mount = getBoneWorldMatrix(sBrutalLeftWeaponBone);
+        if (hand && mount)
+            return *mount * osg::Matrixf::inverse(*hand);
+        return std::nullopt;
+    }
+
+    void NpcAnimation::attachLeftWeaponMount(const osg::Matrixf& grip)
+    {
+        if (getNode(sBrutalLeftWeaponBone))
+            return;
+        if (const auto hand = getNodeMap().find("Bip01 L Hand"); hand != getNodeMap().end())
+        {
+            osg::ref_ptr<osg::MatrixTransform> mount = new osg::MatrixTransform(grip);
+            mount->setName(std::string(sBrutalLeftWeaponBone));
+            hand->second->addChild(mount);
+            mNodeMap.emplace(mount->getName(), mount);
+        }
+    }
+
     void NpcAnimation::preparePlayerDeathPose()
     {
         if (mPlayerDeathView)
@@ -1087,12 +1109,7 @@ namespace MWRender
         const auto* body = fullBody ? this : mBodyAwarenessAnimation.get();
         std::optional<osg::Matrixf> leftWeaponGrip;
         if (mShowCarriedLeft && carriesLeftWeapon())
-        {
-            const auto hand = getBoneWorldMatrix(arms[0][2]);
-            const auto mount = getBoneWorldMatrix(sBrutalLeftWeaponBone);
-            if (hand && mount)
-                leftWeaponGrip = *mount * osg::Matrixf::inverse(*hand);
-        }
+            leftWeaponGrip = getLeftWeaponGrip();
         std::map<std::string, osg::Matrixf, std::less<>> localPose;
         if (body)
             for (const auto& [bone, node] : body->getNodeMap())
@@ -1152,16 +1169,7 @@ namespace MWRender
         // the drop starts at the palm with the arm's linear and angular motion.
         if (leftWeaponGrip)
         {
-            if (!getNode(sBrutalLeftWeaponBone))
-            {
-                const auto hand = getNodeMap().find(arms[0][2]);
-                if (hand == getNodeMap().end())
-                    return;
-                osg::ref_ptr<osg::MatrixTransform> mount = new osg::MatrixTransform(*leftWeaponGrip);
-                mount->setName(std::string(sBrutalLeftWeaponBone));
-                hand->second->addChild(mount);
-                mNodeMap.emplace(mount->getName(), mount);
-            }
+            attachLeftWeaponMount(*leftWeaponGrip);
             showCarriedLeft(true);
         }
     }
@@ -1579,7 +1587,8 @@ namespace MWRender
 
         mBodyAwarenessRoot = new osg::MatrixTransform;
         mBodyAwarenessRoot->setName("First Person Body Awareness");
-        mBodyAwarenessRoot->setNodeMask(Mask_Player);
+        // This torso-only model belongs to the primary first-person camera.
+        mBodyAwarenessRoot->setNodeMask(Mask_FirstPerson);
         mBodyAwarenessRoot->addCullCallback(new FirstPersonBodyCullCallback(this, true));
         // Traversed before the arm rig, so the eye can read this frame's torso pose.
         mInsert->insertChild(0, mBodyAwarenessRoot);
@@ -1634,6 +1643,11 @@ namespace MWRender
             mFirstPersonFieldOfView, FirstPersonBody::Shadow);
         mPlayerShadowAnimation->enableHeadAnimation(false);
         mPlayerShadowAnimation->setActive(2);
+        if (const auto grip = getLeftWeaponGrip(); grip && (carriesLeftWeapon() || mViewmodelSet == BrutalViewmodel_Bow))
+        {
+            mPlayerShadowAnimation->attachLeftWeaponMount(*grip);
+            mPlayerShadowAnimation->mViewmodelSet = mViewmodelSet;
+        }
         mPlayerShadowAnimation->showWeapons(mShowWeapons);
         mPlayerShadowAnimation->showCarriedLeft(mShowCarriedLeft);
         if (useFullBodyFirstPerson())
@@ -2158,7 +2172,7 @@ namespace MWRender
             ? Mask_FirstPerson : ~0u;
         mObjectRoot->setNodeMask(visible ? mask : 0u);
         if (mBodyAwarenessRoot)
-            mBodyAwarenessRoot->setNodeMask(visible ? Mask_Player : 0u);
+            mBodyAwarenessRoot->setNodeMask(visible ? Mask_FirstPerson : 0u);
         if (mPlayerShadowRoot)
             mPlayerShadowRoot->setNodeMask(visible ? Mask_PlayerShadow : 0u);
     }
@@ -2409,10 +2423,11 @@ namespace MWRender
             mBodyAwarenessAnimation->updateParts();
         if (mPlayerShadowAnimation)
             mPlayerShadowAnimation->updateParts();
-        prewarmDecapitationMaterial();
         prewarmBloodDecals();
         rebuildBloodDecals();
-        if (!mDecapitation && !mBisection && !mLimbSevering)
+        const auto& game = Settings::game();
+        if (game.mBrutalEnabled && game.mBrutalRagdoll && game.mBrutalDismemberment
+            && !mDecapitation && !mBisection && !mLimbSevering && prewarmDecapitationMaterial())
         {
             // Compile the actual split exterior/cap layouts and material paths during
             // scene/equipment setup; preparation performs no visible scene mutation.
@@ -3053,24 +3068,13 @@ namespace MWRender
         return saved;
     }
 
-    std::vector<std::pair<ESM::RefId, osg::Matrixf>> NpcAnimation::captureShieldProjectiles(
-        const osg::Matrixf* releasedRoot) const
+    osg::Matrixf NpcAnimation::getShieldReleaseTransform(const osg::Matrixf& releasedRoot) const
     {
-        std::vector<std::pair<ESM::RefId, osg::Matrixf>> projectiles;
         const auto* shield = mObjectParts[ESM::PRT_Shield].get();
-        if (!shield || mStuckProjectiles.empty())
-            return projectiles;
-        const auto node = shield->getNode();
-        osg::Matrixd toReleased;
-        if (releasedRoot)
-            toReleased = osg::computeLocalToWorld(releasedEquipmentPath(node, mPtr.getRefData().getBaseNode()))
-                * osg::Matrixd::inverse(osg::Matrixd(*releasedRoot));
-        for (const auto& stuck : mStuckProjectiles)
-        {
-            if (!stuck.mItem.empty() && stuck.mParent.get() == node.get())
-                projectiles.emplace_back(stuck.mItem, stuck.mNode->getMatrix() * toReleased);
-        }
-        return projectiles;
+        if (!shield)
+            return {};
+        return osg::computeLocalToWorld(releasedEquipmentPath(shield->getNode(), mPtr.getRefData().getBaseNode()))
+            * osg::Matrixd::inverse(osg::Matrixd(releasedRoot));
     }
 
     bool NpcAnimation::getReleasedEquipmentOwnerIsLeft(int slot) const
@@ -4225,7 +4229,7 @@ namespace MWRender
             if (type == ESM::PRT_Shield && carriesLeftWeapon())
                 bonename = sBrutalLeftWeaponBone;
             // The Dark Messiah bow set holds the bow in the left hand's own mount.
-            const bool leftBow = type == ESM::PRT_Weapon && mViewMode == VM_FirstPerson
+            const bool leftBow = type == ESM::PRT_Weapon && (mViewMode == VM_FirstPerson || mShadowOnly)
                 && mViewmodelSet == BrutalViewmodel_Bow && getNode(sBrutalLeftWeaponBone);
             if (leftBow)
                 bonename = sBrutalLeftWeaponBone;
@@ -4530,6 +4534,15 @@ namespace MWRender
                 if (!mShadowOnly && iter->getType() == ESM::Light::sRecordId && mObjectParts[ESM::PRT_Shield])
                     addExtraLight(mObjectParts[ESM::PRT_Shield]->getNode()->asGroup(),
                         SceneUtil::LightCommon(*iter->get<ESM::Light>()->mBase));
+            }
+            if (!mShadowOnly && iter->getType() == ESM::Armor::sRecordId && mObjectParts[ESM::PRT_Shield])
+            {
+                auto* shield = mObjectParts[ESM::PRT_Shield]->getNode()->asGroup();
+                const auto& saved = iter->getRefData().getAnimationState().mEquippedShieldProjectiles;
+                if (shield && !saved.empty() && std::ranges::none_of(mStuckProjectiles,
+                        [shield](const auto& missile) { return missile.mParent.get() == shield; }))
+                    for (const auto& missile : saved)
+                        restoreStuckProjectile(*shield, missile.mItem, osg::Matrixf(missile.mTransform.data()));
             }
         }
         else

@@ -566,7 +566,6 @@ namespace MWMechanics
         mBrutalPlayerDeathPush = {};
         mBrutalWoundedFall = {};
         mBrutalWoundedFallAttacker = {};
-        mBrutalChargedBlowBy = {};
         mBrutalBackstabTarget = {};
         mBrutalBackstabPhase = 0;
         mBrutalBackstabVictim = mBrutalSilentBackstab = false;

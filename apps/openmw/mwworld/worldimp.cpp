@@ -61,6 +61,7 @@
 #include <components/settings/values.hpp>
 
 #include "../mwbase/environment.hpp"
+#include "../mwbase/inputmanager.hpp"
 #include "../mwbase/luamanager.hpp"
 #include "../mwbase/mechanicsmanager.hpp"
 #include "../mwbase/scriptmanager.hpp"
@@ -1738,8 +1739,7 @@ namespace MWWorld
             bool allowGroundFallback = false;
             ESM::RefNum sourceObjectId;
             std::shared_ptr<const ESM::ReleasedEquipmentState> snapshot;
-            std::vector<std::pair<ESM::RefId, osg::Matrixf>> shieldProjectiles;
-            std::vector<std::pair<ESM::RefId, osg::Matrixf>> groundProjectiles;
+            osg::Matrixf shieldProjectilesToDropped;
         };
         std::vector<Candidate> candidates;
         // Snapshot both attachments before either inventory notification rebuilds
@@ -1788,8 +1788,6 @@ namespace MWWorld
             candidate.sourceObjectId = item.getCellRef().getRefNum();
             candidate.bound = MWBase::Environment::get().getMechanicsManager()->isBoundItem(item);
             candidate.allowGroundFallback = guaranteed && !player;
-            if (shield)
-                candidate.groundProjectiles = animation->captureShieldProjectiles();
             try
             {
                 osg::Matrixf frame;
@@ -1823,8 +1821,9 @@ namespace MWWorld
                     // Inventory weight is a gameplay encumbrance value, not the
                     // anatomical body's native mass. Use a local modest proxy mass.
                     const float mass = std::clamp(item.getClass().getWeight(item) * .1f, .05f, 20.f);
-                    if (!candidate.groundProjectiles.empty())
-                        candidate.shieldProjectiles = animation->captureShieldProjectiles(&itemRoot);
+                    if (shield && inLeftHand
+                        && !item.getRefData().getAnimationState().mEquippedShieldProjectiles.empty())
+                        candidate.shieldProjectilesToDropped = animation->getShieldReleaseTransform(itemRoot);
                     candidate.snapshot = animation->captureReleasedEquipment(slot, itemRoot, mass, candidate.error);
                 }
             }
@@ -1995,32 +1994,7 @@ namespace MWWorld
                     << ": " << error.what();
             }
             if (committed && !dropped.isEmpty())
-            {
-                const auto& projectiles = candidate.snapshot ? candidate.shieldProjectiles : candidate.groundProjectiles;
-                auto& links = dropped.getRefData().getAnimationState().mShieldProjectiles;
-                links.reserve(projectiles.size());
-                const auto& pose = dropped.getRefData().getPosition();
-                const auto frame = shieldTransform(
-                    dropped.getCellRef().getScale(), Misc::Convert::makeOsgQuat(pose), pose.asVec3());
-                // The held visual is gone. Publish each missile once, only after
-                // the shield transfer commits, so a failed attempt cannot duplicate it.
-                for (const auto& [id, local] : projectiles)
-                {
-                    try
-                    {
-                        ManualRef projectile(mStore, id, 1);
-                        const Ptr missile = placeObject(
-                            projectile.getPtr(), dropped.getCell(), embeddedProjectilePose(local * frame));
-                        auto& link = links.emplace_back();
-                        link.mReference = missile.getCellRef().getRefNum();
-                        std::copy_n(local.ptr(), link.mTransform.size(), link.mTransform.begin());
-                    }
-                    catch (const std::exception& error)
-                    {
-                        Log(Debug::Warning) << "Could not release embedded projectile " << id << ": " << error.what();
-                    }
-                }
-            }
+                releaseShieldProjectiles(dropped, candidate.snapshot ? candidate.shieldProjectilesToDropped : osg::Matrixf());
             return committed;
         };
         bool released = false;
@@ -2086,9 +2060,15 @@ namespace MWWorld
         return mPhysics->findDetachedGrabFragment(player, from, to);
     }
 
+    static bool grabControlsEnabled()
+    {
+        const auto input = MWBase::Environment::get().getInputManager();
+        return input->getControlSwitch("playercontrols") && input->getControlSwitch("playerfighting");
+    }
+
     bool World::holdObject(const Ptr& ptr, const Ptr& holder, MWPhysics::HeldObjectInfo* info, unsigned fragment)
     {
-        if (!mPhysics || holder != getPlayerPtr() || mPhysics->hasHeldObject()
+        if (!mPhysics || holder != getPlayerPtr() || mPhysics->hasHeldObject() || !grabControlsEnabled()
             || !ptr.isInCell() || !holder.isInCell()
             || ptr.getCell()->getCell()->getWorldSpace() != holder.getCell()->getCell()->getWorldSpace()
             || !ptr.getRefData().getBaseNode() || !ptr.getRefData().isEnabled())
@@ -2123,14 +2103,14 @@ namespace MWWorld
     {
         if (!mPhysics || holder != getPlayerPtr() || !mPhysics->hasHeldObject())
             return false;
-        if (throwSpeed > 0.f)
+        if (throwSpeed > 0.f && grabControlsEnabled())
         {
             mHeldThrow = HeldThrow{ SafePtr(mPhysics->getHeldObject()), throwDir, throwSpeed, adrenaline };
             return true;
         }
         mHeldThrow.reset();
         clearHeldVisual();
-        return mPhysics->releaseHeldObject(holder, eyePos, throwDir, throwSpeed, adrenaline);
+        return mPhysics->releaseHeldObject(holder, eyePos, throwDir, 0.f, false);
     }
 
     Ptr World::getHeldObject() const
@@ -2488,7 +2468,7 @@ namespace MWWorld
             : std::vector<osg::Node*>{ node };
         if (!node || !item.getRefData().isEnabled() || !item.isInCell() || !player.isInCell()
             || item.getCell()->getCell()->getWorldSpace() != player.getCell()->getCell()->getWorldSpace()
-            || !isFirstPerson() || nodes.empty())
+            || !isFirstPerson() || nodes.empty() || !grabControlsEnabled())
         {
             clearHeldVisual();
             mHeldThrow.reset();
@@ -2958,8 +2938,40 @@ namespace MWWorld
         MWWorld::Ptr dropped = object.getClass().moveToCell(object, *cell, pos);
 
         initObjectInCell(dropped, *cell, adjustPos);
-
+        releaseShieldProjectiles(dropped);
         return dropped;
+    }
+
+    void World::releaseShieldProjectiles(const Ptr& shield, const osg::Matrixf& toDropped)
+    {
+        auto& animation = shield.getRefData().getAnimationState();
+        auto& carried = animation.mEquippedShieldProjectiles;
+        if (carried.empty())
+            return;
+        auto& released = animation.mShieldProjectiles;
+        released.reserve(std::min(ESM::AnimationState::MaxStuckProjectiles, released.size() + carried.size()));
+        const auto& pose = shield.getRefData().getPosition();
+        const auto frame = shieldTransform(shield.getCellRef().getScale(), Misc::Convert::makeOsgQuat(pose), pose.asVec3());
+        std::erase_if(carried, [&](const auto& entry) {
+            if (released.size() >= ESM::AnimationState::MaxStuckProjectiles)
+                return false;
+            try
+            {
+                ManualRef projectile(mStore, entry.mItem, 1);
+                const osg::Matrixf local = osg::Matrixf(entry.mTransform.data()) * toDropped;
+                const Ptr missile = placeObject(
+                    projectile.getPtr(), shield.getCell(), embeddedProjectilePose(local * frame));
+                auto& link = released.emplace_back();
+                link.mReference = missile.getCellRef().getRefNum();
+                std::copy_n(local.ptr(), link.mTransform.size(), link.mTransform.begin());
+                return true;
+            }
+            catch (const std::exception& error)
+            {
+                Log(Debug::Warning) << "Could not release embedded projectile " << entry.mItem << ": " << error.what();
+                return false;
+            }
+        });
     }
 
     void World::initObjectInCell(const Ptr& object, CellStore& cell, bool adjustPos, bool notifyScripts)

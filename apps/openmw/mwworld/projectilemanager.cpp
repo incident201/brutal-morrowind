@@ -1017,7 +1017,7 @@ namespace MWWorld
 
             const auto target = projectile->getTarget();
             auto caster = projectileState.getCaster();
-            assert(target != caster);
+            assert(target.isEmpty() || target != caster);
 
             if (caster.isEmpty())
                 caster = target;
@@ -1025,7 +1025,8 @@ namespace MWWorld
             // Try to get a Ptr to the bow that was used. It might no longer exist.
             MWWorld::ManualRef projectileRef(*MWBase::Environment::get().getESMStore(), projectileState.mIdArrow);
             MWWorld::Ptr bow = projectileRef.getPtr();
-            if (!caster.isEmpty() && projectileState.mIdArrow != projectileState.mBowId)
+            if (!caster.isEmpty() && caster.getClass().hasInventoryStore(caster)
+                && projectileState.mIdArrow != projectileState.mBowId)
             {
                 MWWorld::InventoryStore& inv = caster.getClass().getInventoryStore(caster);
                 MWWorld::ContainerStoreIterator invIt = inv.getSlot(MWWorld::InventoryStore::Slot_CarriedRight);
@@ -1073,7 +1074,7 @@ namespace MWWorld
 
             const Ptr target = !active ? projectile->getTarget() : Ptr();
 
-            assert(target != caster);
+            assert(target.isEmpty() || target != caster);
 
             MWMechanics::CastSpell cast(caster, target);
             cast.mHitPosition = !active ? Misc::Convert::makeOsgVec3f(projectile->getHitPosition()) : pos;

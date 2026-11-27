@@ -4,6 +4,9 @@
 
 #include <components/misc/convert.hpp>
 
+#include "../mwbase/environment.hpp"
+#include "../mwworld/worldmodel.hpp"
+
 #include "actor.hpp"
 #include "collisiontype.hpp"
 #include "mtphysics.hpp"
@@ -18,7 +21,6 @@ namespace MWPhysics
         , mMagic(magic)
         , mHitWater(false)
         , mActive(true)
-        , mHitTarget(nullptr)
         , mPhysics(physicssystem)
         , mTaskScheduler(scheduler)
     {
@@ -58,21 +60,33 @@ namespace MWPhysics
         mCollisionObject->setWorldTransform(trans);
     }
 
-    void Projectile::hit(const btCollisionObject* target, btVector3 pos, btVector3 normal)
+    void Projectile::hit(const btCollisionObject* target, btVector3 pos, btVector3 normal, bool water)
     {
-        bool active = true;
-        if (!mActive.compare_exchange_strong(active, false, std::memory_order_relaxed) || !active)
+        std::scoped_lock lock(mMutex);
+        if (!mActive.load(std::memory_order_relaxed))
             return;
-        mHitTarget = target;
+
+        // Earlier impacts in this batch can replace the collider or remove its owner.
+        const auto* holder = static_cast<const PtrHolder*>(target->getUserPointer());
+        if (holder)
+        {
+            const auto ptr = holder->getPtr();
+            if (!ptr.isEmpty())
+                mHitTarget = ptr.getCellRef().getRefNum();
+        }
         mHitPosition = pos;
         mHitNormal = normal;
+        mHitWater = water;
+        mActive.store(false, std::memory_order_release);
     }
 
     MWWorld::Ptr Projectile::getTarget() const
     {
-        assert(!mActive);
-        auto* target = static_cast<PtrHolder*>(mHitTarget->getUserPointer());
-        return target ? target->getPtr() : MWWorld::Ptr();
+        assert(!isActive());
+        if (!mHitTarget.isSet())
+            return {};
+        const auto ptr = MWBase::Environment::get().getWorldModel()->getPtr(mHitTarget);
+        return ptr.isInCell() && !ptr.mRef->isDeleted() && ptr.getRefData().isEnabled() ? ptr : MWWorld::Ptr();
     }
 
     MWWorld::Ptr Projectile::getCaster() const

@@ -116,7 +116,8 @@ namespace MWMechanics
         {
             auto& inventory = actor.getClass().getInventoryStore(actor);
             for (auto it = inventory.begin(MWWorld::ContainerStore::Type_Weapon); it != inventory.end(); ++it)
-                if (getWeaponType(it->get<ESM::Weapon>()->mBase->mData.mType)->mWeaponClass != ESM::WeaponType::Ammo)
+                if (getWeaponType(it->get<ESM::Weapon>()->mBase->mData.mType)->mWeaponClass != ESM::WeaponType::Ammo
+                    && (!it->getClass().hasItemHealth(*it) || it->getClass().getItemHealth(*it) > 0))
                     return true;
             return false;
         }
@@ -173,7 +174,8 @@ namespace MWMechanics
                 if (weaponClass != ESM::WeaponType::Melee && weaponClass != ESM::WeaponType::Thrown)
                     return false;
             }
-            if (!item.getClass().getScript(item).empty())
+            if ((item.getClass().hasItemHealth(item) && item.getClass().getItemHealth(item) <= 0)
+                || !item.getClass().getScript(item).empty())
                 return false;
             if (MWBase::Environment::get().getWorld()->getHeldObject() == item)
                 return false;
@@ -575,7 +577,8 @@ namespace MWMechanics
         {
             item = model->getPtr(storage.mBrutalPickupItem);
             // Taken by someone else, grabbed by the player, or the need changed.
-            if (!isBrutalPickupPresent(item) || storage.mBrutalPickupShield != wantShield)
+            if (!isBrutalPickupPresent(item) || storage.mBrutalPickupShield != wantShield
+                || (item.getClass().hasItemHealth(item) && item.getClass().getItemHealth(item) <= 0))
             {
                 finish(false);
                 item = MWWorld::Ptr();

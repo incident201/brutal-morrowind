@@ -3620,7 +3620,10 @@ namespace MWMechanics
     void CharacterController::update(float duration)
     {
         if (!mAnimation)
+        {
+            mBrutalSprinting = false;
             return;
+        }
         MWBase::World* world = MWBase::Environment::get().getWorld();
         MWBase::SoundManager* sndMgr = MWBase::Environment::get().getSoundManager();
         const MWWorld::Class& cls = mPtr.getClass();
@@ -3633,14 +3636,14 @@ namespace MWMechanics
             auto& stats = cls.getCreatureStats(mPtr);
             stats.mBrutalClinchBlendOut = std::max(0.f, stats.mBrutalClinchBlendOut - std::max(duration, 0.f));
         }
-        if (updateSwordClinch(duration))
-            return;
-        if (updateBackstabVictim(duration))
-            return;
         // A living falling ragdoll owns all body motion, without a canned fall
         // or a latent weapon hit. Magic/death updates above remain live.
-        if (mAnimation->isRagdollPose() && !cls.getCreatureStats(mPtr).isDead())
+        if (updateSwordClinch(duration) || updateBackstabVictim(duration)
+            || (mAnimation->isRagdollPose() && !cls.getCreatureStats(mPtr).isDead()))
+        {
+            mBrutalSprinting = false;
             return;
+        }
         if (cls.isActor() && cls.getCreatureStats(mPtr).mBrutalParried)
         {
             // ACT_MELEE_PARRY_BREAK: the player timed a parry of this actor's blow.
@@ -3876,8 +3879,9 @@ namespace MWMechanics
                 speed = MWPhysics::PlayerKinetics::directionalSpeed(effective, sneak, vec.x(), vec.y())
                     * movementSettings.mSpeedFactor;
             }
-            mBrutalSprinting = (kineticPlayer || Settings::game().mBrutalSlide) && gait == MWPhysics::PlayerKinetics::Gait_Sprint && !sneak
-                && !inwater && !flying && vec.y() > 0.3f && vec.x() * vec.x() <= 0.09f;
+            mBrutalSprinting = (kineticPlayer || Settings::game().mBrutalSlide)
+                && gait == MWPhysics::PlayerKinetics::Gait_Sprint && !sneak && !inwater && !flying && speed > 0.f
+                && vec.y() > 0.3f && vec.x() * vec.x() <= 0.09f;
             vec.x() *= speed;
             vec.y() *= speed;
             // The physics channel retains the sprint's world momentum throughout a
@@ -3890,7 +3894,10 @@ namespace MWMechanics
 
             if (isKnockedOut() || isKnockedDown() || (isRecovery() && !isUpperBodyRecovery())
                 || isScriptedAnimPlaying())
+            {
                 vec = osg::Vec3f();
+                mBrutalSprinting = false;
+            }
 
             CharacterState movestate = CharState_None;
             CharacterState idlestate = CharState_None;
@@ -4964,7 +4971,8 @@ namespace MWMechanics
             || (item.getRefData().getPosition().asVec3() - mPtr.getRefData().getPosition().asVec3()).length() > 160.f)
             return false;
         const bool shield = item.getType() == ESM::Armor::sRecordId;
-        if (!shield && item.getType() != ESM::Weapon::sRecordId)
+        if ((!shield && item.getType() != ESM::Weapon::sRecordId)
+            || (item.getClass().hasItemHealth(item) && item.getClass().getItemHealth(item) <= 0))
             return false;
         auto& inventory = mPtr.getClass().getInventoryStore(mPtr);
         const MWWorld::ContainerStoreIterator taken

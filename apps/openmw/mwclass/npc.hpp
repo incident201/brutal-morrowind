@@ -85,7 +85,7 @@ namespace MWClass
 
         void onHit(const MWWorld::Ptr& ptr, const std::map<std::string, float>& damages, ESM::RefId object,
             const MWWorld::Ptr& attacker, bool successful,
-            const MWMechanics::DamageSourceType sourceType) const override;
+            MWMechanics::DamageSourceType sourceType, bool charged) const override;
 
         void getModelsToPreload(const MWWorld::ConstPtr& ptr, std::vector<std::string_view>& models) const override;
         ///< Get a list of models to preload that this object may use (directly or indirectly). default implementation:

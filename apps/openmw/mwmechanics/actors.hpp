@@ -78,7 +78,7 @@ namespace MWMechanics
         void update(float duration, bool paused);
         ///< Update actor stats and store desired velocity vectors in \a movement
 
-        void updateActor(const MWWorld::Ptr& ptr, float duration) const;
+        void updateActor(const MWWorld::Ptr& ptr, float duration, bool deferFatigue = false) const;
         ///< This function is normally called automatically during the update process, but it can
         /// also be called explicitly at any time to force an update.
 
@@ -210,7 +210,7 @@ namespace MWMechanics
 
         void adjustMagicEffects(const MWWorld::Ptr& creature, float duration) const;
 
-        void updateFatigue(const MWWorld::Ptr& ptr, float duration) const;
+        void updateFatigue(const MWWorld::Ptr& ptr, float duration, bool sprinting) const;
 
         void updateBrutalAdrenalineArrest(const MWWorld::Ptr& guard, SidingCache& cachedAllies) const;
         void updateCrimePursuit(const MWWorld::Ptr& ptr, float duration, SidingCache& cachedAllies) const;

@@ -40,7 +40,6 @@
 
 #include "../mwmechanics/aibreathe.hpp"
 
-#include "../mwphysics/playerkinetics.hpp"
 
 #include "../mwrender/vismask.hpp"
 
@@ -413,13 +412,14 @@ namespace MWMechanics
         }
     }
 
-    void Actors::updateActor(const MWWorld::Ptr& ptr, float duration) const
+    void Actors::updateActor(const MWWorld::Ptr& ptr, float duration, bool deferFatigue) const
     {
         ptr.getClass().getCreatureStats(ptr).updateAwareness(duration);
         // magic effects
         adjustMagicEffects(ptr, duration);
 
-        updateFatigue(ptr, duration);
+        if (!deferFatigue)
+            updateFatigue(ptr, duration, false);
     }
 
     void Actors::playIdleDialogue(const MWWorld::Ptr& actor) const
@@ -914,7 +914,7 @@ namespace MWMechanics
         stats.setFatigue(fatigue);
     }
 
-    void Actors::updateFatigue(const MWWorld::Ptr& ptr, float duration) const
+    void Actors::updateFatigue(const MWWorld::Ptr& ptr, float duration, bool sprinting) const
     {
         const auto& cls = ptr.getClass();
         CreatureStats& stats = cls.getCreatureStats(ptr);
@@ -925,15 +925,8 @@ namespace MWMechanics
         const auto& game = Settings::game();
         const bool player = ptr == getPlayer();
         const bool brutalStamina = player && game.mBrutalEnabled && game.mBrutalStamina;
-        bool spendingSprintFatigue = false;
-        if (brutalStamina && game.mKineticPlayerMovement
-            && stats.mBrutalGait == MWPhysics::PlayerKinetics::Gait_Sprint && cls.getNormalizedEncumbrance(ptr) <= 1.f)
-        {
-            const auto& env = MWBase::Environment::get();
-            const auto* controls = env.getLuaManager()->getActorControls(ptr);
-            spendingSprintFatigue = controls && controls->mMovement > 0.3f
-                && std::abs(controls->mSideMovement) <= 0.3f && !env.getWorld()->isSwimming(ptr);
-        }
+        const bool spendingSprintFatigue = sprinting && brutalStamina && game.mKineticPlayerMovement
+            && !MWBase::Environment::get().getWorld()->getGodModeState();
 
         // A fortify effect can raise current fatigue above its base value.
         if (!spendingSprintFatigue && fatigue.getCurrent() >= fatigue.getBase())
@@ -1173,7 +1166,8 @@ namespace MWMechanics
         auto& stats = guard.getClass().getCreatureStats(guard);
         auto& sequence = stats.getAiSequence();
         const auto& playerStats = player.getClass().getNpcStats(player);
-        const bool charged = playerStats.mBrutalAdrenalineEffectActive && !playerStats.isDead();
+        const bool charged = Settings::game().mBrutalEnabled && playerStats.mBrutalAdrenalineEffectActive
+            && !playerStats.isDead();
         if (stats.mBrutalAdrenalineArrestCombat)
         {
             if (!sequence.isInCombat(player))
@@ -1190,10 +1184,13 @@ namespace MWMechanics
             static const int cutoff = gmst.find("iCrimeThreshold")->mValue.getInteger();
             static const int multiplier = gmst.find("iCrimeThresholdMultiplier")->mValue.getInteger();
             const int bounty = playerStats.getBounty();
-            if (bounty > 0 && bounty < cutoff * multiplier)
+            if (bounty < cutoff * multiplier)
             {
                 sequence.stopCombat({ player });
-                sequence.stack(AiPursue(player), guard);
+                if (stats.getHitAttemptActor() == player.getCellRef().getRefNum())
+                    stats.setHitAttemptActor({});
+                if (bounty > 0)
+                    sequence.stack(AiPursue(player), guard);
             }
             return;
         }
@@ -1208,8 +1205,7 @@ namespace MWMechanics
             return;
         sequence.stopPursuit();
         MWBase::Environment::get().getMechanicsManager()->startCombat(
-            guard, player, &cachedAllies.getActorsSidingWith(player));
-        stats.mBrutalAdrenalineArrestCombat = sequence.isInCombat(player);
+            guard, player, &cachedAllies.getActorsSidingWith(player), true);
     }
 
     void Actors::updateCrimePursuit(const MWWorld::Ptr& ptr, float duration, SidingCache& cachedAllies) const
@@ -1234,7 +1230,8 @@ namespace MWMechanics
         const auto mechanicsManager = MWBase::Environment::get().getMechanicsManager();
         const auto world = MWBase::Environment::get().getWorld();
 
-        if (Settings::game().mBrutalEnabled && actorClass.isClass(ptr, "Guard"))
+        if (actorClass.isClass(ptr, "Guard") && (Settings::game().mBrutalEnabled
+                || creatureStats.mBrutalAdrenalineArrestCombat))
             updateBrutalAdrenalineArrest(ptr, cachedAllies);
 
         if (actorClass.isClass(ptr, "Guard") && !creatureStats.getAiSequence().isInPursuit()
@@ -1640,6 +1637,8 @@ namespace MWMechanics
                     player.getClass().getCreatureStats(player).setHitAttemptActor({});
             }
             const int actorsProcessingRange = Settings::game().mActorsProcessingRange;
+            const auto& game = Settings::game();
+            const bool deferPlayerFatigue = game.mBrutalEnabled && game.mBrutalStamina && game.mKineticPlayerMovement;
 
             // AI and magic effects update
             for (Actor& actor : mActors)
@@ -1684,7 +1683,7 @@ namespace MWMechanics
                     const bool cellChanged = worldScene->hasCellChanged();
                     const MWWorld::Ptr actorPtr = actor.getPtr(); // make a copy of the map key to avoid it being
                                                                   // invalidated when the player teleports
-                    updateActor(actorPtr, duration);
+                    updateActor(actorPtr, duration, isPlayer && deferPlayerFatigue);
 
                     // Looping magic VFX update
                     // Note: we need to do this before any of the animations are updated.
@@ -1828,6 +1827,8 @@ namespace MWMechanics
             {
                 MWBase::Environment::get().getWorld()->applyDeferredPreviewRotationToPlayer(duration);
                 playerCharacter->update(duration);
+                if (deferPlayerFatigue)
+                    updateFatigue(player, duration, playerCharacter->isBrutalSprinting());
                 playerCharacter->setVisibility(1.f);
                 MWBase::LuaManager::ActorControls* luaControls
                     = MWBase::Environment::get().getLuaManager()->getActorControls(player);

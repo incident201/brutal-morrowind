@@ -406,6 +406,8 @@ bool MWWorld::ContainerStore::stacks(const ConstPtr& ptr1, const ConstPtr& ptr2)
 
         // a weapon with blood on it keeps its own blood
         && !bloody(ptr1) && !bloody(ptr2)
+        && ptr1.getRefData().getAnimationState().mEquippedShieldProjectiles.empty()
+        && ptr2.getRefData().getAnimationState().mEquippedShieldProjectiles.empty()
 
         // item that is already partly used up never stacks
         && (!cls1.hasItemHealth(ptr1)
@@ -434,7 +436,10 @@ MWWorld::ContainerStoreIterator MWWorld::ContainerStore::add(
     item.getRefData().setBaseNode(
         nullptr); // Especially important, otherwise scripts on the item could think that it's actually in a cell
     item.getRefData().setReleasedEquipment(nullptr);
-    item.getRefData().getAnimationState().mShieldProjectiles.clear();
+    auto& animation = item.getRefData().getAnimationState();
+    animation.mShieldProjectiles.clear();
+    if (count < itemPtr.getCellRef().getCount())
+        animation.mEquippedShieldProjectiles.clear();
     ESM::Position pos;
     pos.rot[0] = 0;
     pos.rot[1] = 0;

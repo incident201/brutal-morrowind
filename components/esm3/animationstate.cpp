@@ -10,7 +10,8 @@ namespace ESM
 {
     bool AnimationState::empty() const
     {
-        return mScriptedAnims.empty() && mBodyProjectiles.empty() && mShieldProjectiles.empty();
+        return mScriptedAnims.empty() && mBodyProjectiles.empty() && mEquippedShieldProjectiles.empty()
+            && mShieldProjectiles.empty();
     }
 
     void AnimationState::load(ESMReader& esm)
@@ -44,6 +45,17 @@ namespace ESM
                 esm.fail("Invalid embedded body projectile");
             mBodyProjectiles.push_back(std::move(projectile));
         }
+        mEquippedShieldProjectiles.clear();
+        while (esm.peekNextSub("ESPI"))
+        {
+            EquippedShieldProjectile projectile;
+            projectile.mItem = esm.getHNRefId("ESPI");
+            esm.getHNT("ESPM", projectile.mTransform);
+            if (mEquippedShieldProjectiles.size() >= MaxStuckProjectiles || projectile.mItem.empty()
+                || !checkTransform(projectile.mTransform))
+                esm.fail("Invalid equipped shield projectile");
+            mEquippedShieldProjectiles.push_back(std::move(projectile));
+        }
         mShieldProjectiles.clear();
         while (esm.peekNextSub("SPRF"))
         {
@@ -73,6 +85,11 @@ namespace ESM
             esm.writeHNString("BPRJ", projectile.mBone);
             esm.writeHNRefId("BPID", projectile.mItem);
             esm.writeHNT("BPMT", projectile.mTransform);
+        }
+        for (const auto& projectile : mEquippedShieldProjectiles)
+        {
+            esm.writeHNRefId("ESPI", projectile.mItem);
+            esm.writeHNT("ESPM", projectile.mTransform);
         }
         for (const auto& projectile : mShieldProjectiles)
         {

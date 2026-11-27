@@ -90,7 +90,7 @@ namespace MWBase
             const MWWorld::Ptr& ammo, int attackType, float attackStrength, float damage, bool isHealth,
             const osg::Vec3f& hitPos, bool successful, MWMechanics::DamageSourceType, uint64_t brutalAttackId = 0,
             bool brutalPowered = false, bool brutalBlocked = false, int contactPart = -1,
-            bool brutalGroundFinisher = false, const osg::Vec3f* contactNormal = nullptr) = 0;
+            bool brutalGroundFinisher = false, const osg::Vec3f* contactNormal = nullptr, bool brutalCharged = false) = 0;
         virtual void meleeResolved(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, const MWWorld::Ptr& weapon,
             uint64_t attackId, const std::string& token, bool powered, bool successful, bool blocked,
             float damage, float strength, const osg::Vec3f& hitPos) = 0;

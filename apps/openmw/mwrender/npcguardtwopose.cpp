@@ -283,10 +283,9 @@ namespace MWRender
             return result;
         }
 
-        // Continue each elbow from the last published six-bone pose. A linear
-        // interpolation of the swivel parameter is not a low-elbow route even
-        // when its two endpoints both have the elbow below the raised shaft.
-        bool solveWideHeadStep(const std::array<GuardJointSource, 2>& rigs, const osg::Matrixf& itemActor,
+        // Continue each elbow from the last published pose while both hands
+        // follow the rigid item. Elbow swivel need not interpolate linearly.
+        bool solvePairedStep(const std::array<GuardJointSource, 2>& rigs, const osg::Matrixf& itemActor,
             const std::array<osg::Matrixf, 2>& handFromItem, const WideHeadStyle& style, const PairedSolution& previous,
             const std::array<std::array<osg::Quat, 3>, 2>& previousRotations, float duration, unsigned& evaluations,
             PairedSolution& result)
@@ -318,8 +317,8 @@ namespace MWRender
                     const auto pose = solveGuardJoint(rigs[side], goal, swivel, pronation);
                     ++calls;
                     if (!pose.metrics.natural() || pose.metrics.reach >= .02f
-                        || wideHeadElbowHeight(rigs[side], pose) > heightLimit
-                        || wideHeadPalmAngle(rigs[side], pose, style.palmMcp[side]) > palmLimit)
+                        || (style.active && (wideHeadElbowHeight(rigs[side], pose) > heightLimit
+                            || wideHeadPalmAngle(rigs[side], pose, style.palmMcp[side]) > palmLimit)))
                         continue;
                     float cost = 0.f;
                     bool speedOk = true;
@@ -453,18 +452,17 @@ namespace MWRender
             const std::array<osg::Matrixf, 2>& handFromItem, const std::array<float, 2>& swivel,
             const std::array<float, 2>& pronation, const osg::Matrixf& fromItem, const std::array<float, 2>& fromSwivel,
             const std::array<float, 2>& fromPronation, float headStyle, unsigned& evaluations,
-            const WideHeadStyle* wideStyle = nullptr)
+            const WideHeadStyle* wideStyle, bool useElbowContinuation)
         {
             PairedGoalQuality result;
             result.pose = solvePaired(rigs, itemActor, handFromItem, swivel, pronation);
             ++evaluations;
             result.cost
                 = pairedViolation(result.pose) * 10000. + pairedStyleCost(rigs, result.pose, headStyle, wideStyle);
-            if (wideStyle && wideStyle->active)
+            if (useElbowContinuation)
             {
-                // The wide guard publishes the bounded elbow continuation,
-                // not the linear swivel corridor below. Validate each actual
-                // continuation step before it can own the six arm bones.
+                // Validate the actual elbow continuation when publishing each step.
+                // A linear swivel corridor is not a constraint of that motion.
                 result.ready = pairedPreferredStyle(rigs, result.pose, headStyle, wideStyle);
                 return result;
             }
@@ -911,9 +909,16 @@ namespace MWRender
         osg::Vec3f targetActor = pose.target * actorInverse;
         osg::Vec3f directionActor = osg::Matrixf::transform3x3(pose.incoming, actorInverse);
         directionActor.normalize();
-        const float headStyle = pairedHeadStyle(rigs, targetActor);
+        int weaponType = ESM::Weapon::None;
+        MWMechanics::getActiveWeapon(mPtr, &weaponType);
+        const bool closeBlade = weaponType == ESM::Weapon::LongBladeTwoHand;
+        const float targetHeight = pairedHeadStyle(rigs, targetActor);
+        // On a compact blade guard the low-elbow head preference starts above
+        // shoulder height. A chest interception may require a raised elbow.
+        const float headStyle = closeBlade && targetHeight <= .5f ? 0.f : targetHeight;
         const WideHeadStyle wideStyle{ group == "brutal_weapon_guard_2w" && headStyle > 0.f,
             { pose.reference[0].palmMcp, pose.reference[1].palmMcp } };
+        const bool useElbowContinuation = wideStyle.active || closeBlade;
         if (!pose.releasing && pose.wideHeadMode != wideStyle.active)
         {
             // A low goal is not a seed for the supported high-shaft stance.
@@ -1274,9 +1279,8 @@ namespace MWRender
             else if (found)
                 witnessIndex = pose.cachedWitness;
             // Refine a common rigid item pose and both arm configurations.
-            // A feasible coarse endpoint can still have a folded high guard
-            // or an infeasible interpolation corridor. The objective includes
-            // that corridor, and the bounded search resumes next frame.
+            // A coarse endpoint may need a lower elbow or a different route
+            // from the current pose. The bounded search resumes next frame.
             const bool exhaustedNegative = pose.refinementFinished && !pose.cachedNatural && same;
             if (exhaustedNegative)
             {
@@ -1307,7 +1311,8 @@ namespace MWRender
                     return assessPairedGoal(rigs,
                         candidateItem(pose.cachedWitness, refinedTurn(parameters), parameters[3]), handFromItem,
                         { parameters[4], parameters[5] }, { parameters[6], parameters[7] }, pose.currentItemActor,
-                        pose.currentSwivel, pose.currentPronation, headStyle, audit.searchCandidates, &wideStyle);
+                        pose.currentSwivel, pose.currentPronation, headStyle, audit.searchCandidates, &wideStyle,
+                        useElbowContinuation);
                 };
                 auto quality = assess(pose.refinementParameters);
                 found = quality.ready;
@@ -1439,22 +1444,22 @@ namespace MWRender
             amount *= audit.weight;
             bool accepted = false;
             const auto full = desired;
-            PairedSolution previousWide;
+            PairedSolution previous;
             auto previousRotations = pose.publishedRotations;
-            if (wideStyle.active)
+            if (useElbowContinuation)
             {
-                previousWide
+                previous
                     = solvePaired(rigs, pose.currentItemActor, handFromItem, pose.currentSwivel, pose.currentPronation);
                 ++audit.searchCandidates;
                 if (!pose.published)
                     for (unsigned side = 0; side < 2; ++side)
                         for (unsigned joint = 0; joint < 3; ++joint)
-                            previousRotations[side][joint] = previousWide.arms[side].local[joint].getRotate();
+                            previousRotations[side][joint] = previous.arms[side].local[joint].getRotate();
             }
             const auto tryStep = [&](float fraction, PairedSolution& candidate) {
-                if (wideStyle.active)
-                    return solveWideHeadStep(rigs, interpolateItem(pose.currentItemActor, targetItem, fraction),
-                        handFromItem, wideStyle, previousWide, previousRotations, duration, audit.searchCandidates,
+                if (useElbowContinuation)
+                    return solvePairedStep(rigs, interpolateItem(pose.currentItemActor, targetItem, fraction),
+                        handFromItem, wideStyle, previous, previousRotations, duration, audit.searchCandidates,
                         candidate);
                 std::array<float, 2> swivel, pronation;
                 for (unsigned side = 0; side < 2; ++side)
@@ -1476,7 +1481,7 @@ namespace MWRender
                                     <= (joint ? 360.f : 240.f) * duration + .05f;
                 return candidate.natural && candidateSpeedOk;
             };
-            if (wideStyle.active)
+            if (useElbowContinuation)
             {
                 // Six bounded continuation trials cost at most 300 pair
                 // evaluations. They use exactly the existing speed limits.

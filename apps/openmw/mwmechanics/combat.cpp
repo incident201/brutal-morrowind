@@ -99,16 +99,20 @@ namespace MWMechanics
         // The player's held guard protects a frontal arc. The first-person guard is a
         // viewmodel in front of the camera, not a surface on the body's arm, so AI
         // contact rays met it only by chance.
-        bool isInFrontalGuard(const MWWorld::Ptr& attacker, const MWWorld::Ptr& blocker)
+        bool isInFrontalGuard(const MWWorld::Ptr& blocker, osg::Vec3f towardSource)
         {
             constexpr float frontalArcDegrees = 70.f;
             const osg::Vec3f forward = osg::Quat(blocker.getRefData().getPosition().rot[2], osg::Vec3f(0, 0, -1))
                 * osg::Vec3f(0, 1, 0);
-            osg::Vec3f toAttacker = attacker.getRefData().getPosition().asVec3()
-                - blocker.getRefData().getPosition().asVec3();
-            toAttacker.z() = 0.f;
-            return toAttacker.normalize() >= 1e-3f
-                && toAttacker * forward >= std::cos(osg::DegreesToRadians(frontalArcDegrees));
+            towardSource.z() = 0.f;
+            return towardSource.normalize() >= 1e-3f
+                && towardSource * forward >= std::cos(osg::DegreesToRadians(frontalArcDegrees));
+        }
+
+        bool isInFrontalGuard(const MWWorld::Ptr& attacker, const MWWorld::Ptr& blocker)
+        {
+            return isInFrontalGuard(blocker,
+                attacker.getRefData().getPosition().asVec3() - blocker.getRefData().getPosition().asVec3());
         }
 
         bool hasAdaptiveGuardMesh(const MWWorld::Ptr& target)
@@ -284,8 +288,10 @@ namespace MWMechanics
                 MWWorld::Ptr parryWeapon = *parrying;
                 MWMechanics::reduceWeaponCondition(damage, true, parryWeapon, blocker);
             }
-            MWBase::Environment::get().getSoundManager()->playSound3D(blocker,
-                ESM::RefId::stringRefId(timed ? "Brutal Sword Parry" : "Brutal Sword Contact"), 1.0f, 1.0f);
+            const auto sounds = MWBase::Environment::get().getSoundManager();
+            if (!sounds->playSound3D(blocker,
+                    ESM::RefId::stringRefId(timed ? "Brutal Sword Parry" : "Brutal Sword Contact"), 1.f, 1.f))
+                sounds->playSound3D(blocker, ESM::RefId::stringRefId("Heavy Armor Hit"), 1.f, 1.f);
             if (timed && attacker.getClass().isNpc()
                 && (guardAge > parryWindow * clinchWindowFraction
                     || !MWBase::Environment::get().getMechanicsManager()->requestSwordClinch(blocker, attacker)))
@@ -758,7 +764,9 @@ namespace MWMechanics
             if (stats.isDead() || stats.getKnockedDown() || stats.getHitRecovery() || stats.isParalyzed())
                 return unblocked;
             const double now = MWBase::Environment::get().getWorld()->getTimeManager()->getSimulationTime();
-            if (now < stats.mBrutalGuardBrokenUntil || !isInFrontalGuard(attacker, blocker))
+            const bool frontal = flight ? isInFrontalGuard(blocker, flight->first - flight->second)
+                                        : isInFrontalGuard(attacker, blocker);
+            if (now < stats.mBrutalGuardBrokenUntil || !frontal)
                 return unblocked;
 
             auto& inventory = blocker.getClass().getInventoryStore(blocker);
@@ -853,6 +861,11 @@ namespace MWMechanics
     std::uint64_t nextCombatAttackId()
     {
         return ++sLastCombatAttackId;
+    }
+
+    std::uint64_t getLastCombatAttackId()
+    {
+        return sLastCombatAttackId;
     }
 
     void restoreCombatAttackId(std::uint64_t id)

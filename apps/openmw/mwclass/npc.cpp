@@ -786,16 +786,13 @@ namespace MWClass
         MWMechanics::diseaseContact(victim, ptr);
 
         brutalSuccessful = true;
-        // Only a charged blow can knock a wounded NPC down (see onHit).
-        othercls.getCreatureStats(victim).mBrutalChargedBlowBy
-            = MWMechanics::isBrutalChargedAttack(ptr, attackStrength) ? MWWorld::SafePtr(ptr) : MWWorld::SafePtr();
         MWBase::Environment::get().getLuaManager()->onHit(ptr, victim, weapon, MWWorld::Ptr(), type, attackStrength,
-            damage, healthdmg, hitPosition, true, MWMechanics::DamageSourceType::Melee,
-            brutalAttackId, brutalPowered, brutalBlocked, contactPart, groundFinisher);
+            damage, healthdmg, hitPosition, true, MWMechanics::DamageSourceType::Melee, brutalAttackId, brutalPowered,
+            brutalBlocked, contactPart, groundFinisher, nullptr, MWMechanics::isBrutalChargedAttack(ptr, attackStrength));
     }
 
     void Npc::onHit(const MWWorld::Ptr& ptr, const std::map<std::string, float>& damages, ESM::RefId object,
-        const MWWorld::Ptr& attacker, bool successful, const MWMechanics::DamageSourceType sourceType) const
+        const MWWorld::Ptr& attacker, bool successful, MWMechanics::DamageSourceType sourceType, bool charged) const
     {
         MWMechanics::CreatureStats& stats = getCreatureStats(ptr);
         bool wasDead = stats.isDead();
@@ -929,8 +926,6 @@ namespace MWClass
             // Dark Messiah's wounded NPC: a charged melee blow knocks it down (WoundedFallChance
             // 0.3), any melee blow may stagger it (WoundedStunChance 0.3). The fall is applied on
             // its next update. A kick or shield bash rolls its fall where its push lands (applyNpcKick).
-            const bool charged = !attacker.isEmpty() && stats.mBrutalChargedBlowBy.ptrOrEmpty() == attacker;
-            stats.mBrutalChargedBlowBy = {};
             if (hasHealthDamage && healthDamage > 0.f && !attacker.isEmpty() && !clinchLossDamage && !silentBackstabHit
                 && sourceType == MWMechanics::DamageSourceType::Melee && MWMechanics::isBrutalWoundedNpc(ptr)
                 && stats.mBrutalClinchOpponent.ptrOrEmpty().isEmpty())

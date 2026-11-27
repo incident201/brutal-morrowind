@@ -235,6 +235,8 @@ namespace MWRender
         void syncStuckProjectiles();
         void saveBodyProjectiles() const;
         void restoreBodyProjectiles();
+        void restoreStuckProjectile(osg::Group& parent, const ESM::RefId& item, const osg::Matrixf& transform,
+            std::string_view bone = {});
         void mountProjectile(osg::Node& projectile, osg::Group& parent, const osg::Matrixf& transform,
             const ESM::RefId& item, std::string_view bone, float modelTip);
         ProjectileAttachment addStuckProjectile(VFS::Path::NormalizedView model, const osg::Vec3f& tipPosition,

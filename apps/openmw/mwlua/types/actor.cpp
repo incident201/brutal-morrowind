@@ -8,6 +8,7 @@
 
 #include <components/detournavigator/agentbounds.hpp>
 #include <components/lua/luastate.hpp>
+#include <components/lua/serialization.hpp>
 #include <components/misc/finitevalues.hpp>
 #include <components/settings/values.hpp>
 
@@ -1537,14 +1538,28 @@ namespace MWLua
                 }
             }
 
+            const auto attackId = options.get_or<uint64_t>("brutalAttackId", 0);
+            LuaUtil::BinaryData receiptAttack;
+            if (attackId != 0 && physical)
+            {
+                // Save the input to the receipt along with its result. A quicksave can
+                // apply this action before the resulting Lua event has been delivered.
+                sol::table attack = context.sol().create_table();
+                for (const char* field : { "attacker", "weapon", "sourceType", "successful", "brutalAttackId",
+                         "brutalGroundFinisher", "brutalPowered", "brutalBlocked", "brutalAttackType",
+                         "brutalShieldRush", "brutalHeadHit", "brutalWaistHit", "brutalSlideAttack", "brutalLegHit",
+                         "brutalLegsAllowed", "brutalClosestArm", "brutalImpactDirection", "brutalAimDirection" })
+                    attack[field] = options.get<sol::object>(field);
+                receiptAttack = LuaUtil::serialize(attack, context.mSerializer);
+            }
             context.mLuaManager->addAction(
                 [self = Object(self), damages = std::move(damageCpp),
                     attacker = options.get<sol::optional<Object>>("attacker"), weaponId,
                     successful = options.get<bool>("successful"), sourceType = sourceType, lethalVelocity, lethalPoint,
                     worldBlood = physical && !options.get_or("brutalBlocked", false), impact, impactDirection,
                     powered = options.get_or("brutalPowered", false),
-                    attackId = options.get_or<uint64_t>("brutalAttackId", 0),
-                    lua = context.mLua, manager = context.mLuaManager] {
+                    attackId, charged = options.get_or("brutalCharged", false), receiptAttack = std::move(receiptAttack),
+                    serializer = context.mSerializer, lua = context.mLua, manager = context.mLuaManager] {
                     MWWorld::Ptr attackerPtr;
                     if (attacker)
                         attackerPtr = attacker->ptrOrEmpty();
@@ -1554,7 +1569,7 @@ namespace MWLua
                     const bool aliveBefore = !stats.isDead();
                     const float healthBefore = stats.getHealth().getCurrent();
                     const float maximumHealth = stats.getHealth().getModified();
-                    target.getClass().onHit(target, damages, weaponId, attackerPtr, successful, sourceType);
+                    target.getClass().onHit(target, damages, weaponId, attackerPtr, successful, sourceType, charged);
                     const float healthDamage = std::max(0.f, healthBefore - stats.getHealth().getCurrent());
                     if (worldBlood && successful && aliveBefore && healthDamage > 0.f)
                     {
@@ -1603,6 +1618,8 @@ namespace MWLua
                             receipt["actualHealthDamage"] = healthDamage;
                             receipt["healthBefore"] = healthBefore;
                             receipt["maximumHealth"] = maximumHealth;
+                            if (!receiptAttack.empty())
+                                receipt["attack"] = LuaUtil::deserialize(view.sol(), receiptAttack, serializer);
                             manager->sendLocalEvent(target, "BrutalHitApplied", receipt);
                         });
                 },

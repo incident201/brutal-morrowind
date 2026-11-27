@@ -165,6 +165,7 @@ namespace MWWorld
 
         void initObjectInCell(const Ptr& ptr, CellStore& cell, bool adjustPos, bool notifyScripts = true);
         Ptr moveObjectToCell(const Ptr& ptr, CellStore* cell, ESM::Position pos, bool adjustPos);
+        void releaseShieldProjectiles(const Ptr& shield, const osg::Matrixf& toDropped = {});
         Ptr copyObjectToCell(const ConstPtr& ptr, CellStore* cell, ESM::Position pos, int count, bool adjustPos);
         ESM::Position getGroundDropPosition(const Ptr& actor) const;
 

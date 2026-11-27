@@ -378,7 +378,7 @@ namespace MWClass
     }
 
     void Creature::onHit(const MWWorld::Ptr& ptr, const std::map<std::string, float>& damages, ESM::RefId object,
-        const MWWorld::Ptr& attacker, bool successful, const MWMechanics::DamageSourceType sourceType) const
+        const MWWorld::Ptr& attacker, bool successful, MWMechanics::DamageSourceType sourceType, bool) const
     {
         MWMechanics::CreatureStats& stats = getCreatureStats(ptr);
 

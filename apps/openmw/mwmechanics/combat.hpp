@@ -21,6 +21,7 @@ namespace MWMechanics
     inline constexpr float sNpcProjectileGuardContactMargin = 1.f;
 
     std::uint64_t nextCombatAttackId();
+    std::uint64_t getLastCombatAttackId();
     void restoreCombatAttackId(std::uint64_t id);
     bool supportsRangedFinisher(int weaponType);
 

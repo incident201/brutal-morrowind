@@ -36,7 +36,6 @@ end
 local limbSelections, legRoll = 0, nil
 local bisectionEligible, bisectionSelections = 0, 0
 local decapEligible, decapSelections, decapRoll, decapAttackId = 0, 0, nil, nil
-local pendingHits = {}
 -- Dark Messiah life_tohurt: a blow removing this share of maximum health staggers
 -- the whole body. Every smaller damaging hit keeps the native small flinch.
 local HEAVY_HIT_FRACTION = 0.1
@@ -189,12 +188,6 @@ interface.onHit = function(attack)
     local hitArmor = selectedArmor
     currentAttack, selectedArmor = outerAttack, outerArmor
     local healthDamage = (attack.damage or {}).health or 0
-    local ranged = attack.sourceType == 'ranged'
-    if (ranged or attack.sourceType == 'melee')
-        and attack.brutalAttackId and attack.brutalAttackId ~= 0 then
-        -- Combat queues damage. Wait for the receipt from the action that actually applied it.
-        pendingHits[attack.brutalAttackId] = {attack = attack, age = 0}
-    end
     if aliveBefore and attack.successful and attack.sourceType == 'ranged' and attack.brutalBlocked then
         -- An arrow, bolt or thrown weapon met the held guard.
         local guard = types.Actor.getEquipment(self)[types.Actor.EQUIPMENT_SLOT.CarriedLeft]
@@ -252,11 +245,9 @@ return {
                 and damage >= HEAVY_HIT_FRACTION * types.Actor.stats.dynamic.health(self).base then
                 if stagger(self) then heavyStaggers = heavyStaggers + 1 end
             end
-            local entry = pendingHits[data.attackId]
-            if not entry then return end
-            pendingHits[data.attackId] = nil
-            if damage <= 0 then return end
-            local attack = entry.attack
+            local attack = data.attack
+            if not attack or damage <= 0 then return end
+            attack.damage = {health = damage}
             reportDamagingHit(attack, data)
             if attack.sourceType == 'ranged' then
                 return
@@ -324,10 +315,6 @@ return {
                 core.sendGlobalEvent('BrutalRestoreBloodDecals', {actor=self, data=bloodDecalData})
                 bloodRestoreWait = 1
             end
-            for id, entry in pairs(pendingHits) do
-                entry.age = entry.age + dt
-                if entry.age > 2 then pendingHits[id] = nil end
-            end
             if torsoSelected and not types.Actor.isDead(self) then
                 torsoSelected, restoreBisection, torsoDone = false, false, false
                 torsoPoseData = ''
@@ -392,7 +379,6 @@ return {
                 limbsMask=limbsDone and limbMask or 0, limbPoseData=limbPose}
         end,
         onLoad = function(data)
-            pendingHits = {}
             bloodDecalData = data and type(data.bloodDecals) == 'string' and data.bloodDecals or ''
             restoreBloodDecals, bloodRestoreWait = bloodDecalData ~= '', 0
             available, requestAvailability = false, true

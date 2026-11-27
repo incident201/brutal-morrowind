@@ -761,7 +761,7 @@ namespace MWLua
         const MWWorld::Ptr& ammo, int attackType, float attackStrength, float damage, bool isHealth,
         const osg::Vec3f& hitPos, bool successful, MWMechanics::DamageSourceType sourceType, uint64_t brutalAttackId,
         bool brutalPowered, bool brutalBlocked, int contactPart, bool brutalGroundFinisher,
-        const osg::Vec3f* contactNormal)
+        const osg::Vec3f* contactNormal, bool brutalCharged)
     {
         const bool rangedContact
             = sourceType == MWMechanics::DamageSourceType::Ranged && contactNormal && victim.getClass().isNpc();
@@ -796,6 +796,7 @@ namespace MWLua
             data["brutalAttackId"] = brutalAttackId;
             data["brutalPowered"] = brutalPowered;
             data["brutalGroundFinisher"] = brutalGroundFinisher;
+            data["brutalCharged"] = brutalCharged;
             const auto& game = Settings::game();
             if (successful && isHealth && damage > 0.f && !brutalBlocked && !brutalPowered && !brutalGroundFinisher
                 && game.mBrutalEnabled && !attacker.isEmpty() && attacker == MWMechanics::getPlayer())
@@ -1183,6 +1184,8 @@ namespace MWLua
         mGlobalScripts.save(globalScripts);
         globalScripts.save(writer);
         mLuaEvents.save(writer);
+        if (const auto lastAttackId = MWMechanics::getLastCombatAttackId(); lastAttackId != 0)
+            writer.writeHNT("BAID", lastAttackId);
 
         writer.endRecord(ESM::REC_LUAM);
     }
@@ -1211,6 +1214,9 @@ namespace MWLua
         mLua.protectedCall([&](LuaUtil::LuaView& view) {
             mLuaEvents.load(view.sol(), reader, mContentFileMapping, mGlobalLoader.get());
         });
+        std::uint64_t lastAttackId = 0;
+        reader.getHNOT(lastAttackId, "BAID");
+        MWMechanics::restoreCombatAttackId(lastAttackId);
 
         mGlobalScripts.setSavedDataDeserializer(mGlobalLoader.get());
         mGlobalScripts.load(globalScripts);
@@ -1278,6 +1284,8 @@ namespace MWLua
             localData[id] = std::move(data);
         }
 
+        if (!mPlayer.isEmpty())
+            MWBase::Environment::get().getWorld()->releaseHeldObject(mPlayer, {}, {}, 0.f, false);
         initConfiguration(true);
 
         mMenuScripts.removeAllScripts();

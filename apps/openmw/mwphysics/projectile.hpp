@@ -43,11 +43,9 @@ namespace MWPhysics
         void setCaster(const MWWorld::Ptr& caster);
         const btCollisionObject* getCasterCollisionObject() const { return mCasterColObj; }
 
-        void setHitWater() { mHitWater = true; }
-
         bool getHitWater() const { return mHitWater; }
 
-        void hit(const btCollisionObject* target, btVector3 pos, btVector3 normal);
+        void hit(const btCollisionObject* target, btVector3 pos, btVector3 normal, bool water = false);
 
         void setValidTargets(const std::vector<MWWorld::Ptr>& targets);
         bool isValidTarget(const btCollisionObject* target) const;
@@ -64,7 +62,7 @@ namespace MWPhysics
         std::atomic<bool> mActive;
         MWWorld::Ptr mCaster;
         const btCollisionObject* mCasterColObj;
-        const btCollisionObject* mHitTarget;
+        ESM::RefNum mHitTarget;
         btVector3 mHitPosition;
         btVector3 mHitNormal;
 

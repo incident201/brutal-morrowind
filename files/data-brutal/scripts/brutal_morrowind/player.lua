@@ -359,6 +359,7 @@ return {
         -- Save only cooldown. A pending attack is intentionally cancelled on reload.
         onSave = function() return {cooldown = cooldown} end,
         onLoad = function(data)
+            core.sendGlobalEvent('BrutalPhysicsQuery', {player = self})
             cooldown = data and math.min(C.cooldown, math.max(0, data.cooldown or 0)) or 0
             windup, lastResult = nil, 'ready'
             bash, bashWindup = nil, nil

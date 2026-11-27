@@ -144,7 +144,10 @@ end
 
 local function canAct()
     if not settings.get('enabled') or not settings.get('objectGrabEnabled') then return false end
-    if I.UI.getMode() or types.Actor.isDead(self) or not types.Actor.canMove(self)
+    local switches = types.Player.CONTROL_SWITCH
+    if not types.Player.getControlSwitch(self, switches.Controls)
+        or not types.Player.getControlSwitch(self, switches.Fighting)
+        or I.UI.getMode() or types.Actor.isDead(self) or not types.Actor.canMove(self)
         or types.Actor.isSwimming(self) or camera.getMode() ~= camera.MODE.FirstPerson then
         return false
     end
@@ -191,7 +194,9 @@ local function startDrop(immediate)
 end
 
 local function startThrow()
-    if not heldItem or (state ~= 'holding' and state ~= 'raising' and state ~= 'picking') then return false end
+    if not heldItem or (state ~= 'holding' and state ~= 'raising' and state ~= 'picking') or not canAct() then
+        return false
+    end
     local adren = I.BrutalAdrenaline and I.BrutalAdrenaline.spendThrow and I.BrutalAdrenaline.spendThrow() == true or false
     throwAdrenaline = adren
     releaseFired = false
@@ -235,6 +240,7 @@ local function onGrabTrigger()
 end
 
 local function beginThrowWindup()
+    if not canAct() then return false end
     if state == 'picking' then
         throwAfterPickup = true
         return true
@@ -261,7 +267,7 @@ local function onUseChanged(down)
     if down == useDown then return end
     useDown = down
     if down then
-        if heldItem and (state == 'picking' or state == 'holding') and canAct() then
+        if heldItem and (state == 'picking' or state == 'holding') then
             beginThrowWindup()
         end
     else
@@ -406,7 +412,9 @@ return {
     },
     engineHandlers = {
         onUpdate = onUpdate,
-        onLoad = function()
+        onSave = function() return {stance = savedStance} end,
+        onLoad = function(data)
+            local previousStance = data and data.stance
             heldItem, requestedItem, heldFragment, dualGrip, savedStance = nil, nil, nil, false, nil
             state, stateTime, useDown, throwQueued, releaseFired, throwAdrenaline = 'idle', 0, false, false, false, false
             pickupCuePlayed = false
@@ -414,6 +422,10 @@ return {
             cancelAnims()
             if types.Actor.setBrutalCarryingObject then
                 types.Actor.setBrutalCarryingObject(self, false)
+            end
+            if (previousStance == types.Actor.STANCE.Weapon or previousStance == types.Actor.STANCE.Spell)
+                and types.Actor.getStance(self) == types.Actor.STANCE.Nothing then
+                types.Actor.setStance(self, previousStance)
             end
         end,
     },

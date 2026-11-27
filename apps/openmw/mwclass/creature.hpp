@@ -70,7 +70,7 @@ namespace MWClass
 
         void onHit(const MWWorld::Ptr& ptr, const std::map<std::string, float>& damages, ESM::RefId object,
             const MWWorld::Ptr& attacker, bool successful,
-            const MWMechanics::DamageSourceType sourceType) const override;
+            MWMechanics::DamageSourceType sourceType, bool charged) const override;
 
         std::unique_ptr<MWWorld::Action> activate(const MWWorld::Ptr& ptr, const MWWorld::Ptr& actor) const override;
         ///< Generate action for activation

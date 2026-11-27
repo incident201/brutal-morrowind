@@ -344,6 +344,8 @@ namespace MWRender
         float mBodyGroundBlend = 0.f;
         void resetBodyAwareness();
         void updateBodyAwareness();
+        std::optional<osg::Matrixf> getLeftWeaponGrip() const;
+        void attachLeftWeaponMount(const osg::Matrixf& grip);
         void resetPlayerShadow();
         void updatePlayerShadow();
         void syncBodyAwareness(float duration);
@@ -551,8 +553,7 @@ namespace MWRender
         WeaponGripGeometry getWeaponGripGeometryForAudit() const;
         std::shared_ptr<const ESM::ReleasedEquipmentState> captureReleasedEquipment(int slot,
             const osg::Matrixf& itemRoot, float mass, float& maxWorldVertexError) const;
-        std::vector<std::pair<ESM::RefId, osg::Matrixf>> captureShieldProjectiles(
-            const osg::Matrixf* releasedRoot = nullptr) const;
+        osg::Matrixf getShieldReleaseTransform(const osg::Matrixf& releasedRoot) const;
         bool getReleasedEquipmentOwnerIsLeft(int slot) const;
         RagdollExtremityVertices getRagdollExtremityVertices(
             UnsupportedRagdollExtremityBones* unsupportedBones = nullptr) const override;

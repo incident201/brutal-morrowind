@@ -467,6 +467,7 @@ namespace MWMechanics
         bool startBrutalPickup(const MWWorld::Ptr& item);
         // The pickup clip is playing, including the rise after the item was taken.
         bool isBrutalPickingUp() const;
+        bool isBrutalSprinting() const { return mBrutalSprinting; }
         bool startBrutalBowKick(const MWWorld::Ptr& target);
         bool isBrutalBowKicking() const;
         bool canSwordClinch() const;

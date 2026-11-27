@@ -46,6 +46,14 @@ namespace ESM
         };
         std::vector<BodyProjectile> mBodyProjectiles;
 
+        struct EquippedShieldProjectile
+        {
+            RefId mItem;
+            std::array<float, 16> mTransform;
+        };
+        // Held by the shield item. Released missiles become real world references below.
+        std::vector<EquippedShieldProjectile> mEquippedShieldProjectiles;
+
         // A released shield carries real world item references in its local frame.
         struct ShieldProjectile
         {

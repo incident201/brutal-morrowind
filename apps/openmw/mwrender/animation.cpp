@@ -2625,24 +2625,26 @@ namespace MWRender
         if (saved.empty() || !mPtr.getClass().isActor())
             return;
         const auto& nodes = getNodeMap();
-        const auto& weapons = MWBase::Environment::get().getESMStore()->get<ESM::Weapon>();
         for (const auto& entry : saved)
+            if (const auto bone = nodes.find(entry.mBone); bone != nodes.end())
+                restoreStuckProjectile(*bone->second, entry.mItem, osg::Matrixf(entry.mTransform.data()), entry.mBone);
+    }
+
+    void Animation::restoreStuckProjectile(osg::Group& parent, const ESM::RefId& item, const osg::Matrixf& transform,
+        std::string_view bone)
+    {
+        const auto* record = MWBase::Environment::get().getESMStore()->get<ESM::Weapon>().search(item);
+        if (!record || record->mModel.empty())
+            return;
+        try
         {
-            const auto bone = nodes.find(entry.mBone);
-            const auto* record = weapons.search(entry.mItem);
-            if (bone == nodes.end() || !record || record->mModel.empty())
-                continue;
-            try
-            {
-                const auto model = Misc::ResourceHelpers::correctMeshPath(VFS::Path::Normalized(record->mModel));
-                const auto projectile = mResourceSystem->getSceneManager()->getInstance(model);
-                mountProjectile(*projectile, *bone->second, osg::Matrixf(entry.mTransform.data()), entry.mItem,
-                    entry.mBone, projectileModelTip(*projectile));
-            }
-            catch (const std::exception& error)
-            {
-                Log(Debug::Warning) << "Could not restore embedded projectile " << entry.mItem << ": " << error.what();
-            }
+            const auto model = Misc::ResourceHelpers::correctMeshPath(VFS::Path::Normalized(record->mModel));
+            const auto projectile = mResourceSystem->getSceneManager()->getInstance(model);
+            mountProjectile(*projectile, parent, transform, item, bone, projectileModelTip(*projectile));
+        }
+        catch (const std::exception& error)
+        {
+            Log(Debug::Warning) << "Could not restore embedded projectile " << item << ": " << error.what();
         }
     }
 

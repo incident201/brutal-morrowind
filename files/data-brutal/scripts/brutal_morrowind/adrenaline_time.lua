@@ -105,9 +105,15 @@ return {
             if core.getRealTime() >= lease.expires then finish('expired') end
         end,
         onPlayerAdded = function() finish('player-added') end,
-        onSave = function() return {} end,
-        onLoad = function()
-            finish('load')
+        onSave = function()
+            if lease then return {previous = lease.previous, owned = lease.owned} end
+        end,
+        onLoad = function(data)
+            if data and world._isLoadingSave and not world._isLoadingSave()
+                and finite(data.previous) and data.previous > 0 and finite(data.owned)
+                and same(core.getSimulationTimeScale(), data.owned) then
+                world.setSimulationTimeScale(data.previous)
+            end
             seen, order = {}, {}
             accepted, rejected, restored = 0, 0, 0
             lastReason = 'loaded'

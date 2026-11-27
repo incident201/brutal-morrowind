@@ -453,6 +453,7 @@ namespace MWLua
             }
             return result;
         };
+        api["_isLoadingSave"] = [context] { return context.mLuaManager->getGlobalSaveFileMapping() != nullptr; };
         api["getBrutalBloodData"] = []() {
             auto* store = MWRender::BrutalBlood::get();
             return store ? store->save() : std::string();

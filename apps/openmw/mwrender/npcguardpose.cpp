@@ -193,6 +193,16 @@ namespace MWRender
         osg::Group* shield = part != nullptr ? part->asGroup() : nullptr;
         if (shield == nullptr)
             return ProjectileAttachment::NoSurface;
+        auto& inventory = mPtr.getClass().getInventoryStore(mPtr);
+        const auto held = inventory.getSlot(MWWorld::InventoryStore::Slot_CarriedLeft);
+        if (held == inventory.end() || held->getType() != ESM::Armor::sRecordId)
+            return ProjectileAttachment::NoSurface;
+        const auto heldItem = *held;
+        auto& saved = heldItem.getRefData().getAnimationState().mEquippedShieldProjectiles;
+        if (!item.empty() && saved.size() >= ESM::AnimationState::MaxStuckProjectiles)
+            return ProjectileAttachment::Crowded;
+
+        auto result = ProjectileAttachment::NoSurface;
         if (mNpcGuardPose && mNpcGuardPose->shield && !mNpcTwoHandGuardPose)
         {
             // The fitted pose used for the hit can be restored to the source
@@ -200,10 +210,19 @@ namespace MWRender
             osg::Matrixf itemToWorld;
             const auto contact = traceNpcGuardMeshSnapshot(path.first, path.second, true, &itemToWorld);
             if (contact && contact->gap <= MWMechanics::sNpcProjectileGuardContactMargin)
-                return addStuckProjectile(model, contact->point + flight * 3.f, flight, item, *shield, itemToWorld);
+                result = addStuckProjectile(model, contact->point + flight * 3.f, flight, item, *shield, itemToWorld);
         }
-        const auto contact = findProjectileContact(hitPosition, flight, shield);
-        return contact ? attachStuckProjectile(model, *contact, flight, item, shield) : ProjectileAttachment::NoSurface;
+        if (result == ProjectileAttachment::NoSurface)
+            if (const auto contact = findProjectileContact(hitPosition, flight, shield))
+                result = attachStuckProjectile(model, *contact, flight, item, shield);
+        if (result == ProjectileAttachment::Attached && !item.empty())
+        {
+            const auto transform = mStuckProjectiles.back().mNode->getMatrix();
+            auto& entry = saved.emplace_back();
+            entry.mItem = item;
+            std::copy_n(transform.ptr(), entry.mTransform.size(), entry.mTransform.begin());
+        }
+        return result;
     }
 
     void NpcAnimation::setNpcGuardTarget(bool enabled, bool shield, const osg::Vec3f& worldPoint,

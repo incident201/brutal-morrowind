@@ -1735,8 +1735,8 @@ namespace MWMechanics
         return Misc::Rng::roll0to99(prng) >= target;
     }
 
-    void MechanicsManager::startCombat(
-        const MWWorld::Ptr& ptr, const MWWorld::Ptr& target, const std::set<MWWorld::Ptr>* targetAllies)
+    void MechanicsManager::startCombat(const MWWorld::Ptr& ptr, const MWWorld::Ptr& target,
+        const std::set<MWWorld::Ptr>* targetAllies, bool temporaryArrestCombat)
     {
         CreatureStats& stats = ptr.getClass().getCreatureStats(ptr);
 
@@ -1789,20 +1789,25 @@ namespace MWMechanics
                 const ESM::RefNum playerNum = target.getCellRef().getRefNum();
                 // Stops guard from ending combat if player is unreachable
                 stats.setHitAttemptActor(playerNum);
+                stats.mBrutalAdrenalineArrestCombat = temporaryArrestCombat;
                 for (const Actor& actor : mActors)
                 {
                     if (actor.isInvalid())
                         continue;
                     if (actor.getPtr().getClass().isClass(actor.getPtr(), "Guard"))
                     {
-                        MWMechanics::AiSequence& aiSeq
-                            = actor.getPtr().getClass().getCreatureStats(actor.getPtr()).getAiSequence();
-                        if (aiSeq.getTypeId() == MWMechanics::AiPackageTypeId::Pursue)
+                        auto& guardStats = actor.getPtr().getClass().getCreatureStats(actor.getPtr());
+                        auto& aiSeq = guardStats.getAiSequence();
+                        if (!guardStats.isDead() && aiSeq.getTypeId() == MWMechanics::AiPackageTypeId::Pursue)
                         {
                             aiSeq.stopPursuit();
-                            aiSeq.stack(MWMechanics::AiCombat(target), ptr);
-                            // Stops guard from ending combat if player is unreachable
-                            actor.getPtr().getClass().getCreatureStats(actor.getPtr()).setHitAttemptActor(playerNum);
+                            if (!aiSeq.isInCombat(target))
+                            {
+                                aiSeq.stack(MWMechanics::AiCombat(target), actor.getPtr());
+                                guardStats.mBrutalAdrenalineArrestCombat = temporaryArrestCombat;
+                            }
+                            // Stops guard from ending combat if player is unreachable.
+                            guardStats.setHitAttemptActor(playerNum);
                         }
                     }
                 }

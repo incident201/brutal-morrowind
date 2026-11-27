@@ -106,7 +106,8 @@ namespace MWMechanics
 
         /// Makes \a ptr fight \a target. Also shouts a combat taunt.
         void startCombat(
-            const MWWorld::Ptr& ptr, const MWWorld::Ptr& target, const std::set<MWWorld::Ptr>* targetAllies) override;
+            const MWWorld::Ptr& ptr, const MWWorld::Ptr& target, const std::set<MWWorld::Ptr>* targetAllies,
+            bool temporaryArrestCombat = false) override;
 
         void stopCombat(const MWWorld::Ptr& ptr) override;
 
