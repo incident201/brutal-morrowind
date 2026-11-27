@@ -3,6 +3,8 @@
 // NPC surface-blood implementation is separate from animation/physics policy.
 #include <osg/Vec3f>
 #include <cstdint>
+#include <string>
+#include <string_view>
 
 namespace osg
 {
@@ -35,5 +37,6 @@ namespace MWRender
     // This exact rigid wrapper preserves the original arrays and transforms.
     // Garment coverage may accept it wherever it accepts ordinary Geometry.
     bool isRigidBloodSurface(const osg::Geometry* geometry);
+    std::string mergeNpcBloodDecalData(std::string_view saved, std::string_view recent);
 }
 #endif

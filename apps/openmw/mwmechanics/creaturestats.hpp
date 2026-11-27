@@ -169,6 +169,7 @@ namespace MWMechanics
         // A wounded NPC knocked down by a blow (WoundedFallChance): the push, applied next update.
         osg::Vec3f mBrutalWoundedFall;
         MWWorld::SafePtr mBrutalWoundedFallAttacker;
+        double mBrutalFleeUntil = 0.0;
         // The player's lethal blow, consumed by the physical death handoff.
         osg::Vec3f mBrutalPlayerDeathPush;
         // Transient adaptive defence: pressure is observed from actual fast contacts,

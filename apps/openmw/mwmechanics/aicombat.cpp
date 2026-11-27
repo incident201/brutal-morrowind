@@ -149,7 +149,7 @@ namespace MWMechanics
         {
             auto& inventory = actor.getClass().getInventoryStore(actor);
             for (auto it = inventory.begin(MWWorld::ContainerStore::Type_Armor); it != inventory.end(); ++it)
-                if (isShield(*it))
+                if (isShield(*it) && it->getClass().getItemHealth(*it) > 0)
                     return true;
             return false;
         }
@@ -640,7 +640,7 @@ namespace MWMechanics
         const float reach = table ? BrutalPickupTableReach : BrutalPickupReach;
         const osg::Vec3f actorPos = actor.getRefData().getPosition().asVec3();
         bool stalled = false;
-        if (toItem.length() > reach)
+        if (toItem.length() > reach || !characterController.hasClearBrutalPickupReach(item))
         {
             stats.mBrutalPickupPhase = 1;
             stats.setMovementFlag(CreatureStats::Flag_Run, true);
@@ -656,7 +656,8 @@ namespace MWMechanics
                 storage.mBrutalPickupStall = 0.f;
             storage.mBrutalPickupActorLast = actorPos;
             stalled = storage.mBrutalPickupStall >= BrutalPickupStalled
-                && toItem.length() <= reach + BrutalPickupStretch;
+                && toItem.length() <= reach + BrutalPickupStretch
+                && characterController.hasClearBrutalPickupReach(item);
             if (!stalled)
                 return true;
         }
@@ -718,13 +719,9 @@ namespace MWMechanics
         {
             const double now = MWBase::Environment::get().getWorld()->getTimeManager()->getSimulationTime();
             const float health = stats.getHealth().getCurrent();
-            const float maximum = stats.getHealth().getModified();
-            const bool struck = storage.mBrutalLastHealth >= 0.f && health < storage.mBrutalLastHealth;
+            recordBrutalNpcHealthLoss(actor, storage.mBrutalLastHealth);
             storage.mBrutalLastHealth = health;
-            if (struck && maximum > 0.f && health < Settings::game().mBrutalNpcFleeHealthFraction * maximum
-                && now >= storage.mBrutalFleeUntil)
-                storage.mBrutalFleeUntil = now + Settings::game().mBrutalNpcFleeTime;
-            if (now < storage.mBrutalFleeUntil)
+            if (now < stats.mBrutalFleeUntil)
             {
                 forceFlee = true;
                 storage.mBrutalFleeing = true;
@@ -735,8 +732,12 @@ namespace MWMechanics
                 actionCooldown = 0.f; // Turn back at once rather than after the flight's cooldown.
             }
         }
-        else
+        else if (storage.mBrutalFleeing)
+        {
             storage.mBrutalFleeing = false;
+            stats.mBrutalFleeUntil = 0.0;
+            actionCooldown = 0.f;
+        }
 
         if (!forceFlee)
         {

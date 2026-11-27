@@ -26,7 +26,9 @@
 #include "../mwworld/class.hpp"
 #include "actorutil.hpp"
 #include "animblendcontroller.hpp"
+#include "camera.hpp"
 #include "npcguardik.hpp"
+#include "renderingmanager.hpp"
 #include "vismask.hpp"
 
 namespace MWRender
@@ -130,7 +132,7 @@ namespace MWRender
     }
 
     std::optional<NpcAnimation::NpcGuardMeshTrace> NpcAnimation::traceNpcGuardMeshSnapshot(
-        const osg::Vec3f& origin, const osg::Vec3f& end, bool combat, osg::Matrixf* itemToWorld) const
+        const osg::Vec3f& origin, const osg::Vec3f& end, bool combat) const
     {
         if (mNpcTwoHandGuardPose)
             return traceNpcTwoHandGuardMeshForAudit(origin, end, combat);
@@ -148,8 +150,6 @@ namespace MWRender
                 return {};
             itemWorld = pose.meshItemActor * *actorWorld;
         }
-        if (itemToWorld != nullptr)
-            *itemToWorld = itemWorld;
         SegmentMeshGap nearest;
         float firstHit = std::numeric_limits<float>::infinity();
         for (const auto& local : pose.triangles)
@@ -185,9 +185,53 @@ namespace MWRender
         return {};
     }
 
-    ProjectileAttachment NpcAnimation::attachStuckProjectileToShield(
-        VFS::Path::NormalizedView model, const osg::Vec3f& hitPosition,
-        const osg::Vec3f& flight, const std::pair<osg::Vec3f, osg::Vec3f>& path, const ESM::RefId& item)
+    std::optional<osg::Matrixf> NpcAnimation::projectileShieldFrame(osg::Node& shield) const
+    {
+        if (mNpcGuardPose && mNpcGuardPose->shield && hasNpcGuardMeshForCombat())
+            if (const auto actorWorld = nodeWorld(mPtr.getRefData().getBaseNode()))
+                return mNpcGuardPose->meshItemActor * *actorWorld;
+        auto frame = nodeWorld(&shield);
+        if (!frame || mViewMode != VM_FirstPerson || useFullBodyFirstPerson())
+            return frame;
+
+        // Put the viewmodel's silhouette in the same projection as the world projectile.
+        const auto* camera = MWBase::Environment::get().getWorld()->getRenderingManager()->getCamera();
+        const osg::Matrixf& view = camera->getViewMatrix();
+        float fov, aspect, near, far;
+        if (camera->getProjectionMatrix().getPerspective(fov, aspect, near, far))
+        {
+            const float ratio = std::tan(osg::DegreesToRadians(fov * .5f))
+                / std::tan(osg::DegreesToRadians(mFirstPersonFieldOfView * .5f));
+            *frame *= view * osg::Matrixf::scale(ratio, ratio, 1.f) * osg::Matrixf::inverse(view);
+        }
+        return frame;
+    }
+
+    std::vector<std::array<osg::Vec3f, 3>> NpcAnimation::getProjectileShieldTriangles() const
+    {
+        osg::Node* shield = getPartNode(ESM::PRT_Shield);
+        if (!mShowCarriedLeft || !shield)
+            return {};
+        const auto frame = projectileShieldFrame(*shield);
+        if (!frame)
+            return {};
+        std::vector<std::array<osg::Vec3f, 3>> triangles;
+        if (mNpcGuardPose && mNpcGuardPose->shield && hasNpcGuardMeshForCombat())
+            triangles = mNpcGuardPose->triangles;
+        else
+        {
+            GuardMeshVisitor mesh(shield);
+            shield->accept(mesh);
+            triangles = std::move(mesh.triangles);
+        }
+        for (auto& triangle : triangles)
+            for (auto& point : triangle)
+                point = point * *frame;
+        return triangles;
+    }
+
+    ProjectileAttachment NpcAnimation::attachStuckProjectileToShield(VFS::Path::NormalizedView model,
+        const osg::Vec3f& hitPosition, const osg::Vec3f& flight, const ESM::RefId& item)
     {
         osg::Node* part = getPartNode(ESM::PRT_Shield);
         osg::Group* shield = part != nullptr ? part->asGroup() : nullptr;
@@ -202,19 +246,10 @@ namespace MWRender
         if (!item.empty() && saved.size() >= ESM::AnimationState::MaxStuckProjectiles)
             return ProjectileAttachment::Crowded;
 
-        auto result = ProjectileAttachment::NoSurface;
-        if (mNpcGuardPose && mNpcGuardPose->shield && !mNpcTwoHandGuardPose)
-        {
-            // The fitted pose used for the hit can be restored to the source
-            // animation between draw updates. Mount against the same mesh pose as combat.
-            osg::Matrixf itemToWorld;
-            const auto contact = traceNpcGuardMeshSnapshot(path.first, path.second, true, &itemToWorld);
-            if (contact && contact->gap <= MWMechanics::sNpcProjectileGuardContactMargin)
-                result = addStuckProjectile(model, contact->point + flight * 3.f, flight, item, *shield, itemToWorld);
-        }
-        if (result == ProjectileAttachment::NoSurface)
-            if (const auto contact = findProjectileContact(hitPosition, flight, shield))
-                result = attachStuckProjectile(model, *contact, flight, item, shield);
+        const auto frame = projectileShieldFrame(*shield);
+        if (!frame)
+            return ProjectileAttachment::NoSurface;
+        const auto result = addStuckProjectile(model, hitPosition + flight * 3.f, flight, item, *shield, *frame);
         if (result == ProjectileAttachment::Attached && !item.empty())
         {
             const auto transform = mStuckProjectiles.back().mNode->getMatrix();

@@ -37,7 +37,7 @@ eventHandlers = {
     BrutalRestoreBloodDecals = function(data)
         if not settings.get('bloodDecals') then return end
         if type(world.restoreNpcBloodDecals) == 'function' and data.actor and data.actor:isValid()
-            and type(data.data) == 'string' then world.restoreNpcBloodDecals(data.actor, data.data) end
+            and type(data.data) == 'string' then world.restoreNpcBloodDecals(data.actor, data.data, data.requestId or 0) end
     end,
     BrutalFeedbackQuery = function(data)
         if data.actor and data.actor:isValid() then

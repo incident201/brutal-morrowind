@@ -46,7 +46,8 @@ return {
         if type(world.releaseHeldObject) ~= 'function' then return end
         local player = data.player
         if not player or not player:isValid() or not data.eyePos or not data.throwDir then return end
-        world.releaseHeldObject(player, data.eyePos, data.throwDir, data.throwSpeed or 0, data.adrenaline == true)
+        world.releaseHeldObject(player, data.eyePos, data.throwDir, data.throwSpeed or 0, data.adrenaline == true,
+            data.throwId)
     end, BrutalPlayObjectSound3d = function(data)
         if not S.get('combatSounds') or type(data) ~= 'table' or type(data.file) ~= 'string' then return end
         if data.file:sub(1, #soundPrefix) ~= soundPrefix or not vfs.fileExists(data.file) then return end

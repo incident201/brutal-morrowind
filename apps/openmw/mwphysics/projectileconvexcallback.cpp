@@ -47,9 +47,9 @@ namespace MWPhysics
         if (group == CollisionType_Projectile)
         {
             auto* other = static_cast<Projectile*>(m_hitCollisionObject->getUserPointer());
-            other->hit(mMe, m_hitPointWorld, m_hitNormalWorld);
+            other->hit(mMe, m_hitPointWorld, -m_hitNormalWorld, ProjectileHitType::Projectile);
         }
-        mProjectile.hit(m_hitCollisionObject, m_hitPointWorld, m_hitNormalWorld, group == CollisionType_Water);
+        mProjectile.hit(m_hitCollisionObject, m_hitPointWorld, m_hitNormalWorld, getProjectileHitType(group));
     }
 
 }

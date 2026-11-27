@@ -62,6 +62,7 @@ namespace MWPhysics
     class Ragdoll;
     class PhysicsTaskScheduler;
     class Projectile;
+    struct ProjectileShield;
     enum ScriptedCollisionType : char;
 
     using ActorMap = std::unordered_map<const MWWorld::LiveCellRefBase*, std::shared_ptr<Actor>>;
@@ -129,12 +130,13 @@ namespace MWPhysics
 
     struct ProjectileFrameData
     {
-        explicit ProjectileFrameData(Projectile& projectile);
+        ProjectileFrameData(Projectile& projectile, std::shared_ptr<const std::vector<ProjectileShield>> shields);
         osg::Vec3f mPosition;
         osg::Vec3f mMovement;
         const btCollisionObject* mCaster;
         const btCollisionObject* mCollisionObject;
         Projectile* mProjectile;
+        std::shared_ptr<const std::vector<ProjectileShield>> mShields;
     };
 
     struct WorldFrameData
@@ -257,6 +259,10 @@ namespace MWPhysics
         const Object* getObject(const MWWorld::ConstPtr& ptr) const;
 
         Projectile* getProjectile(int projectileId) const;
+        void setProjectileShields(std::shared_ptr<const std::vector<ProjectileShield>> shields)
+        {
+            mProjectileShields = std::move(shields);
+        }
 
         // Object or Actor
         void remove(const MWWorld::Ptr& ptr);
@@ -482,6 +488,7 @@ namespace MWPhysics
 
         using ProjectileMap = std::map<int, std::shared_ptr<Projectile>>;
         ProjectileMap mProjectiles;
+        std::shared_ptr<const std::vector<ProjectileShield>> mProjectileShields;
 
         using HeightFieldMap = std::map<std::pair<int, int>, std::unique_ptr<HeightField>>;
         HeightFieldMap mHeightFields;

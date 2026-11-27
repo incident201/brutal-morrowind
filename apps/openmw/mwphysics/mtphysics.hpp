@@ -170,7 +170,7 @@ namespace MWPhysics
         void setHeldPose(const osg::Vec3f& center, const osg::Quat& rotation, const Object* object);
         float sweepHeldPose(const osg::Vec3f& from, const osg::Vec3f& to,
             const osg::Quat& rotation) const;
-        void releaseHeldObject(const btCollisionObject* owner, const osg::Vec3f& linearVelocity,
+        bool releaseHeldObject(const btCollisionObject* owner, const osg::Vec3f& linearVelocity,
             const osg::Vec3f& angularVelocity, bool thrown, bool adrenaline, float mass);
         bool hasHeldObject() const;
         osg::Vec3f getHeldCenter() const;

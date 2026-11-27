@@ -77,7 +77,8 @@ namespace MWPhysics
             if (!projectileHolder->isActive())
                 return 1;
             if (projectileHolder->isValidTarget(mMe))
-                projectileHolder->hit(mMe, convexResult.m_hitPointLocal, convexResult.m_hitNormalLocal);
+                projectileHolder->hit(
+                    mMe, convexResult.m_hitPointLocal, convexResult.m_hitNormalLocal, ProjectileHitType::World);
             return 1;
         }
 

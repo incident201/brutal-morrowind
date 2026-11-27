@@ -13,7 +13,7 @@ local native={
     ragdollEnabled='ragdoll',ragdollEnhancements='ragdollEnhancements',dynamicProps='dynamicProps',objectGrabEnabled='objectGrab',
     bloodDecals='bloodDecals',weaponBlood='weaponBlood',worldBlood='worldBlood',movementEnabled='kineticMovement',activeBlockEnabled='activeBlocking',
     parryEnabled='swordParry',attackCombosEnabled='comboAttacks',npcAiTweaks='npcCombatTweaks',
-    npcStagger='npcStagger',woundedNpcs='woundedNpcs',npcFlee='npcFlee',npcWeaponPickup='npcWeaponPickup',physicalProjectiles='physicalProjectiles',hitRecovery='hitRecovery',staminaEnabled='stamina',
+    npcStagger='npcStagger',woundedNpcs='woundedNpcs',npcFlee='npcFlee',npcWeaponPickup='npcWeaponPickup',hitRecovery='hitRecovery',staminaEnabled='stamina',
     wallBounceEnabled='wallBounce',clinchEnabled='clinch',dismemberment='dismemberment',
     slideEnabled='slide',combatSounds='combatSounds',heroVoice='heroVoice',fastAttacksEnabled='fastAttacks',
     bloodEffects='bloodEffects',sparkEffects='sparkEffects',kickAlwaysRagdoll='kickAlwaysRagdoll',

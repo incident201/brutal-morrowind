@@ -264,7 +264,8 @@ namespace MWRender
             const osg::Vec3f& origin, const osg::Vec3f& end, bool combat = false) const;
         bool hasNpcTwoHandGuardMeshForCombat() const;
         std::optional<NpcGuardMeshTrace> traceNpcGuardMeshSnapshot(
-            const osg::Vec3f& origin, const osg::Vec3f& end, bool combat, osg::Matrixf* itemToWorld = nullptr) const;
+            const osg::Vec3f& origin, const osg::Vec3f& end, bool combat) const;
+        std::optional<osg::Matrixf> projectileShieldFrame(osg::Node& shield) const;
 
         std::vector<std::pair<osg::observer_ptr<osg::MatrixTransform>, osg::Matrixf>> mClinchSourcePose;
         std::vector<std::pair<osg::observer_ptr<osg::MatrixTransform>, osg::Matrixf>> mBackstabSourcePose;
@@ -458,12 +459,13 @@ namespace MWRender
         int getPartForNodePath(const osg::NodePath& path) const override;
         /// The scene node of an equipped part (for example ESM::PRT_Shield), if it is shown.
         osg::Node* getPartNode(ESM::PartReferenceType part) const;
+        std::vector<std::array<osg::Vec3f, 3>> getProjectileShieldTriangles() const;
         ProjectileAttachment attachStuckProjectileToShield(VFS::Path::NormalizedView model, const osg::Vec3f& hitPosition,
-            const osg::Vec3f& flight, const std::pair<osg::Vec3f, osg::Vec3f>& path, const ESM::RefId& item);
+            const osg::Vec3f& flight, const ESM::RefId& item);
         bool addBloodDecal(const osg::Vec3f& position, const osg::Vec3f& outward,
             std::string_view kind, bool power, int hitPart = -1);
         std::string getBloodDecalData() const;
-        bool restoreBloodDecals(std::string_view data);
+        bool restoreBloodDecals(std::string_view data, bool merge = false);
         std::map<std::string, double> getBloodDecalStats() const;
         // Blood left on a held melee weapon by a hit at this world point.
         bool addWeaponBlood(const osg::Vec3f& contact, std::string_view kind, bool power, bool left = false);

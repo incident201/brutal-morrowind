@@ -60,10 +60,8 @@ namespace MWMechanics
         bool mUseCustomDestination;
         osg::Vec3f mCustomDestination;
 
-        // Dark Messiah's flee (life_toflee, TimeFleeStop): health at the last decision and the end
-        // of the current flight. Transient, as the rest of this storage.
+        // Health at the last AI decision catches damage outside the native hit handler.
         float mBrutalLastHealth = -1.f;
-        double mBrutalFleeUntil = 0.0;
         bool mBrutalFleeing = false;
 
         // Dark Messiah's ACT_GRAB_WEAPON (AiCombat::updateBrutalPickup): the loose item this NPC goes

@@ -29,6 +29,7 @@
 #include <cstring>
 #include <limits>
 #include <map>
+#include <optional>
 #include <set>
 #include <osg/FrameStamp>
 #include <osg/TriangleIndexFunctor>
@@ -140,6 +141,16 @@ namespace MWRender
                 decals = nullptr;
                 id = 0;
             }
+        };
+
+        struct BloodDecalRecord
+        {
+            int part = 0;
+            unsigned ordinal = 0, style = 0;
+            std::string model;
+            std::uint64_t fingerprint = 0;
+            Anchors anchors;
+            BloodPatch patch;
         };
 
         struct SurfacesVisitor final : osg::NodeVisitor
@@ -295,6 +306,129 @@ namespace MWRender
                 return s;
             }
         };
+
+        std::string writeBloodDecalData(const std::vector<BloodDecalRecord>& records)
+        {
+            if (records.empty())
+                return {};
+            Writer out;
+            out.u32(records.size());
+            for (const auto& record : records)
+            {
+                out.u32(record.part);
+                out.u32(record.ordinal);
+                out.u32(record.style);
+                out.string(record.model);
+                out.u32(record.fingerprint & 0xffffffff);
+                out.u32(record.fingerprint >> 32);
+                out.u32(record.anchors.size());
+                for (const auto& anchor : record.anchors)
+                {
+                    for (auto index : anchor.indices)
+                        out.u32(index);
+                    for (unsigned k = 0; k < 3; ++k)
+                        out.f32(anchor.weights[k]);
+                    out.f32(anchor.uv.x());
+                    out.f32(anchor.uv.y());
+                }
+            }
+            return out.data;
+        }
+
+        std::optional<std::vector<BloodDecalRecord>> readBloodDecalData(std::string_view data)
+        {
+            std::vector<BloodDecalRecord> records;
+            if (data.empty())
+                return records;
+            if (data.size() > MaxSaveBytes || data.substr(0, 4) != "BMD1")
+                return std::nullopt;
+            try
+            {
+                Reader in{ data };
+                const auto count = in.u32();
+                if (count > MaxWounds)
+                    return std::nullopt;
+                std::size_t total = 0;
+                for (unsigned j = 0; j < count; ++j)
+                {
+                    BloodDecalRecord record;
+                    record.part = in.u32();
+                    record.ordinal = in.u32();
+                    record.style = in.u32();
+                    record.model = in.string();
+                    record.fingerprint = in.u32();
+                    record.fingerprint |= std::uint64_t(in.u32()) << 32;
+                    const auto size = in.u32();
+                    if (record.part < 0 || record.part >= ESM::PRT_Count || record.ordinal > 4096 || record.style >= 4
+                        || !size || size % 3 || size > 3072 || (total += size) > MaxActorVertices)
+                        return std::nullopt;
+                    record.anchors.reserve(size);
+                    for (unsigned i = 0; i < size; ++i)
+                    {
+                        SceneUtil::SurfaceDecals::Anchor anchor;
+                        for (auto& index : anchor.indices)
+                        {
+                            index = in.u32();
+                            if (index > 65535)
+                                return std::nullopt;
+                        }
+                        for (unsigned k = 0; k < 3; ++k)
+                            anchor.weights[k] = in.f32();
+                        const float u = in.f32(), v = in.f32();
+                        anchor.uv = { u, v };
+                        record.anchors.push_back(anchor);
+                    }
+                    records.push_back(std::move(record));
+                }
+                if (in.p != data.size())
+                    return std::nullopt;
+            }
+            catch (const std::runtime_error&)
+            {
+                return std::nullopt;
+            }
+            return records;
+        }
+
+        void mergeBloodDecalRecords(std::vector<BloodDecalRecord>& saved, const std::vector<BloodDecalRecord>& recent)
+        {
+            // Both inputs have oldest-first order and often contain the same
+            // records after re-activation or when the previous restore was retried.
+            std::size_t total = 0;
+            for (const auto& record : saved)
+                total += record.anchors.size();
+            for (const auto& record : recent)
+            {
+                const bool duplicate = std::ranges::any_of(saved, [&](const BloodDecalRecord& old) {
+                    return old.part == record.part && old.ordinal == record.ordinal && old.style == record.style
+                        && old.fingerprint == record.fingerprint && old.model == record.model
+                        && std::ranges::equal(old.anchors, record.anchors, [](const auto& a, const auto& b) {
+                            return a.indices == b.indices && a.weights == b.weights && a.uv == b.uv;
+                        });
+                });
+                if (duplicate)
+                    continue;
+                while (!saved.empty() && (saved.size() >= MaxWounds || total + record.anchors.size() > MaxActorVertices))
+                {
+                    total -= saved.front().anchors.size();
+                    saved.erase(saved.begin());
+                }
+                total += record.anchors.size();
+                saved.push_back(record);
+                saved.back().patch = {};
+            }
+        }
+    }
+
+    std::string mergeNpcBloodDecalData(std::string_view saved, std::string_view recent)
+    {
+        auto oldRecords = readBloodDecalData(saved);
+        const auto recentRecords = readBloodDecalData(recent);
+        if (!oldRecords)
+            return recentRecords ? std::string(recent) : std::string();
+        if (recentRecords)
+            mergeBloodDecalRecords(*oldRecords, *recentRecords);
+        return writeBloodDecalData(*oldRecords);
     }
 
     bool isRigidBloodSurface(const osg::Geometry* geometry)
@@ -521,16 +655,7 @@ namespace MWRender
 
     struct NpcAnimation::BloodDecals
     {
-        struct Record
-        {
-            int part = 0;
-            unsigned ordinal = 0, style = 0;
-            std::string model;
-            std::uint64_t fingerprint = 0;
-            Anchors anchors;
-            BloodPatch patch;
-        };
-        std::vector<Record> records;
+        std::vector<BloodDecalRecord> records;
         std::array<osg::ref_ptr<osg::StateSet>, 4> states;
         std::uint64_t added = 0, rejected = 0, evicted = 0;
         double lastDistance = 0, lastMilliseconds = 0;
@@ -624,7 +749,7 @@ namespace MWRender
                 ++blood.rejected;
                 return false;
             }
-            BloodDecals::Record record{ selected->part, selected->ordinal, style, selected->model,
+            BloodDecalRecord record{ selected->part, selected->ordinal, style, selected->model,
                 selected->fingerprint, std::move(best.vertices), {} };
             if (!record.patch.attach(*selected, record.anchors, blood.states[style]))
             {
@@ -659,89 +784,30 @@ namespace MWRender
 
     std::string NpcAnimation::getBloodDecalData() const
     {
-        if (!mBloodDecals || mBloodDecals->records.empty())
-            return {};
-        Writer out;
-        out.u32(mBloodDecals->records.size());
-        for (const auto& r : mBloodDecals->records)
-        {
-            out.u32(r.part);
-            out.u32(r.ordinal);
-            out.u32(r.style);
-            out.string(r.model);
-            out.u32(r.fingerprint & 0xffffffff);
-            out.u32(r.fingerprint >> 32);
-            out.u32(r.anchors.size());
-            for (const auto& a : r.anchors)
-            {
-                for (auto i : a.indices)
-                    out.u32(i);
-                for (unsigned i = 0; i < 3; ++i)
-                    out.f32(a.weights[i]);
-                out.f32(a.uv.x());
-                out.f32(a.uv.y());
-            }
-        }
-        return out.data;
+        return mBloodDecals ? writeBloodDecalData(mBloodDecals->records) : std::string();
     }
 
-    bool NpcAnimation::restoreBloodDecals(std::string_view data)
+    bool NpcAnimation::restoreBloodDecals(std::string_view data, bool merge)
     {
         prewarmBloodDecals();
         if (!mBloodDecals || !Settings::game().mNpcBloodDecals)
             return false;
         try
         {
-            std::vector<BloodDecals::Record> records;
-            if (!data.empty())
+            auto records = readBloodDecalData(data);
+            if (!records)
+                return false;
+            for (const auto& record : *records)
             {
-                if (data.size() > MaxSaveBytes || data.substr(0, 4) != "BMD1")
-                    return false;
-                Reader in{ data };
-                const auto count = in.u32();
-                if (count > MaxWounds)
-                    return false;
-                std::size_t total = 0;
-                for (unsigned j = 0; j < count; ++j)
-                {
-                    BloodDecals::Record r;
-                    r.part = in.u32();
-                    r.ordinal = in.u32();
-                    r.style = in.u32();
-                    r.model = in.string();
-                    r.fingerprint = in.u32();
-                    r.fingerprint |= std::uint64_t(in.u32()) << 32;
-                    const auto size = in.u32();
-                    if (r.part < 0 || r.part >= ESM::PRT_Count || r.ordinal > 4096 || r.style >= 4 || !size || size % 3
-                        || size > 3072 || (total += size) > MaxActorVertices)
-                        return false;
-                    r.anchors.reserve(size);
-                    for (unsigned i = 0; i < size; ++i)
-                    {
-                        SceneUtil::SurfaceDecals::Anchor a;
-                        for (auto& index : a.indices)
-                        {
-                            index = in.u32();
-                            if (index > 65535)
-                                return false;
-                        }
-                        for (unsigned k = 0; k < 3; ++k)
-                            a.weights[k] = in.f32();
-                        const float u = in.f32(), v = in.f32();
-                        a.uv = { u, v };
-                        r.anchors.push_back(a);
-                    }
-                    osg::ref_ptr<SceneUtil::SurfaceDecals> validate = new SceneUtil::SurfaceDecals;
-                    if (!validate->addPatch(r.anchors, new osg::StateSet, Mask_Effect))
-                        return false;
-                    records.push_back(std::move(r));
-                }
-                if (in.p != data.size())
+                osg::ref_ptr<SceneUtil::SurfaceDecals> validate = new SceneUtil::SurfaceDecals;
+                if (!validate->addPatch(record.anchors, new osg::StateSet, Mask_Effect))
                     return false;
             }
+            if (merge)
+                mergeBloodDecalRecords(*records, mBloodDecals->records);
             for (auto& record : mBloodDecals->records)
                 record.patch.remove();
-            mBloodDecals->records = std::move(records);
+            mBloodDecals->records = std::move(*records);
             rebuildBloodDecals();
             if (mDecapitation)
                 transferBloodDecalsToHead(*mDecapitation);

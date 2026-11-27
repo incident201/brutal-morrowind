@@ -72,6 +72,28 @@ namespace MWMechanics
             && health < Settings::game().mBrutalNpcWoundedHealthFraction * maximum;
     }
 
+    bool isBrutalClinchProtected(const MWWorld::Ptr& actor)
+    {
+        return !actor.isEmpty() && actor.getClass().isNpc()
+            && !actor.getClass().getCreatureStats(actor).mBrutalClinchOpponent.ptrOrEmpty().isEmpty();
+    }
+
+    void recordBrutalNpcHealthLoss(const MWWorld::Ptr& actor, float previousHealth)
+    {
+        const auto& game = Settings::game();
+        if (!game.mBrutalNpcFlee || actor == getPlayer() || !actor.getClass().isNpc())
+            return;
+        auto& stats = actor.getClass().getCreatureStats(actor);
+        const auto& health = stats.getHealth();
+        const float current = health.getCurrent();
+        if (stats.isDead() || !stats.getAiSequence().isInCombat() || current <= 0.f || current >= previousHealth
+            || current >= game.mBrutalNpcFleeHealthFraction * health.getModified())
+            return;
+        const double now = MWBase::Environment::get().getWorld()->getTimeManager()->getSimulationTime();
+        if (now >= stats.mBrutalFleeUntil)
+            stats.mBrutalFleeUntil = now + game.mBrutalNpcFleeTime;
+    }
+
     bool applyOnStrikeEnchantment(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, const MWWorld::Ptr& object,
         const osg::Vec3f& hitPosition, const bool fromProjectile)
     {
@@ -481,7 +503,8 @@ namespace MWMechanics
             const double now = MWBase::Environment::get().getWorld()->getTimeManager()->getSimulationTime();
             const bool timedPlayerGuard = playerGuard
                 && now - blockerStats.mBrutalBlockRaisedAt <= Settings::game().mDarkMessiahParryWindow.get();
-            if (now < blockerStats.mBrutalGuardBrokenUntil)
+            if (now < blockerStats.mBrutalGuardBrokenUntil
+                || (npcGuard && !hasNpcGuardImpact(attacker, blocker, hitPosition, contactPart)))
                 return false;
             // A wounded NPC's guard gives way: Dark Messiah's WoundedParryBreakChance (0.5) for a
             // sword parry and WoundedBlockBreakChance (0.8) for a shield block.
@@ -499,7 +522,6 @@ namespace MWMechanics
                 const auto world = MWBase::Environment::get().getWorld();
                 if (chargeBreaksGuard && attacker == getPlayer() && npcGuard && blockerStats.mBrutalParry
                     && !carriesShield && Settings::game().mBrutalEquipmentPhysics
-                    && hasNpcGuardImpact(attacker, blocker, hitPosition, contactPart)
                     && Misc::Rng::rollProbability(world->getPrng()) < (wounded ? .30f : .10f))
                 {
                     osg::Vec3f away = blocker.getRefData().getPosition().asVec3()
@@ -523,8 +545,6 @@ namespace MWMechanics
         }
         if (playerGuard && blockerStats.mBrutalParry)
             return parryMeleeAttack(attacker, blocker, damage);
-        if (npcGuard && !hasNpcGuardImpact(attacker, blocker, hitPosition, contactPart))
-            return false;
         if (npcGuard && blockerStats.mBrutalParry)
         {
             auto& inventory = blocker.getClass().getInventoryStore(blocker);
@@ -706,68 +726,33 @@ namespace MWMechanics
             return false;
         }
 
-        // Whether a missile's path crosses the blocker's shield as it is held now.
-        bool flightMeetsShield(const MWWorld::Ptr& blocker, const std::pair<osg::Vec3f, osg::Vec3f>& flight)
+        bool canBlockProjectile(const MWWorld::Ptr& blocker)
         {
-            MWBase::World* world = MWBase::Environment::get().getWorld();
-            if (blocker == getPlayer())
-            {
-                // The first-person shield is drawn at the eye in its own field of view, not where a body holds
-                // it. The player's shield is a disc held before the face and chest, turning with the view.
-                const ESM::Position& position = blocker.getRefData().getPosition();
-                const float yaw = position.rot[2];
-                const float pitch = position.rot[0];
-                const osg::Vec3f forward(
-                    std::sin(yaw) * std::cos(pitch), std::cos(yaw) * std::cos(pitch), -std::sin(pitch));
-                const osg::Vec3f up(std::sin(yaw) * std::sin(pitch), std::cos(yaw) * std::sin(pitch), std::cos(pitch));
-                const float height = 2.f * world->getHalfExtents(blocker).z();
-                const osg::Vec3f eye = position.asVec3() + osg::Vec3f(0.f, 0.f, height * .92f);
-                constexpr float reach = 30.f;
-                constexpr float below = 24.f;
-                constexpr float radius = 30.f;
-                const osg::Vec3f centre = eye + forward * reach - up * below;
-                const osg::Vec3f path = flight.second - flight.first;
-                const float across = path * forward;
-                if (std::abs(across) < 1e-4f)
-                    return false;
-                const float t = ((centre - flight.first) * forward) / across;
-                if (t < 0.f || t > 1.f)
-                    return false;
-                return (flight.first + path * t - centre).length() <= radius;
-            }
-            auto* animation = dynamic_cast<MWRender::NpcAnimation*>(world->getAnimation(blocker));
-            if (animation == nullptr)
+            if (!blocker.getClass().isActor() || !blocker.getClass().hasInventoryStore(blocker))
                 return false;
-            // An NPC's fitted guard keeps the shield pose it is shown in.
-            if (blocker != getPlayer() && animation->hasNpcGuardMeshForCombat())
-            {
-                const auto trace = animation->traceNpcGuardMeshForCombat(flight.first, flight.second);
-                return trace && trace->gap <= sNpcProjectileGuardContactMargin;
-            }
-            osg::Node* shield = animation->getPartNode(ESM::PRT_Shield);
-            return shield != nullptr && animation->intersectNode(shield, flight.first, flight.second).has_value();
+            const auto& stats = blocker.getClass().getCreatureStats(blocker);
+            const bool npcGuard = blocker.getClass().isNpc() && Settings::game().mDarkMessiahNpcCombat
+                && stats.mBrutalNpcGuardRequested;
+            const double now = MWBase::Environment::get().getWorld()->getTimeManager()->getSimulationTime();
+            return stats.mBrutalBlockRaised && (blocker == getPlayer() || npcGuard) && !stats.isDead()
+                && !stats.getKnockedDown() && !stats.getHitRecovery() && !stats.isParalyzed()
+                && now >= stats.mBrutalGuardBrokenUntil;
         }
 
         ProjectileOutcome blockProjectile(const MWWorld::Ptr& attacker, const MWWorld::Ptr& blocker,
             const MWWorld::Ptr& projectile, float damage,
-            const std::pair<osg::Vec3f, osg::Vec3f>* flight)
+            const std::pair<osg::Vec3f, osg::Vec3f>* flight, bool shieldHit)
         {
             constexpr ProjectileOutcome unblocked = ProjectileOutcome::Body;
-            if (attacker.isEmpty() || !blocker.getClass().isActor() || !blocker.getClass().hasInventoryStore(blocker))
+            if (attacker.isEmpty() || !canBlockProjectile(blocker))
+                return unblocked;
+            const bool frontal = flight ? isInFrontalGuard(blocker, flight->first - flight->second)
+                                        : isInFrontalGuard(attacker, blocker);
+            if (!frontal)
                 return unblocked;
             auto& stats = blocker.getClass().getCreatureStats(blocker);
             const bool player = blocker == getPlayer();
-            const bool npcGuard = !player && blocker.getClass().isNpc() && Settings::game().mDarkMessiahNpcCombat
-                && stats.mBrutalNpcGuardRequested;
-            if (!stats.mBrutalBlockRaised || (!player && !npcGuard))
-                return unblocked;
-            if (stats.isDead() || stats.getKnockedDown() || stats.getHitRecovery() || stats.isParalyzed())
-                return unblocked;
             const double now = MWBase::Environment::get().getWorld()->getTimeManager()->getSimulationTime();
-            const bool frontal = flight ? isInFrontalGuard(blocker, flight->first - flight->second)
-                                        : isInFrontalGuard(attacker, blocker);
-            if (now < stats.mBrutalGuardBrokenUntil || !frontal)
-                return unblocked;
 
             auto& inventory = blocker.getClass().getInventoryStore(blocker);
             const auto* projectileType = getWeaponType(projectile.get<ESM::Weapon>()->mBase->mData.mType);
@@ -795,7 +780,7 @@ namespace MWMechanics
                 if (shield == inventory.end() || shield->getType() != ESM::Armor::sRecordId)
                     return unblocked;
                 // A physical missile is stopped only by actually striking the shield.
-                if (flight != nullptr && !flightMeetsShield(blocker, *flight))
+                if (flight != nullptr && !shieldHit)
                     return unblocked;
                 const auto* armor = shield->get<ESM::Armor>()->mBase;
                 const bool metal = isMetalShield(*armor);
@@ -840,9 +825,19 @@ namespace MWMechanics
         }
     }
 
+    bool canInterceptProjectileWithShield(const MWWorld::Ptr& blocker)
+    {
+        if (!canBlockProjectile(blocker) || isBrutalClinchProtected(blocker)
+            || blocker.getClass().getCreatureStats(blocker).mBrutalParry)
+            return false;
+        const auto& inventory = blocker.getClass().getInventoryStore(blocker);
+        const auto shield = inventory.getSlot(MWWorld::InventoryStore::Slot_CarriedLeft);
+        return shield != inventory.end() && shield->getType() == ESM::Armor::sRecordId;
+    }
+
     bool physicalProjectiles()
     {
-        return Settings::game().mBrutalEnabled && Settings::game().mBrutalPhysicalProjectiles;
+        return Settings::game().mBrutalEnabled && Settings::game().mBrutalDynamicProps;
     }
 
     bool isMissileItem(const MWWorld::Ptr& item)
@@ -909,8 +904,10 @@ namespace MWMechanics
     ProjectileOutcome projectileHit(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, MWWorld::Ptr weapon,
         const MWWorld::Ptr& projectile, const osg::Vec3f& hitPosition, float attackStrength,
         const std::pair<osg::Vec3f, osg::Vec3f>* flight, std::uint64_t attackId, bool finisherHit,
-        const MWRender::ProjectileContact* contact)
+        const MWRender::ProjectileContact* contact, bool shieldHit)
     {
+        if (isBrutalClinchProtected(victim))
+            return ProjectileOutcome::Missed;
         MWBase::World* world = MWBase::Environment::get().getWorld();
         const MWWorld::Store<ESM::GameSetting>& gmst = world->getStore().get<ESM::GameSetting>();
 
@@ -954,7 +951,7 @@ namespace MWMechanics
                 damage *= bowDrawPower(attackStrength);
             adjustWeaponDamage(damage, weapon, attacker);
 
-            if (const ProjectileOutcome blocked = blockProjectile(attacker, victim, projectile, damage, flight);
+            if (const ProjectileOutcome blocked = blockProjectile(attacker, victim, projectile, damage, flight, shieldHit);
                 blocked != ProjectileOutcome::Body)
             {
                 reduceWeaponCondition(damage, true, weapon, attacker);
@@ -963,6 +960,9 @@ namespace MWMechanics
                     true);
                 return blocked;
             }
+
+            if (shieldHit)
+                return ProjectileOutcome::Missed;
 
             // A humanoid's broad collision shape also covers empty space around the visible body.
             if (flight && !contact && victim.getClass().isNpc() && victim != getPlayer() && world->getAnimation(victim))

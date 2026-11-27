@@ -14,6 +14,8 @@ file(GLOB UNITTEST_SRC_FILES
 
     mwrender/testbrutalblood.cpp
 
+    mwphysics/testprojectileshield.cpp
+
     mwdialogue/testkeywordsearch.cpp
 
     mwgui/tooltips.cpp

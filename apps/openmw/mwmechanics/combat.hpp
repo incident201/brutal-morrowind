@@ -18,12 +18,14 @@ namespace MWRender
 namespace MWMechanics
 {
     inline constexpr float sNpcGuardContactMargin = 4.f;
-    inline constexpr float sNpcProjectileGuardContactMargin = 1.f;
 
     std::uint64_t nextCombatAttackId();
     std::uint64_t getLastCombatAttackId();
     void restoreCombatAttackId(std::uint64_t id);
     bool supportsRangedFinisher(int weaponType);
+
+    bool isBrutalClinchProtected(const MWWorld::Ptr& actor);
+    void recordBrutalNpcHealthLoss(const MWWorld::Ptr& actor, float previousHealth);
 
     bool applyOnStrikeEnchantment(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, const MWWorld::Ptr& object,
         const osg::Vec3f& hitPosition, const bool fromProjectile = false);
@@ -67,7 +69,8 @@ namespace MWMechanics
     ProjectileOutcome projectileHit(const MWWorld::Ptr& attacker, const MWWorld::Ptr& victim, MWWorld::Ptr weapon,
         const MWWorld::Ptr& projectile, const osg::Vec3f& hitPosition, float attackStrength,
         const std::pair<osg::Vec3f, osg::Vec3f>* flight = nullptr, std::uint64_t attackId = 0, bool finisherHit = false,
-        const MWRender::ProjectileContact* contact = nullptr);
+        const MWRender::ProjectileContact* contact = nullptr, bool shieldHit = false);
+    bool canInterceptProjectileWithShield(const MWWorld::Ptr& blocker);
 
     /// Brutal physical missiles: falling arcs, contact hits, sticking and glancing.
     bool physicalProjectiles();

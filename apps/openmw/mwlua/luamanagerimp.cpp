@@ -805,7 +805,7 @@ namespace MWLua
                 if (sourceType == MWMechanics::DamageSourceType::Melee && game.mMeleeContactAlwaysHits
                     && !weapon.isEmpty() && weapon.getType() == ESM::Weapon::sRecordId)
                     skill = weapon.getClass().getEquipmentSkill(weapon);
-                else if (sourceType == MWMechanics::DamageSourceType::Ranged && game.mBrutalPhysicalProjectiles
+                else if (sourceType == MWMechanics::DamageSourceType::Ranged && MWMechanics::physicalProjectiles()
                     && MWMechanics::isMissileItem(ammo))
                     skill = ESM::Skill::Marksman;
                 if (!skill.empty())
@@ -1055,6 +1055,18 @@ namespace MWLua
             if (!token.empty())
                 data["token"] = std::string(token);
             sendLocalEvent(player, "BrutalProjectileFinisher", data);
+        });
+    }
+
+    void LuaManager::objectThrowResolved(const MWWorld::Ptr& player, std::uint64_t throwId, bool released)
+    {
+        if (player.isEmpty() || throwId == 0)
+            return;
+        mLua.protectedCall([&](LuaUtil::LuaView& view) {
+            sol::table data = view.newTable();
+            data["throwId"] = throwId;
+            data["released"] = released;
+            sendLocalEvent(player, "BrutalObjectThrowResolved", data);
         });
     }
 

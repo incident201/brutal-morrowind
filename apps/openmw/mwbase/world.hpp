@@ -348,7 +348,7 @@ namespace MWBase
         virtual bool holdObject(const MWWorld::Ptr& ptr, const MWWorld::Ptr& holder,
             MWPhysics::HeldObjectInfo* info = nullptr, unsigned fragment = 0) = 0;
         virtual bool releaseHeldObject(const MWWorld::Ptr& holder, const osg::Vec3f& eyePos, const osg::Vec3f& throwDir,
-            float throwSpeed, bool adrenaline) = 0;
+            float throwSpeed, bool adrenaline, std::uint64_t throwId = 0) = 0;
         virtual MWWorld::Ptr getHeldObject() const = 0;
         virtual void syncDynamicObject(const MWWorld::Ptr& ptr, const osg::Vec3f& position, const osg::Quat& rotation,
             const osg::Vec3f& renderedPosition, const osg::Quat& renderedRotation, bool authoritativeChanged) = 0;

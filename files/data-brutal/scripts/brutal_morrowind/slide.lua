@@ -124,7 +124,7 @@ local function update(dt)
     previousPosition = self.position
     -- An adrenaline slide with a one-handed weapon is a clean trip: the boot
     -- leaves health alone so that a click can still deliver the finisher.
-    local finisherReady = handOwned or (hasHandWeapon() and I.BrutalAdrenaline
+    local finisherReady = handOwned or (settings.get('finisherEnabled') and hasHandWeapon() and I.BrutalAdrenaline
         and I.BrutalAdrenaline.status().ready)
     for id, target in pairs(candidates) do
         local speed=math.max(150,math.min(500,contactSpeed))

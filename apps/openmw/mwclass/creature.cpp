@@ -280,8 +280,8 @@ namespace MWClass
 
         MWMechanics::applyFatigueLoss(ptr, weapon, attackStrength);
 
-        if (victim.isEmpty())
-            return; // Didn't hit anything
+        if (victim.isEmpty() || MWMechanics::isBrutalClinchProtected(victim))
+            return;
 
         const MWWorld::Class& othercls = victim.getClass();
         MWMechanics::CreatureStats& otherstats = othercls.getCreatureStats(victim);

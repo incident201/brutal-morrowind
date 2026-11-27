@@ -464,6 +464,7 @@ namespace MWMechanics
         // Dark Messiah's ACT_GRAB_WEAPON: the NPC crouches and, at the clip's "pickup contact",
         // takes this loose weapon or shield straight into its hand without drawing it.
         bool canBrutalPickup() const;
+        bool hasClearBrutalPickupReach(const MWWorld::Ptr& item) const;
         bool startBrutalPickup(const MWWorld::Ptr& item);
         // The pickup clip is playing, including the rise after the item was taken.
         bool isBrutalPickingUp() const;

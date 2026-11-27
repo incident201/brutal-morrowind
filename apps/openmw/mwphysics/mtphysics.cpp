@@ -1232,7 +1232,7 @@ namespace MWPhysics
         return hit.m_closestHitFraction;
     }
 
-    void PhysicsTaskScheduler::releaseHeldObject(const btCollisionObject* owner, const osg::Vec3f& linearVelocity,
+    bool PhysicsTaskScheduler::releaseHeldObject(const btCollisionObject* owner, const osg::Vec3f& linearVelocity,
         const osg::Vec3f& angularVelocity, bool thrown, bool adrenaline, float mass)
     {
         MaybeExclusiveLock lock(mCollisionWorldMutex, mLockingPolicy);
@@ -1245,7 +1245,7 @@ namespace MWPhysics
         auto* body = held.body;
         const auto* heldOwner = held.owner ? held.owner : owner;
         if (!world || !body || !body->isInWorld())
-            return;
+            return false;
         const auto angular = Misc::Convert::toBullet(angularVelocity);
         const auto root = body->getWorldTransform().getOrigin();
         const auto launch = [&](btRigidBody* part, float partMass, bool ragdoll) {
@@ -1284,6 +1284,7 @@ namespace MWPhysics
         {
             mActorIgnoreTimers[body] = ActorIgnoreEntry{ .35f, heldOwner };
         }
+        return true;
     }
 
     bool PhysicsTaskScheduler::hasHeldObject() const

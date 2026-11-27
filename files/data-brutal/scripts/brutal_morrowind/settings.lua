@@ -39,7 +39,6 @@ local DEFAULTS={
     woundedNpcs=true,
     npcFlee=true,
     npcWeaponPickup=true,
-    physicalProjectiles=true,
     hitRecovery=true,
     adrenalineEnabled=true,
     finisherEnabled=true,
@@ -92,6 +91,14 @@ local async=require('openmw.async')
 local playerContext=storage.playerSection~=nil
 local section=playerContext and storage.playerSection(GROUP) or storage.globalSection(SYNC)
 local rawValues,modeValues,effectiveValues
+local function migrateLegacyPhysics()
+    if not playerContext then return end
+    local legacy=section:get('physicalProjectiles')
+    if legacy==nil then return end
+    -- Keep the combined preference off if either old switch was off.
+    if legacy==false then section:set('dynamicProps',false) end
+    section:set('physicalProjectiles',nil)
+end
 local function validate(key,value)
     local default=DEFAULTS[key]
     if value==nil or type(value)~=type(default) then return default end
@@ -115,6 +122,7 @@ local function refresh()
     local changed=rawValues==nil
     for key in pairs(DEFAULTS) do
         local value=validate(key,stored and stored[key])
+        if key=='dynamicProps' and stored and stored.physicalProjectiles==false then value=false end
         -- NPC/global contexts fail closed until the player's first snapshot.
         if key=='enabled' and not playerContext and not stored then value=false end
         values[key]=value
@@ -156,12 +164,16 @@ local function refresh()
 end
 refresh()
 section:subscribe(async:callback(refresh))
-local function raw(key) return rawValues[key] end
-local function get(key) return effectiveValues[key] end
+local function physicsAlias(key)
+    return key=='physicalProjectiles' and 'dynamicProps' or key
+end
+local function raw(key) return rawValues[physicsAlias(key)] end
+local function get(key) return effectiveValues[physicsAlias(key)] end
 local function snapshot()
     local values={}
     for key,value in pairs(rawValues) do values[key]=value end
     return values
 end
-return {GROUP=GROUP,SYNC=SYNC,DEFAULTS=DEFAULTS,darkMessiahData=darkMessiahData,get=get,raw=raw,mode=function(key)return modeValues[key]end,snapshot=snapshot,
-    refresh=refresh,section=function() return section end}
+return {GROUP=GROUP,SYNC=SYNC,DEFAULTS=DEFAULTS,darkMessiahData=darkMessiahData,get=get,raw=raw,
+    mode=function(key)return modeValues[physicsAlias(key)]end,snapshot=snapshot,refresh=refresh,
+    migrateLegacyPhysics=migrateLegacyPhysics,section=function() return section end}

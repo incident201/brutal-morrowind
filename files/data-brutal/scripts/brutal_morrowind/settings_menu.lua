@@ -5,6 +5,7 @@ local util=require('openmw.util')
 local core=require('openmw.core')
 local S=require('scripts.brutal_morrowind.settings')
 local bindings=require('scripts.brutal_morrowind.input_bindings')
+S.migrateLegacyPhysics()
 local L='BrutalMorrowind'
 local D=S.DEFAULTS
 local labels=core.l10n(L)
@@ -38,7 +39,7 @@ for _,key in ipairs({
     'firstPersonBody','firstPersonAnimations','cameraMotionMovement','dualWieldEnabled','npcAnimations','guaranteedHits','meleeGeometry',
     'ragdollEnabled','ragdollWeaponDrop','deathSceneEnabled','dynamicProps','objectGrabEnabled','movementEnabled','staminaEnabled',
     'kickEnabled','kickAlwaysRagdoll','slideEnabled','activeBlockEnabled','shieldBashEnabled','parryEnabled',
-    'clinchEnabled','attackCombosEnabled','fastAttacksEnabled','wallBounceEnabled','npcAiTweaks','npcStagger','woundedNpcs','npcFlee','npcWeaponPickup','physicalProjectiles','hitRecovery',
+    'clinchEnabled','attackCombosEnabled','fastAttacksEnabled','wallBounceEnabled','npcAiTweaks','npcStagger','woundedNpcs','npcFlee','npcWeaponPickup','hitRecovery',
     'adrenalineEnabled','finisherEnabled','groundFinisherEnabled','backstabEnabled','groundFinisherHealth',
     'superKickEnabled','slowMotionEnabled','dismemberment','damageFlash','lowHealthVignette','bloodEffects','sparkEffects',
     'bloodDecals','weaponBlood','worldBlood','combatSounds','heroVoice','adrenalineHudEnabled','adrenalineFxEnabled','slideFxEnabled','clinchFxEnabled',

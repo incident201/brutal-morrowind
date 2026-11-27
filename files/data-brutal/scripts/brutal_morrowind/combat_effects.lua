@@ -12,6 +12,7 @@ local currentAttack, selectedArmor
 local bloodRequests, sparkRequests = 0, 0
 local bloodDecalData, restoreBloodDecals = '', false
 local bloodRestoreWait = 0
+local bloodRestoreSerial, bloodRestoreRequest = 0, nil
 local decapitation = require('scripts.brutal_morrowind.decapitation')
 local decapSelected, restoreDecapitation = false, false
 local torsoSelected, restoreBisection = false, false
@@ -233,9 +234,15 @@ return {
     interfaceName = 'Combat', interface = interface,
     eventHandlers = {
         BrutalBloodDecalsStored = function(data)
-            if data.restored and type(data.data) == 'string' then
-                bloodDecalData, restoreBloodDecals = data.data, false
-            else bloodRestoreWait = 1 end
+            if not data.restored or type(data.data) ~= 'string' then return end
+            if bloodRestoreRequest and data.requestId == bloodRestoreRequest then
+                bloodDecalData, restoreBloodDecals, bloodRestoreRequest = data.data, false, nil
+            elseif restoreBloodDecals then
+                -- A projectile can mark the new animation before the saved wounds have been restored.
+                bloodDecalData = types.Actor._mergeBloodDecalData(bloodDecalData, data.data)
+            else
+                bloodDecalData = data.data
+            end
         end,
         BrutalFeedbackAvailable = function(data) available = data.available == true end,
         BrutalHitApplied = function(data)
@@ -312,7 +319,10 @@ return {
             confirmCuts()
             bloodRestoreWait = math.max(0, bloodRestoreWait - dt)
             if settings.get('bloodDecals') and restoreBloodDecals and bloodRestoreWait == 0 then
-                core.sendGlobalEvent('BrutalRestoreBloodDecals', {actor=self, data=bloodDecalData})
+                bloodRestoreSerial = bloodRestoreSerial + 1
+                bloodRestoreRequest = bloodRestoreSerial
+                core.sendGlobalEvent('BrutalRestoreBloodDecals', {actor=self, data=bloodDecalData,
+                    requestId=bloodRestoreRequest})
                 bloodRestoreWait = 1
             end
             if torsoSelected and not types.Actor.isDead(self) then
@@ -376,11 +386,13 @@ return {
             return {headSevered = (decapSelected and headDone) or nativeCut == true,
                 torsoSevered = (torsoSelected and torsoDone) or nativeTorso == true,
                 torsoPoseData = torsoPoseData, bloodDecals = bloodDecalData,
+                bloodRestoreSerial = bloodRestoreSerial,
                 limbsMask=limbsDone and limbMask or 0, limbPoseData=limbPose}
         end,
         onLoad = function(data)
             bloodDecalData = data and type(data.bloodDecals) == 'string' and data.bloodDecals or ''
             restoreBloodDecals, bloodRestoreWait = bloodDecalData ~= '', 0
+            bloodRestoreSerial, bloodRestoreRequest = data and data.bloodRestoreSerial or 0, nil
             available, requestAvailability = false, true
             decapSelected = data and data.headSevered == true or false
             torsoSelected = data and data.torsoSevered == true or false
@@ -404,6 +416,7 @@ return {
             restoreDecapitation = decapSelected and headDone
             restoreBisection = torsoSelected and torsoDone
             restoreBloodDecals, bloodRestoreWait = bloodDecalData ~= '', 0
+            bloodRestoreRequest = nil
         end,
     },
 }

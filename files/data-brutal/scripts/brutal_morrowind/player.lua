@@ -272,7 +272,7 @@ local function update(dt)
         windup = windup - kickDt
         if windup <= 0 then
             windup = nil
-            if not canKick() then
+            if not canKick() or carrying() then
                 lastResult = 'unavailable'
                 return
             end
@@ -334,7 +334,7 @@ return {
         end,
         status = function() return {cooldown = cooldown, result = lastResult, strikes = strikes,
             physicsAvailable = physicsAvailable, superKickAvailable = superKickAvailable,
-            bashing = bash ~= nil, bashes = bashes, ragdollHits = ragdollHits} end,
+            kicking = windup ~= nil or activeKick ~= nil, bashing = bash ~= nil, bashes = bashes, ragdollHits = ragdollHits} end,
     },
     eventHandlers = {
         BrutalPhysicsAvailable = function(data)

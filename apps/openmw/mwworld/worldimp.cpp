@@ -95,6 +95,7 @@
 #include "../mwphysics/collisiontype.hpp"
 #include "../mwphysics/object.hpp"
 #include "../mwphysics/physicssystem.hpp"
+#include "../mwphysics/projectile.hpp"
 #include "../mwphysics/creaturerig.hpp"
 #include "../mwphysics/ragdoll.hpp"
 
@@ -758,6 +759,8 @@ namespace MWWorld
                 if (mRendering->pagingEnableObject(type, reference, true))
                     mWorldScene->reloadTerrain();
             }
+            if (reference.getCellRef().getCount())
+                releaseShieldProjectiles(reference);
         }
     }
 
@@ -2074,11 +2077,12 @@ namespace MWWorld
             || !ptr.getRefData().getBaseNode() || !ptr.getRefData().isEnabled())
             return false;
         const auto* camera = mRendering->getCamera();
-        const osg::Vec3f eye(camera->getPosition());
+        const osg::Vec3f eye(camera->getViewPosition());
         if (fragment)
         {
             const auto* corpse = dynamic_cast<const MWRender::NpcAnimation*>(getAnimation(ptr));
-            const osg::Vec3f end = eye + camera->getOrient() * osg::Vec3f(0, sGrabReach, 0);
+            const auto viewToWorld = osg::Matrixf::inverse(camera->getViewMatrix());
+            const osg::Vec3f end = osg::Vec3f(0, 0, -sGrabReach) * viewToWorld;
             if (!corpse || corpse->getDetachedFragmentNodes(fragment).empty()
                 || mPhysics->findDetachedGrabFragment(holder, eye, end) != std::make_pair(ptr, fragment))
                 return false;
@@ -2094,21 +2098,30 @@ namespace MWWorld
             if ((closest - eye).length2() > sGrabReach * sGrabReach)
                 return false;
         }
-        mHeldThrow.reset();
+        resolveHeldThrow(false);
         return mPhysics->holdObject(ptr, holder, info, fragment);
     }
 
     bool World::releaseHeldObject(const Ptr& holder, const osg::Vec3f& eyePos, const osg::Vec3f& throwDir,
-        float throwSpeed, bool adrenaline)
+        float throwSpeed, bool adrenaline, std::uint64_t throwId)
     {
+        const auto rejectThrow = [&] {
+            if (throwId != 0)
+                MWBase::Environment::get().getLuaManager()->objectThrowResolved(holder, throwId, false);
+        };
         if (!mPhysics || holder != getPlayerPtr() || !mPhysics->hasHeldObject())
-            return false;
-        if (throwSpeed > 0.f && grabControlsEnabled())
         {
-            mHeldThrow = HeldThrow{ SafePtr(mPhysics->getHeldObject()), throwDir, throwSpeed, adrenaline };
+            rejectThrow();
+            return false;
+        }
+        resolveHeldThrow(false);
+        if (throwSpeed > 0.f && grabControlsEnabled() && Settings::game().mBrutalObjectGrab
+            && !holder.getClass().getCreatureStats(holder).isDead())
+        {
+            mHeldThrow = HeldThrow{ SafePtr(mPhysics->getHeldObject()), throwDir, throwSpeed, adrenaline, throwId };
             return true;
         }
-        mHeldThrow.reset();
+        rejectThrow();
         clearHeldVisual();
         return mPhysics->releaseHeldObject(holder, eyePos, throwDir, 0.f, false);
     }
@@ -2448,13 +2461,23 @@ namespace MWWorld
         mHeldVisualCull = nullptr;
     }
 
+    void World::resolveHeldThrow(bool released)
+    {
+        if (!mHeldThrow)
+            return;
+        const auto throwId = mHeldThrow->id;
+        mHeldThrow.reset();
+        if (throwId != 0)
+            MWBase::Environment::get().getLuaManager()->objectThrowResolved(getPlayerPtr(), throwId, released);
+    }
+
     void World::samplePlayerObjectGrip(float duration, const osg::FrameStamp& frameStamp)
     {
         const Ptr item = mPhysics->getHeldObject();
         if (item.isEmpty())
         {
             clearHeldVisual();
-            mHeldThrow.reset();
+            resolveHeldThrow(false);
             return;
         }
         const Ptr player = getPlayerPtr();
@@ -2468,10 +2491,11 @@ namespace MWWorld
             : std::vector<osg::Node*>{ node };
         if (!node || !item.getRefData().isEnabled() || !item.isInCell() || !player.isInCell()
             || item.getCell()->getCell()->getWorldSpace() != player.getCell()->getCell()->getWorldSpace()
-            || !isFirstPerson() || nodes.empty() || !grabControlsEnabled())
+            || !isFirstPerson() || nodes.empty() || !grabControlsEnabled() || !Settings::game().mBrutalObjectGrab
+            || player.getClass().getCreatureStats(player).isDead() || isSwimming(player))
         {
             clearHeldVisual();
-            mHeldThrow.reset();
+            resolveHeldThrow(false);
             mPhysics->releaseHeldObject(player, camera->getPosition(), camera->getOrient() * osg::Vec3f(0, 1, 0), 0.f, false);
             return;
         }
@@ -2512,7 +2536,7 @@ namespace MWWorld
         }
         if (!mHeldThrow || mHeldThrow->item.ptrOrEmpty() != item)
         {
-            mHeldThrow.reset();
+            resolveHeldThrow(false);
             return;
         }
         const std::string group = mPhysics->getHeldGrip().dual ? "brutal_throw_dual" : "brutal_throw_solo";
@@ -2525,13 +2549,13 @@ namespace MWWorld
         if (release >= 0.f && !atRelease && mHeldThrow->wait < .45f)
             return;
         clearHeldVisual();
-        const auto aim = osg::Quat(camera->getPitch(), osg::Vec3f(1, 0, 0))
-            * osg::Quat(camera->getYaw(), osg::Vec3f(0, 0, 1));
+        const auto viewToWorld = osg::Matrixf::inverse(camera->getViewMatrix());
+        const auto aim = osg::Matrixf::transform3x3(osg::Vec3f(0, 0, -1), viewToWorld);
         const osg::Vec3f eye(camera->getViewPosition());
-        mPhysics->releaseHeldObject(player, eye,
-            atRelease ? aim * osg::Vec3f(0, 1, 0) : mHeldThrow->direction,
+        const bool released = mPhysics->releaseHeldObject(player, eye,
+            atRelease ? aim : mHeldThrow->direction,
             mHeldThrow->speed, mHeldThrow->adrenaline);
-        mHeldThrow.reset();
+        resolveHeldThrow(released);
     }
 
     void World::samplePlayerSwordWallContact(float duration, const osg::FrameStamp& frameStamp)
@@ -3044,6 +3068,16 @@ namespace MWWorld
         // copy the object and set its count
         Ptr dropped
             = copy ? copyObjectToCell(object, cell, pos, amount, true) : moveObjectToCell(object, cell, pos, true);
+        // MWScript Drop copies a stack after removing it from the inventory, even when it transferred every item.
+        if (copy && object.getContainerStore() && object.getCellRef().getCount() == 0)
+        {
+            auto& source = object.getRefData().getAnimationState().mEquippedShieldProjectiles;
+            if (!source.empty())
+            {
+                dropped.getRefData().getAnimationState().mEquippedShieldProjectiles = std::exchange(source, {});
+                releaseShieldProjectiles(dropped);
+            }
+        }
 
         if (actor == mPlayer->getPlayer()) // Only call if dropped by player
             PCDropped(dropped);
@@ -3992,12 +4026,13 @@ namespace MWWorld
         // Check for impact, if yes, handle hit
         MWPhysics::RayCastingResult result = mPhysics->castRay(
             sourcePos, worldPos, { actor }, targetActors, 0xff, MWPhysics::CollisionType_Projectile);
+        const bool shieldHit = mProjectileManager->checkLaunchShield(actor, sourcePos, worldPos, targetActors, result);
 
         if (result.mHit)
         {
             // A close enemy can extend past the muzzle. Start a locked shot just before the contact
             // on the clear part of the launch segment so its flight and slow motion still precede the hit.
-            if (actor == MWMechanics::getPlayer() && !result.mHitObject.isEmpty()
+            if (!shieldHit && actor == MWMechanics::getPlayer() && !result.mHitObject.isEmpty()
                 && result.mHitObject.getClass().isActor())
             {
                 const float lead = std::min(24.f, (result.mHitPos - sourcePos).length());
@@ -4007,8 +4042,12 @@ namespace MWWorld
                         actor, projectile, clearPos, orient, bow, speed, attackStrength, result.mHitObject))
                     return;
             }
+            const auto hitType = shieldHit ? MWPhysics::ProjectileHitType::Shield
+                                           : MWPhysics::getProjectileHitType(result.mCollisionGroup);
+            if (hitType == MWPhysics::ProjectileHitType::Water)
+                mRendering->emitWaterRipple(result.mHitPos);
             mProjectileManager->landProjectile(actor, result.mHitObject, bow, projectile, result.mHitPos,
-                result.mHitNormal, forward * speed, attackStrength, false);
+                result.mHitNormal, forward * speed, attackStrength, hitType);
             return;
         }
 

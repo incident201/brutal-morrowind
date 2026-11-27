@@ -57,6 +57,7 @@
 
 #include "../mwphysics/raycasting.hpp"
 
+#include "../mwworld/cellstore.hpp"
 #include "../mwworld/class.hpp"
 #include "../mwworld/datetimemanager.hpp"
 #include "../mwworld/esmstore.hpp"
@@ -4825,6 +4826,35 @@ namespace MWMechanics
             && hasPickupClip(*mAnimation, BrutalPickupGroup);
     }
 
+    bool CharacterController::hasClearBrutalPickupReach(const MWWorld::Ptr& item) const
+    {
+        if (item.isEmpty() || !item.isInCell() || !mPtr.isInCell())
+            return false;
+        const auto* actorCell = mPtr.getCell();
+        const auto* itemCell = item.getCell();
+        if (actorCell != itemCell && (!actorCell->isExterior() || !itemCell->isExterior()
+                || actorCell->getCell()->getWorldSpace() != itemCell->getCell()->getWorldSpace()))
+            return false;
+        const osg::Vec3f actorPos = mPtr.getRefData().getPosition().asVec3();
+        const osg::Vec3f itemPos = item.getRefData().getPosition().asVec3();
+        const float height = itemPos.z() - actorPos.z();
+        if (height <= -80.f || height >= 105.f || (itemPos - actorPos).length2() > 160.f * 160.f)
+            return false;
+        const auto world = MWBase::Environment::get().getWorld();
+        const osg::Vec3f from = getMeleeAim(mPtr).first;
+        const osg::Vec3f to = itemPos + osg::Vec3f(0.f, 0.f, 2.f);
+        const auto* rays = world->getRayCasting();
+        const auto obstruction = rays->castRay(from, to, { mPtr, item }, {}, sBackstabObstruction);
+        if (!obstruction.mHit)
+            return true;
+        // Some loose items rest on a tabletop with their origin slightly below its surface.
+        // Allow reaching just above that support, while still tracing against cover on the way.
+        if (obstruction.mHitNormal.z() < .7f || (obstruction.mHitPos - itemPos).length2() > 8.f * 8.f)
+            return false;
+        const osg::Vec3f aboveSupport(itemPos.x(), itemPos.y(), obstruction.mHitPos.z() + 2.f);
+        return !rays->castRay(from, aboveSupport, { mPtr, item }, {}, sBackstabObstruction).mHit;
+    }
+
     bool CharacterController::isBrutalPickingUp() const
     {
         return mHitState != CharState_None && !mBrutalPickupGroup.empty() && mCurrentHit == mBrutalPickupGroup
@@ -4927,7 +4957,7 @@ namespace MWMechanics
 
     bool CharacterController::startBrutalPickup(const MWWorld::Ptr& item)
     {
-        if (item.isEmpty() || !canBrutalPickup())
+        if (!canBrutalPickup() || !hasClearBrutalPickupReach(item))
             return false;
         const float height = item.getRefData().getPosition().pos[2] - mPtr.getRefData().getPosition().pos[2];
         const std::string_view group = height > BrutalPickupTableHeight && hasPickupClip(*mAnimation, BrutalPickupTableGroup)
@@ -4947,10 +4977,18 @@ namespace MWMechanics
     {
         if (mBrutalPickupItem.ptrOrEmpty().isEmpty())
             return;
-        // Another reaction, a knockdown or death replaced the crouch: the item stays where it lies.
-        if (!isBrutalPickingUp() || mPtr.getClass().getCreatureStats(mPtr).isDead())
+        auto& stats = mPtr.getClass().getCreatureStats(mPtr);
+        if (!isBrutalPickingUp() || stats.isDead() || stats.isParalyzed() || stats.getKnockedDown())
         {
             mBrutalPickupItem = {};
+            return;
+        }
+        if (!Settings::game().mBrutalNpcWeaponPickup || !stats.getAiSequence().isInCombat())
+        {
+            mBrutalPickupItem = {};
+            mBrutalPickupGroup.clear();
+            resetCurrentHitState();
+            stats.setHitRecovery(false);
             return;
         }
         const float contact = mAnimation->getTextKeyTime(mBrutalPickupGroup + ": pickup contact");
@@ -4968,7 +5006,7 @@ namespace MWMechanics
         // The player may have taken or grabbed it, or it fell out of reach during the crouch.
         if (item.isEmpty() || !item.isInCell() || item.getCellRef().getCount() <= 0 || !item.getRefData().isEnabled()
             || !item.getRefData().getBaseNode() || world->getHeldObject() == item
-            || (item.getRefData().getPosition().asVec3() - mPtr.getRefData().getPosition().asVec3()).length() > 160.f)
+            || !hasClearBrutalPickupReach(item))
             return false;
         const bool shield = item.getType() == ESM::Armor::sRecordId;
         if ((!shield && item.getType() != ESM::Weapon::sRecordId)

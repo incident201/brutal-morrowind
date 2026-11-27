@@ -659,7 +659,7 @@ namespace MWClass
         if (!followThroughWeapon)
             MWMechanics::applyFatigueLoss(ptr, weapon, attackStrength);
 
-        if (victim.isEmpty()) // Didn't hit anything
+        if (victim.isEmpty() || MWMechanics::isBrutalClinchProtected(victim))
             return;
 
         const MWWorld::Class& othercls = victim.getClass();
@@ -801,7 +801,7 @@ namespace MWClass
             && attacker == stats.mBrutalClinchOpponent.ptrOrEmpty() && sourceType == MWMechanics::DamageSourceType::Melee;
         // Claim protection starts during alignment and lasts through the paired exit.
         // Only the authored loss hit may affect either participant during that interval.
-        if (!stats.mBrutalClinchOpponent.ptrOrEmpty().isEmpty() && !clinchLossDamage)
+        if (!clinchLossDamage && MWMechanics::isBrutalClinchProtected(ptr))
             return;
 
         bool setOnPcHitMe = true;
@@ -872,8 +872,10 @@ namespace MWClass
                 hasHealthDamage = true;
                 healthDamage = damage;
                 MWMechanics::DynamicStat<float> health(getCreatureStats(ptr).getHealth());
-                health.setCurrent(health.getCurrent() - damage);
+                const float previousHealth = health.getCurrent();
+                health.setCurrent(previousHealth - damage);
                 stats.setHealth(health);
+                MWMechanics::recordBrutalNpcHealthLoss(ptr, previousHealth);
             }
             else if (stat == "fatigue")
             {

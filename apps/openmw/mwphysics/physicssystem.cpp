@@ -288,6 +288,7 @@ namespace MWPhysics
         {
             result.mHitPos = Misc::Convert::toOsg(resultCallback.m_hitPointWorld);
             result.mHitNormal = Misc::Convert::toOsg(resultCallback.m_hitNormalWorld);
+            result.mCollisionGroup = resultCallback.m_collisionObject->getBroadphaseHandle()->m_collisionFilterGroup;
             if (PtrHolder* ptrHolder = static_cast<PtrHolder*>(resultCallback.m_collisionObject->getUserPointer()))
                 result.mHitObject = ptrHolder->getPtr();
         }
@@ -797,7 +798,8 @@ namespace MWPhysics
 
         for (const auto& [id, projectile] : mProjectiles)
         {
-            simulations.emplace_back(ProjectileSimulation{ projectile, ProjectileFrameData{ *projectile } });
+            simulations.emplace_back(ProjectileSimulation{
+                projectile, ProjectileFrameData{ *projectile, projectile->isMagic() ? nullptr : mProjectileShields } });
         }
     }
 
@@ -2338,10 +2340,10 @@ namespace MWPhysics
             ang = right * 8.f + launchDir * 3.f + osg::Vec3f(0, 0, -2.f);
             thrown = true;
         }
-        mTaskScheduler->releaseHeldObject(owner, vel, ang, thrown, adrenaline, mass);
+        const bool released = mTaskScheduler->releaseHeldObject(owner, vel, ang, thrown, adrenaline, mass);
         mHeldObject = MWWorld::Ptr();
         mHeldFragment = 0;
-        return true;
+        return released;
     }
 
     bool PhysicsSystem::hasHeldObject() const
@@ -2598,12 +2600,14 @@ namespace MWPhysics
             mMovement.z() = 0.f;
     }
 
-    ProjectileFrameData::ProjectileFrameData(Projectile& projectile)
+    ProjectileFrameData::ProjectileFrameData(
+        Projectile& projectile, std::shared_ptr<const std::vector<ProjectileShield>> shields)
         : mPosition(projectile.getPosition())
         , mMovement(projectile.velocity())
         , mCaster(projectile.getCasterCollisionObject())
         , mCollisionObject(projectile.getCollisionObject())
         , mProjectile(&projectile)
+        , mShields(std::move(shields))
     {
     }
 

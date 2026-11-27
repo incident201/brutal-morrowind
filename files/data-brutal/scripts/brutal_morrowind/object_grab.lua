@@ -28,6 +28,7 @@ local throwAfterPickup = false
 local throwQueued = false
 local releaseFired = false
 local throwAdrenaline = false
+local throwSerial, throwId, throwRequested = 0, nil, false
 local stats = {
     grabs = 0, drops = 0, throws = 0, adrenalineThrows = 0,
     headHits = 0, bodyHits = 0, knockdowns = 0, rejected = 0,
@@ -89,6 +90,7 @@ local function restoreStance()
     pickupCuePlayed = false
     throwAfterPickup = false
     throwQueued, releaseFired, throwAdrenaline = false, false, false
+    throwId, throwRequested = nil, false
 end
 
 local function aimVectors()
@@ -159,7 +161,7 @@ local function canAct()
     return true
 end
 
-local function fireRelease(throwSpeed, adrenaline)
+local function fireRelease(throwSpeed, adrenaline, id)
     local eyePos, forward = aimVectors()
     core.sendGlobalEvent('BrutalGrabRelease', {
         player = self,
@@ -167,7 +169,13 @@ local function fireRelease(throwSpeed, adrenaline)
         throwDir = forward,
         throwSpeed = throwSpeed,
         adrenaline = adrenaline == true,
+        throwId = id,
     })
+end
+
+local function requestThrow()
+    throwRequested = true
+    fireRelease(dualGrip and 920 or 1060, throwAdrenaline, throwId)
 end
 
 local function startDrop(immediate)
@@ -175,6 +183,9 @@ local function startDrop(immediate)
     if state == 'throwing' and releaseFired then
         if immediate then restoreStance() end
         return false
+    end
+    if state == 'throwing' and not throwRequested and throwAdrenaline then
+        I.BrutalAdrenaline.cancelThrow(throwId)
     end
     fireRelease(0, false)
     heldItem, requestedItem = nil, nil
@@ -197,21 +208,26 @@ local function startThrow()
     if not heldItem or (state ~= 'holding' and state ~= 'raising' and state ~= 'picking') or not canAct() then
         return false
     end
-    local adren = I.BrutalAdrenaline and I.BrutalAdrenaline.spendThrow and I.BrutalAdrenaline.spendThrow() == true or false
-    throwAdrenaline = adren
+    throwSerial = throwSerial + 1
+    throwId = throwSerial
+    local adrenaline = I.BrutalAdrenaline
+    throwAdrenaline = adrenaline and adrenaline.reserveThrow(throwId) == true or false
+    throwRequested = false
     releaseFired = false
     throwQueued = false
     state, stateTime = 'throwing', 0
-    stats.throws = stats.throws + 1
-    if adren then stats.adrenalineThrows = stats.adrenalineThrows + 1 end
     local hasClip = useDmAnims()
     playSection(throwGroup(), 'start', 'stop', 0, false)
-    if hasClip then fireRelease(dualGrip and 920 or 1060, throwAdrenaline) end
+    if hasClip then requestThrow() end
     return true
 end
 
 local function startGrab(explicitTarget)
     if state ~= 'idle' or not canAct() then return false end
+    if I.BrutalMorrowind then
+        local melee = I.BrutalMorrowind.status()
+        if melee.kicking or melee.bashing then return false end
+    end
     local target, fragment = explicitTarget, nil
     if not target then target, fragment = findTarget() end
     if not fragment and not canGrab(target) then
@@ -296,17 +312,8 @@ local function onUpdate(dt)
         local tg = throwGroup()
         local relT = textKeyDuration(tg, 'start', 'release', dualGrip and 0.2667 or 0.1333)
         local recT = textKeyDuration(tg, 'start', 'recover', dualGrip and 0.96 or 0.72)
-        if not releaseFired and stateTime >= relT then
-            releaseFired = true
-            self:sendEvent('BrutalObjectGrabSound', { kind = 'throw', adrenaline = throwAdrenaline })
-            if not useDmAnims() then fireRelease(dualGrip and 920 or 1060, throwAdrenaline) end
-            heldItem, heldFragment = nil, nil
-            if (not useDmAnims() or settings.get('firstPersonAnimations') ~= 'darkMessiah')
-                and I.BrutalCameraMotion and I.BrutalCameraMotion.pulse then
-                I.BrutalCameraMotion.pulse(throwAdrenaline and 0.20 or 0.14, 0.07, 0, 0.28)
-            end
-        end
-        if stateTime >= recT then restoreStance() end
+        if not throwRequested and stateTime >= relT then requestThrow() end
+        if releaseFired and stateTime >= recT then restoreStance() end
         return
     end
 
@@ -402,6 +409,18 @@ return {
                 restoreStance()
             end
         end,
+        BrutalObjectThrowResolved = function(data)
+            if not data or data.throwId ~= throwId or state ~= 'throwing' or releaseFired then return end
+            if not data.released then restoreStance();return end
+            releaseFired = true
+            heldItem, heldFragment = nil, nil
+            stats.throws = stats.throws + 1
+            if throwAdrenaline then stats.adrenalineThrows = stats.adrenalineThrows + 1 end
+            self:sendEvent('BrutalObjectGrabSound', { kind = 'throw', adrenaline = throwAdrenaline })
+            if not useDmAnims() and I.BrutalCameraMotion and I.BrutalCameraMotion.pulse then
+                I.BrutalCameraMotion.pulse(throwAdrenaline and 0.20 or 0.14, 0.07, 0, 0.28)
+            end
+        end,
         BrutalThrownObjectHit = function(data)
             if type(data) ~= 'table' then return end
             if data.headHit then stats.headHits = stats.headHits + 1 else stats.bodyHits = stats.bodyHits + 1 end
@@ -412,13 +431,14 @@ return {
     },
     engineHandlers = {
         onUpdate = onUpdate,
-        onSave = function() return {stance = savedStance} end,
+        onSave = function() return {stance = savedStance, throwSerial = throwSerial} end,
         onLoad = function(data)
             local previousStance = data and data.stance
             heldItem, requestedItem, heldFragment, dualGrip, savedStance = nil, nil, nil, false, nil
             state, stateTime, useDown, throwQueued, releaseFired, throwAdrenaline = 'idle', 0, false, false, false, false
             pickupCuePlayed = false
             throwAfterPickup = false
+            throwSerial, throwId, throwRequested = data and data.throwSerial or 0, nil, false
             cancelAnims()
             if types.Actor.setBrutalCarryingObject then
                 types.Actor.setBrutalCarryingObject(self, false)

@@ -112,12 +112,14 @@ namespace MWWorld
             osg::Vec3f direction;
             float speed;
             bool adrenaline;
+            std::uint64_t id;
             float wait = 0.f;
         };
         std::optional<HeldThrow> mHeldThrow;
         std::vector<std::pair<osg::observer_ptr<osg::Node>, unsigned>> mHeldVisuals;
         osg::ref_ptr<osg::Callback> mHeldVisualCull;
         void clearHeldVisual();
+        void resolveHeldThrow(bool released);
         std::unique_ptr<DetourNavigator::Navigator> mNavigator;
         std::unique_ptr<MWRender::RenderingManager> mRendering;
         std::unique_ptr<MWWorld::Scene> mWorldScene;
@@ -444,7 +446,7 @@ namespace MWWorld
         bool holdObject(const Ptr& ptr, const Ptr& holder, MWPhysics::HeldObjectInfo* info = nullptr,
             unsigned fragment = 0) override;
         bool releaseHeldObject(const Ptr& holder, const osg::Vec3f& eyePos, const osg::Vec3f& throwDir,
-            float throwSpeed, bool adrenaline) override;
+            float throwSpeed, bool adrenaline, std::uint64_t throwId = 0) override;
         Ptr getHeldObject() const override;
         void syncDynamicObject(const Ptr& ptr, const osg::Vec3f& position, const osg::Quat& rotation,
             const osg::Vec3f& renderedPosition, const osg::Quat& renderedRotation, bool authoritativeChanged) override;

@@ -376,15 +376,18 @@ namespace MWLua
                     MWBase::Environment::get().getWorld()->getAnimation(ptr)))return npc->getBloodDecalData();
             return std::string();
         };
-        api["restoreNpcBloodDecals"] = [context](const GObject& object,std::string data) {
+        api["restoreNpcBloodDecals"] = [context](const GObject& object, std::string data,
+                                           sol::optional<std::uint64_t> requestId) {
             if(data.size()>400000)throw std::runtime_error("NPC blood data exceeds bounded save size");
-            context.mLuaManager->addAction([context,object,data=std::move(data)] {
+            context.mLuaManager->addAction([context, object, data = std::move(data), requestId] {
                 const auto ptr=object.ptrOrEmpty();if(ptr.isEmpty()||!ptr.isInCell()||!ptr.getRefData().isEnabled())return;
                 if(auto* npc=dynamic_cast<MWRender::NpcAnimation*>(MWBase::Environment::get().getWorld()->getAnimation(ptr)))
                 {
-                    const bool restored=npc->restoreBloodDecals(data);
+                    const bool restored=npc->restoreBloodDecals(data, requestId.has_value());
                     context.mLua->protectedCall([&](LuaUtil::LuaView& view){
                         sol::table receipt=view.newTable();receipt["restored"]=restored;
+                        if (requestId)
+                            receipt["requestId"] = *requestId;
                         if(restored)receipt["data"]=npc->getBloodDecalData();
                         context.mLuaManager->sendLocalEvent(ptr,"BrutalBloodDecalsStored",receipt);
                     });
@@ -826,12 +829,13 @@ namespace MWLua
             }, "HoldObject");
         };
         api["releaseHeldObject"] = [context](const GObject& holder, Misc::FiniteVec3f eyePos,
-                                       Misc::FiniteVec3f throwDir, Misc::FiniteFloat throwSpeed, bool adrenaline) {
+                                       Misc::FiniteVec3f throwDir, Misc::FiniteFloat throwSpeed, bool adrenaline,
+                                       sol::optional<std::uint64_t> throwId) {
             const float speed = std::clamp(float(throwSpeed), 0.f, 2000.f);
-            context.mLuaManager->addAction([holder, eyePos, throwDir, speed, adrenaline] {
+            context.mLuaManager->addAction([holder, eyePos, throwDir, speed, adrenaline, id = throwId.value_or(0)] {
                 const auto ptr = holder.ptrOrEmpty();
                 if (!ptr.isEmpty())
-                    MWBase::Environment::get().getWorld()->releaseHeldObject(ptr, eyePos, throwDir, speed, adrenaline);
+                    MWBase::Environment::get().getWorld()->releaseHeldObject(ptr, eyePos, throwDir, speed, adrenaline, id);
             }, "ReleaseHeldObject");
         };
         api["getHeldObject"] = []() -> sol::optional<GObject> {

@@ -27,8 +27,8 @@ ragdollWeaponDrop: Weapon drop chance, %
 ragdollWeaponDropDescription: "Chance per held weapon when a living NPC is knocked down. Held weapons always drop on death. This chance also applies to shields and loaded ammunition."
 deathSceneEnabled: Player death scene
 deathSceneEnabledDescription: "The camera follows the player's head and the scene fades behind the death menu. Turn off for the standard third-person death animation."
-dynamicProps: Movable world items
-dynamicPropsDescription: "Impacts move loose items."
+dynamicProps: Physical projectiles and movable items
+dynamicPropsDescription: "Impacts move loose items. Arrows, bolts and thrown weapons fly on an arc and hit on contact. The player's Marksman skill scales their damage. Missiles stick in bodies, wood and wooden shields, and glance off stone and metal."
 objectGrabEnabled: Grab and throw items
 objectGrabEnabledDescription: "Pick up small world items, carry them, drop them, or throw them at enemies. In adrenaline, throws knock enemies into ragdoll."
 movementEnabled: Walking, running and sprinting
@@ -63,8 +63,6 @@ woundedNpcs: Wounded NPCs
 woundedNpcsDescription: "Below 30% health an NPC fights and walks wounded, as in Dark Messiah: its parry and shield block often give way, blows stagger it, and a charged blow, kick or shield bash can knock it down. Argonians and Khajiit keep their own stance and walk."
 npcFlee: NPC flight
 npcWeaponPickup: NPCs pick up weapons
-physicalProjectiles: Physical arrows and missiles
-physicalProjectilesDescription: "Arrows, bolts and thrown weapons fall on an arc and hit what they touch without a skill roll. The player's Marksman skill scales their damage. They stay in bodies until looted, stick in wood and wooden shields and glance off stone and metal. A raised shield blocks only the missiles that strike it."
 npcWeaponPickupDescription: "An NPC left without a weapon in a fight runs to a weapon lying nearby, picks it up and fights with it. A shield lying right beside it is taken too."
 npcFleeDescription: "A blow that leaves an NPC below 10% health makes it run away for up to 20 seconds; then it fights on until the next blow."
 hitRecovery: Suppress player hit recoil

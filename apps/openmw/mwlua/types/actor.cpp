@@ -27,6 +27,7 @@
 #include "apps/openmw/mwrender/brutalblood.hpp"
 #include "apps/openmw/mwrender/camera.hpp"
 #include "apps/openmw/mwrender/npcanimation.hpp"
+#include "apps/openmw/mwrender/npcblood.hpp"
 #include "apps/openmw/mwworld/class.hpp"
 #include "apps/openmw/mwworld/inventorystore.hpp"
 #include "apps/openmw/mwworld/worldmodel.hpp"
@@ -494,7 +495,7 @@ namespace MWLua
                 {"swordParry", g.mDarkMessiahSwordParry}, {"comboAttacks", g.mDarkMessiahComboAttacks},
                 {"npcStagger", g.mNpcHurtHealthFraction > 0.f}, {"hitRecovery", !g.mPlayerHitRecovery},
                 {"woundedNpcs", g.mBrutalWoundedNpcs}, {"npcFlee", g.mBrutalNpcFlee},
-                {"npcWeaponPickup", g.mBrutalNpcWeaponPickup}, {"physicalProjectiles", g.mBrutalPhysicalProjectiles},
+                {"npcWeaponPickup", g.mBrutalNpcWeaponPickup},
                 {"stamina", g.mBrutalStamina}, {"wallBounce", g.mBrutalWallBounce},
                 {"controlsEnabled", g.mBrutalControlsEnabled}, {"slide", g.mBrutalSlide}, {"clinch", g.mBrutalClinch}, {"fastAttacks", g.mBrutalFastAttacks},
                 {"combatSounds", g.mBrutalCombatSounds}, {"heroVoice", g.mBrutalHeroVoice}, {"bloodEffects", g.mBrutalBloodEffects},
@@ -517,6 +518,8 @@ namespace MWLua
         };
         actor["getBrutalOption"] = [initialiseOptions](std::string name) -> bool {
             initialiseOptions();
+            if (name == "physicalProjectiles")
+                name = "dynamicProps";
             if (!brutalOptions.contains(name)) throw std::runtime_error("Unknown Brutal option: " + name);
             if (name == "enabled") return brutalOptions.at(name);
             if (!brutalOptions.at("enabled")) return name == "classicFirstPerson" || name == "classicNpcAnimations";
@@ -527,6 +530,8 @@ namespace MWLua
         actor["setBrutalOption"] = [context, initialiseOptions](const SelfObject& self, std::string name, bool value) {
             if (self.ptr() != MWMechanics::getPlayer())
                 throw std::runtime_error("Brutal options require player SELF");
+            if (name == "physicalProjectiles")
+                name = "dynamicProps";
             context.mLuaManager->addAction([name=std::move(name), value, initialiseOptions] {
                 initialiseOptions();
                 if (!brutalOptions.contains(name)) throw std::runtime_error("Unknown Brutal option: " + name);
@@ -587,7 +592,6 @@ namespace MWLua
                 g.mBrutalWoundedNpcs.set(on("woundedNpcs"));
                 g.mBrutalNpcFlee.set(on("npcFlee"));
                 g.mBrutalNpcWeaponPickup.set(on("npcWeaponPickup"));
-                g.mBrutalPhysicalProjectiles.set(on("physicalProjectiles"));
                 g.mBrutalStamina.set(on("stamina"));
                 g.mPlayerFatigueRegenFraction.set(on("stamina") ? 1.f/18.f : 0.f);
                 g.mBrutalWallBounce.set(on("wallBounce"));
@@ -1485,6 +1489,8 @@ namespace MWLua
                 MWBase::Environment::get().getWorld()->addActorExternalVelocity(ptr, delta);
             }, "AddExternalVelocity");
         };
+
+        actor["_mergeBloodDecalData"] = &MWRender::mergeNpcBloodDecalData;
 
         actor["_onHit"] = [context](const SelfObject& self, const sol::table& options) {
             std::optional<osg::Vec3f> lethalVelocity;
