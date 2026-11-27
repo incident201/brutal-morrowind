@@ -151,6 +151,7 @@ namespace MWMechanics
 
         CharacterState mIdleState{ CharState_None };
         std::string mCurrentIdle;
+        std::string mCurrentThrownLeftIdle;
 
         CharacterState mMovementState{ CharState_None };
         std::string mCurrentMovement;

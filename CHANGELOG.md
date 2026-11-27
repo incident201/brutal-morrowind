@@ -1,6 +1,8 @@
 Brutal Morrowind (unreleased)
 ----------------------------
 
+    NPCs enter combat and finish drawing their weapon before raising an adaptive guard. An opening projectile hit can no longer leave them fighting with a hidden weapon.
+    Switching from a two-handed weapon to a thrown weapon in the inventory restores the retained shield's left-arm pose without re-equipping the shield.
     Thrown objects follow the player's aim at release without being deflected into the floor by the throw animation's camera tilt. Turning during the windup still changes the throw direction.
     The game writes save format 38. Saves from earlier Brutal Morrowind versions and vanilla OpenMW 0.51 still load.
     One option controls physical projectiles and impacts on loose objects. If either older option was off, the combined option starts off.

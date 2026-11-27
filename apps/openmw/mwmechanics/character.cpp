@@ -522,6 +522,7 @@ namespace MWMechanics
     void CharacterController::resetCurrentIdleState()
     {
         clearStateAnimation(mCurrentIdle);
+        clearStateAnimation(mCurrentThrownLeftIdle);
         mIdleState = CharState_None;
     }
 
@@ -1098,6 +1099,33 @@ namespace MWMechanics
             mAnimation->getInfo(mCurrentIdle, &startPoint);
 
         clearStateAnimation(mCurrentIdle);
+        // Imported thrown clips animate only the right arm. Keep a separate
+        // shield idle on the left, rather than inheriting a previous weapon's
+        // pose (or the rebuilt skeleton's rest pose after an inventory pause).
+        bool thrownShield = false;
+        if (mPtr == getPlayer() && brutalDmFirstPerson()
+            && MWBase::Environment::get().getWorld()->isFirstPerson()
+            && getWeaponType(mWeaponType)->mWeaponClass == ESM::WeaponType::Thrown)
+        {
+            const auto& inventory = mPtr.getClass().getInventoryStore(mPtr);
+            const auto left = inventory.getSlot(MWWorld::InventoryStore::Slot_CarriedLeft);
+            thrownShield = left != inventory.end() && left->getType() == ESM::Armor::sRecordId
+                && mAnimation->hasAnimation("idle1h");
+        }
+        if (thrownShield)
+        {
+            if (mCurrentThrownLeftIdle.empty() || !mAnimation->isPlaying(mCurrentThrownLeftIdle))
+            {
+                mCurrentThrownLeftIdle = "idle1h";
+                MWRender::Animation::AnimPriority leftPriority(Priority_Default);
+                leftPriority[MWRender::BoneGroup_LeftArm] = Priority_WeaponLowerBody;
+                playBlendedAnimation(mCurrentThrownLeftIdle, leftPriority, MWRender::BlendMask_LeftArm,
+                    false, 1.f, "start", "stop", 0.f, std::numeric_limits<uint32_t>::max(), true);
+            }
+        }
+        else
+            clearStateAnimation(mCurrentThrownLeftIdle);
+
         mCurrentIdle = std::move(idleGroup);
         playBlendedAnimation(mCurrentIdle, priority, MWRender::BlendMask_All, false, 1.0f, "start", "stop", startPoint,
             static_cast<uint32_t>(numLoops), true);
@@ -3602,6 +3630,7 @@ namespace MWMechanics
         if (!mAnimQueue.empty())
         {
             clearStateAnimation(mCurrentIdle);
+            clearStateAnimation(mCurrentThrownLeftIdle);
             mIdleState = CharState_SpecialIdle;
             auto priority = mAnimQueue.front().mScripted ? Priority_Scripted : Priority_Default;
             mAnimation->setPlayScriptedOnly(mAnimQueue.front().mScripted);
@@ -6072,9 +6101,13 @@ namespace MWMechanics
             && !isKnockedOut() && !isKnockedDown() && !isScriptedAnimPlaying()
             && !stats.mBrutalClinchActive && !mAnimation->isRagdollPose()
             && (!stats.getHitRecovery() || minorRecovery)
-            && stats.getDrawState() == DrawState::Weapon && mWeaponType != ESM::Weapon::HandToHand
+            && stats.getAiSequence().isInCombat() && stats.getDrawState() == DrawState::Weapon
+            && mWeaponType != ESM::Weapon::HandToHand
             && mWeaponType != ESM::Weapon::Spell && mWeaponType != ESM::Weapon::None
-            && (mUpperBodyState <= UpperBodyState::WeaponEquipped || minorRecovery)
+            // A guard must not replace the draw/holster before its attach key.
+            // Equipping and Unequipping sort below WeaponEquipped in this enum.
+            && mUpperBodyState >= UpperBodyState::WeaponEquipped
+            && (mUpperBodyState == UpperBodyState::WeaponEquipped || minorRecovery)
             && hasGuardPose && !MWBase::Environment::get().getWorld()->isSwimming(mPtr)
             && (!Settings::game().mBrutalStamina || stats.getFatigue().getCurrent() > 0.f);
         if (able)
@@ -6738,7 +6771,10 @@ namespace MWMechanics
 
     bool CharacterController::readyToStartBrutalGuard() const
     {
-        return readyToPrepareAttack() || isUpperBodyRecovery();
+        const auto& stats = mPtr.getClass().getCreatureStats(mPtr);
+        return stats.getAiSequence().isInCombat() && stats.getDrawState() == DrawState::Weapon
+            && mUpperBodyState >= UpperBodyState::WeaponEquipped && mAnimation && mAnimation->getWeaponsShown()
+            && (readyToPrepareAttack() || isUpperBodyRecovery());
     }
 
     bool CharacterController::readyToStartAttack() const

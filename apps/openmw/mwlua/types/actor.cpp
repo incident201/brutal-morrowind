@@ -1241,6 +1241,7 @@ namespace MWLua
             result["fastStrike"] = stats.mBrutalFastStrike;
             result["attacking"] = stats.getAttackingOrSpell();
             result["hitRecovery"] = stats.getHitRecovery();
+            result["inCombat"] = stats.getAiSequence().isInCombat();
             result["knockedDown"] = stats.getKnockedDown();
             result["fatigue"] = stats.getFatigue().getCurrent();
             result["maximumFatigue"] = stats.getFatigue().getModified();
@@ -1263,6 +1264,10 @@ namespace MWLua
             result["attackKind"] = stats.mBrutalAttackKind;
             result["wounded"] = MWMechanics::isBrutalWoundedNpc(ptr);
             const MWRender::Animation* animation = MWBase::Environment::get().getWorld()->getAnimation(ptr);
+            result["weaponsShown"] = animation && animation->getWeaponsShown();
+            result["carriedLeftShown"] = animation && animation->getCarriedLeftShown();
+            if (const auto* npc = dynamic_cast<const MWRender::NpcAnimation*>(animation))
+                result["weaponAttached"] = npc->getPartNode(ESM::PRT_Weapon) != nullptr;
             result["woundedClips"] = animation && animation->isBrutalWounded();
             result["fleeing"] = stats.getAiSequence().isFleeing();
             result["brutalFleeing"] = stats.getAiSequence().isBrutalFleeing();
