@@ -2581,10 +2581,10 @@ namespace MWRender
                 * (1.f - blend((t - second - .09f) / .22f));
             const float leftWeight = blend((t - align + .045f) / .14f) * (1.f - blend((t - 1.30f) / .26f));
             const auto& stats = mPtr.getClass().getCreatureStats(mPtr);
-            if (!stats.mBrutalBackstabTarget.isEmpty())
+            if (!stats.mBrutalBackstabTarget.ptrOrEmpty().isEmpty())
             {
                 auto* victim = dynamic_cast<NpcAnimation*>(
-                    MWBase::Environment::get().getWorld()->getAnimation(stats.mBrutalBackstabTarget));
+                    MWBase::Environment::get().getWorld()->getAnimation(stats.mBrutalBackstabTarget.ptrOrEmpty()));
                 const auto neck = victim ? victim->getBoneWorldMatrix("Bip01 Neck") : std::nullopt;
                 const auto leftShoulder = victim ? victim->getBoneWorldMatrix("Bip01 L UpperArm") : std::nullopt;
                 const auto rightShoulder = victim ? victim->getBoneWorldMatrix("Bip01 R UpperArm") : std::nullopt;

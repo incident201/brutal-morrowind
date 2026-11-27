@@ -1,6 +1,8 @@
 #include "brutalfootsteps.hpp"
 
+#include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <istream>
@@ -11,6 +13,7 @@
 #include <vector>
 
 #include <osg/Image>
+#include <osg/observer_ptr>
 #include <osg/StateSet>
 #include <osg/Texture>
 #include <osgUtil/IntersectionVisitor>
@@ -205,6 +208,28 @@ namespace MWMechanics::BrutalFootsteps
             osg::Node* node = object.getRefData().getBaseNode();
             if (!node)
                 return {};
+            // The physics ray still selects the actual support on every step.
+            // Reuse only its local texture sample for a short, nearby step on
+            // the same unchanged scene node (never across unload/reload).
+            static osg::observer_ptr<osg::Node> cachedNode;
+            static osg::Vec3f cachedPosition;
+            static ESM::Position cachedTransform;
+            static std::string cachedTexture;
+            static std::chrono::steady_clock::time_point sampledAt;
+            const auto now = std::chrono::steady_clock::now();
+            const auto& transform = object.getRefData().getPosition();
+            // Only the player's surface probes reach this helper. A failed
+            // sample must not suppress the next step's ray for 350 ms.
+            if (!cachedTexture.empty() && cachedNode.get() == node && now - sampledAt < std::chrono::milliseconds(350)
+                && (position - cachedPosition).length2() < 16.f * 16.f
+                && transform.asVec3() == cachedTransform.asVec3()
+                && std::equal(std::begin(transform.rot), std::end(transform.rot), std::begin(cachedTransform.rot)))
+                return cachedTexture;
+            cachedNode = node;
+            cachedPosition = position;
+            cachedTransform = transform;
+            sampledAt = now;
+            cachedTexture.clear();
             osg::ref_ptr<osgUtil::LineSegmentIntersector> intersector = new osgUtil::LineSegmentIntersector(
                 osgUtil::Intersector::MODEL, position + osg::Vec3f(0, 0, 4), position - osg::Vec3f(0, 0, 4));
             osgUtil::IntersectionVisitor visitor(intersector);
@@ -222,7 +247,10 @@ namespace MWMechanics::BrutalFootsteps
                     ? dynamic_cast<const osg::Texture*>(state->getTextureAttribute(0, osg::StateAttribute::TEXTURE))
                     : nullptr;
                 if (texture && texture->getImage(0))
-                    return Misc::StringUtils::lowerCase(texture->getImage(0)->getFileName());
+                {
+                    cachedTexture = Misc::StringUtils::lowerCase(texture->getImage(0)->getFileName());
+                    return cachedTexture;
+                }
             }
             return {};
         }

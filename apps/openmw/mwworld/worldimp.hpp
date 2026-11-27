@@ -108,8 +108,8 @@ namespace MWWorld
         std::unique_ptr<MWPhysics::PhysicsSystem> mPhysics;
         struct HeldThrow
         {
-            Ptr item;
-            osg::Vec3f eye, direction;
+            SafePtr item;
+            osg::Vec3f direction;
             float speed;
             bool adrenaline;
             float wait = 0.f;

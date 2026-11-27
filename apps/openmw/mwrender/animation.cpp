@@ -1603,7 +1603,7 @@ namespace MWRender
             const auto& stats = mPtr.getClass().getCreatureStats(mPtr);
             // A Lua action may have been queued before the parry. The relation
             // claims the pose immediately, including the deferred entry frame.
-            if (stats.mBrutalClinchActive || !stats.mBrutalClinchOpponent.isEmpty())
+            if (stats.mBrutalClinchActive || !stats.mBrutalClinchOpponent.ptrOrEmpty().isEmpty())
                 return;
         }
 

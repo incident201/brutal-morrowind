@@ -108,7 +108,7 @@ namespace MWMechanics
         struct PowerStrike
         {
             std::string token;
-            MWWorld::Ptr weapon;
+            MWWorld::SafePtr weapon;
             float multiplier = 1.f;
             float minimumStrength = 0.8f;
         };
@@ -154,7 +154,7 @@ namespace MWMechanics
         std::string mBrutalClinchInterruptReason;
         bool mBrutalClinchReleaseUse = false;
         float mBrutalClinchBlendOut = 0.f;
-        MWWorld::Ptr mBrutalClinchOpponent;
+        MWWorld::SafePtr mBrutalClinchOpponent;
         uint64_t mBrutalClinchId = 0;
         int mBrutalClinchPhase = 0; // 0 idle, 1 aligning, 2 contest, 3 win, 4 lose.
         int mBrutalClinchClicks = 0;
@@ -168,11 +168,11 @@ namespace MWMechanics
         bool mBrutalParried = false; // NPC: the player timed a parry of this actor's blow; recoil next update.
         // A wounded NPC knocked down by a blow (WoundedFallChance): the push, applied next update.
         osg::Vec3f mBrutalWoundedFall;
-        MWWorld::Ptr mBrutalWoundedFallAttacker;
+        MWWorld::SafePtr mBrutalWoundedFallAttacker;
         // The player's lethal blow, consumed by the physical death handoff.
         osg::Vec3f mBrutalPlayerDeathPush;
         // The attacker of the charged melee blow now being resolved against this actor.
-        MWWorld::Ptr mBrutalChargedBlowBy;
+        MWWorld::SafePtr mBrutalChargedBlowBy;
         // Transient adaptive defence: pressure is observed from actual fast contacts,
         // not the player's input; none of these decisions survives a saved game.
         int mBrutalFastPressure = 0;
@@ -193,7 +193,7 @@ namespace MWMechanics
         // Dual-dagger stealth backstab, transient runtime state:
         // phase 0 none, 1 entering, 2 ready, 3 canceling, 4 executing.
         int mBrutalBackstabPhase = 0;
-        MWWorld::Ptr mBrutalBackstabTarget; // Player's target, or victim's attacker during execution.
+        MWWorld::SafePtr mBrutalBackstabTarget; // Player's target, or victim's attacker during execution.
         bool mBrutalBackstabVictim = false; // NPC is locked in synchronized brutal_backstabbed clip.
         bool mBrutalSilentBackstab = false; // Suppresses vanilla cry & telepathic unseen murder crime.
         float mBrutalBackstabEyeLift = 0.f; // Shared first-person eye and arm offset during the paired pose.

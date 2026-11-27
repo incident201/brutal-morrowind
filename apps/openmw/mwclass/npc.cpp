@@ -641,7 +641,7 @@ namespace MWClass
         // The charge belongs to the right hand; the left dagger's strike neither carries nor clears it.
         const bool offhand = getCreatureStats(ptr).mBrutalOffhandStrike;
         if (!followThroughWeapon && !offhand && !armed.token.empty()
-            && (armed.weapon != weapon || getCreatureStats(ptr).isDead()))
+            && (armed.weapon.ptrOrEmpty() != weapon || getCreatureStats(ptr).isDead()))
             armed = {};
         if (!followThroughWeapon && !groundFinisher && !offhand && !getCreatureStats(ptr).mBrutalFastStrike && !armed.token.empty()
             && attackStrength >= armed.minimumStrength)
@@ -788,7 +788,7 @@ namespace MWClass
         brutalSuccessful = true;
         // Only a charged blow can knock a wounded NPC down (see onHit).
         othercls.getCreatureStats(victim).mBrutalChargedBlowBy
-            = MWMechanics::isBrutalChargedAttack(ptr, attackStrength) ? ptr : MWWorld::Ptr();
+            = MWMechanics::isBrutalChargedAttack(ptr, attackStrength) ? MWWorld::SafePtr(ptr) : MWWorld::SafePtr();
         MWBase::Environment::get().getLuaManager()->onHit(ptr, victim, weapon, MWWorld::Ptr(), type, attackStrength,
             damage, healthdmg, hitPosition, true, MWMechanics::DamageSourceType::Melee,
             brutalAttackId, brutalPowered, brutalBlocked, contactPart, groundFinisher);
@@ -801,16 +801,16 @@ namespace MWClass
         bool wasDead = stats.isDead();
         const bool clinchLossDamage = stats.mBrutalClinchApplyingLossDamage
             && ptr == MWMechanics::getPlayer() && stats.mBrutalClinchPhase == 4
-            && attacker == stats.mBrutalClinchOpponent && sourceType == MWMechanics::DamageSourceType::Melee;
+            && attacker == stats.mBrutalClinchOpponent.ptrOrEmpty() && sourceType == MWMechanics::DamageSourceType::Melee;
         // Claim protection starts during alignment and lasts through the paired exit.
         // Only the authored loss hit may affect either participant during that interval.
-        if (!stats.mBrutalClinchOpponent.isEmpty() && !clinchLossDamage)
+        if (!stats.mBrutalClinchOpponent.ptrOrEmpty().isEmpty() && !clinchLossDamage)
             return;
 
         bool setOnPcHitMe = true;
 
         const bool silentBackstabHit = stats.mBrutalSilentBackstab
-            && !attacker.isEmpty() && attacker == stats.mBrutalBackstabTarget;
+            && !attacker.isEmpty() && attacker == stats.mBrutalBackstabTarget.ptrOrEmpty();
         // NOTE: 'object' and/or 'attacker' may be empty.
         if (!silentBackstabHit && !attacker.isEmpty() && attacker.getClass().isActor() && !stats.getAiSequence().isInCombat(attacker))
         {
@@ -929,11 +929,11 @@ namespace MWClass
             // Dark Messiah's wounded NPC: a charged melee blow knocks it down (WoundedFallChance
             // 0.3), any melee blow may stagger it (WoundedStunChance 0.3). The fall is applied on
             // its next update. A kick or shield bash rolls its fall where its push lands (applyNpcKick).
-            const bool charged = stats.mBrutalChargedBlowBy == attacker;
-            stats.mBrutalChargedBlowBy = MWWorld::Ptr();
-            if (hasHealthDamage && healthDamage > 0.f && !clinchLossDamage && !silentBackstabHit
+            const bool charged = !attacker.isEmpty() && stats.mBrutalChargedBlowBy.ptrOrEmpty() == attacker;
+            stats.mBrutalChargedBlowBy = {};
+            if (hasHealthDamage && healthDamage > 0.f && !attacker.isEmpty() && !clinchLossDamage && !silentBackstabHit
                 && sourceType == MWMechanics::DamageSourceType::Melee && MWMechanics::isBrutalWoundedNpc(ptr)
-                && stats.mBrutalClinchOpponent.isEmpty())
+                && stats.mBrutalClinchOpponent.ptrOrEmpty().isEmpty())
             {
                 const float roll = Misc::Rng::rollClosedProbability(prng);
                 osg::Vec3f direction
@@ -943,7 +943,7 @@ namespace MWClass
                 {
                     constexpr float push = 225.f; // A combo blow's knockdown push (impact 1.5).
                     stats.mBrutalWoundedFall = direction * push + osg::Vec3f(0.f, 0.f, push * .35f);
-                    stats.mBrutalWoundedFallAttacker = attacker;
+                    stats.mBrutalWoundedFallAttacker = MWWorld::SafePtr(attacker);
                 }
                 else if (roll < .6f)
                     stats.setHitRecovery(true);

@@ -8,6 +8,14 @@ local I = require('openmw.interfaces')
 local loaded, assets = pcall(require, 'scripts.brutal_assets.effects')
 local played={}
 local impactSoundCooldowns={}
+local nextImpactCleanup=0
+local function pruneImpactSounds(now)
+    if now < nextImpactCleanup then return end
+    for id, expires in pairs(impactSoundCooldowns) do
+        if expires <= now then impactSoundCooldowns[id] = nil end
+    end
+    nextImpactCleanup = now + 1
+end
 local function pickFile(category)
     local entry = loaded and assets.sounds[category]
     if not entry or not entry.files or #entry.files == 0 then return nil end
@@ -115,10 +123,14 @@ return {interfaceName='BrutalPlayerFeedback',interface={count=function(category)
     BrutalDynamicObjectImpact = function(e)
         if type(e)~='table' or not e.item or not e.item:isValid() then return end
         local t = core.getRealTime()
+        pruneImpactSounds(t)
         local id = e.item.id
         if impactSoundCooldowns[id] and t < impactSoundCooldowns[id] then return end
         impactSoundCooldowns[id] = t + 0.09
         local vol = math.max(0.20, math.min(0.68, ((e.speed or 45) - 45) / 420 + 0.20))
         cue3d(classifyObjectMaterial(e.item), e.item, vol, math.random(90,110)/100)
     end,
+},engineHandlers={
+    onUpdate=function() pruneImpactSounds(core.getRealTime()) end,
+    onLoad=function() impactSoundCooldowns={};nextImpactCleanup=0 end,
 }}

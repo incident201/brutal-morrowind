@@ -152,6 +152,12 @@ namespace MWLua
                 return MWBase::Environment::get().getWorld()->getPostProcessor()->isTechniqueEnabled(self.mShader);
             };
 
+            shader["setActive"] = [context](const Shader& self, bool active) {
+                context.mLuaManager->addAction([technique = self.mShader, active] {
+                    technique->setActive(active);
+                }, "SetShaderActive");
+            };
+
             shader["name"] = sol::readonly_property(
                 [](const Shader& self) { return getLocalizedMyGUIString(self.mShader->getName()); });
             shader["author"] = sol::readonly_property(

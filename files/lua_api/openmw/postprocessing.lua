@@ -49,6 +49,14 @@
 -- vignetteShader:disable() -- shader will be toggled off
 
 ---
+-- Suspend or resume an enabled shader's passes without rebuilding its render
+-- targets. Suspended shaders retain their resources but issue no draw calls.
+-- Enabling/disabling the shader and its active flag are independent.
+-- @function [parent=#Shader] setActive
+-- @param self
+-- @param #boolean active Whether to render the shader (initially true).
+
+---
 -- Check if the shader is enabled.
 -- @function [parent=#Shader] isEnabled
 -- @param self

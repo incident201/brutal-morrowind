@@ -229,7 +229,7 @@ namespace MWMechanics
             creatureStats.getSpells().add(spell);
 
         // forced update and current value adjustments
-        mActors.updateActor(ptr, 0);
+        mActors.updateActor(ptr, 0.f);
 
         for (int i = 0; i < 3; ++i)
         {

@@ -519,7 +519,8 @@ namespace MWLua
             if (!brutalOptions.contains(name)) throw std::runtime_error("Unknown Brutal option: " + name);
             if (name == "enabled") return brutalOptions.at(name);
             if (!brutalOptions.at("enabled")) return name == "classicFirstPerson" || name == "classicNpcAnimations";
-            if (name == "kickAlwaysRagdoll") return brutalOptions.at("ragdoll") && brutalOptions.at(name);
+            if (name == "kickAlwaysRagdoll" || name == "dismemberment")
+                return brutalOptions.at("ragdoll") && brutalOptions.at(name);
             return brutalOptions.at(name);
         };
         actor["setBrutalOption"] = [context, initialiseOptions](const SelfObject& self, std::string name, bool value) {
@@ -690,7 +691,7 @@ namespace MWLua
                 auto& armed = ptr.getClass().getCreatureStats(ptr).mPowerStrike;
                 if (ptr.getClass().getCreatureStats(ptr).mLastConsumedPowerStrikeToken != token
                     && (armed.token.empty() || armed.token == token))
-                    armed = { token, *it, mult, minimum };
+                    armed = { token, MWWorld::SafePtr(*it), mult, minimum };
             }, "ArmPowerStrike");
         };
         actor["cancelPowerStrike"] = [context](const SelfObject& self, std::string token) {
@@ -748,10 +749,12 @@ namespace MWLua
         };
         actor["getSwordClinchState"] = [lua = context.mLua](const Object& object) {
             const auto& ptr = object.ptr();
+            if (!ptr.getClass().isActor())
+                throw std::runtime_error("getSwordClinchState requires an actor");
             const auto& stats = ptr.getClass().getCreatureStats(ptr);
             sol::table result(lua->unsafeState(), sol::create);
             result["active"] = stats.mBrutalClinchActive;
-            result["pending"] = !stats.mBrutalClinchActive && !stats.mBrutalClinchOpponent.isEmpty();
+            result["pending"] = !stats.mBrutalClinchActive && !stats.mBrutalClinchOpponent.ptrOrEmpty().isEmpty();
             result["id"] = stats.mBrutalClinchId;
             static constexpr std::array<std::string_view, 5> phases{ "idle", "align", "contest", "win", "lose" };
             result["phase"] = phases.at(stats.mBrutalClinchPhase);
@@ -764,7 +767,7 @@ namespace MWLua
             result["group"] = stats.mBrutalClinchPhase == 3 ? "brutal_clinch_win"
                 : stats.mBrutalClinchPhase == 4 ? "brutal_clinch_lose"
                 : stats.mBrutalClinchActive ? "brutal_clinch" : "";
-            if (!stats.mBrutalClinchOpponent.isEmpty()) result["opponent"] = LObject(stats.mBrutalClinchOpponent);
+            if (!stats.mBrutalClinchOpponent.ptrOrEmpty().isEmpty()) result["opponent"] = LObject(stats.mBrutalClinchOpponent.ptrOrEmpty());
             result["lastResultId"] = stats.mBrutalClinchLastResultId;
             result["lastResult"] = stats.mBrutalClinchLastResult;
             result["lastReason"] = stats.mBrutalClinchLastReason;
@@ -889,7 +892,10 @@ namespace MWLua
             return true; // Request queued; the action revalidates current contact conditions.
         };
         actor["getKineticSlide"] = [context](const Object& object) {
-            const auto& stats = object.ptr().getClass().getCreatureStats(object.ptr());
+            const auto& ptr = object.ptr();
+            if (!ptr.getClass().isActor())
+                throw std::runtime_error("getKineticSlide requires an actor");
+            const auto& stats = ptr.getClass().getCreatureStats(ptr);
             sol::table result(context.mLua->unsafeState(), sol::create);
             result["phase"] = stats.mBrutalSlidePhase;
             result["moving"] = stats.mBrutalSliding;

@@ -203,6 +203,7 @@ namespace MWRender
             pos = calculateFirstPersonPosition(recalculatedTrackedPosition);
         }
         cam->setViewMatrixAsLookAt(pos, pos + forward, up);
+        mViewPosition = pos;
         mViewMatrix = cam->getViewMatrix();
         mProjectionMatrix = cam->getProjectionMatrix();
     }

@@ -88,6 +88,21 @@ namespace MWRender::NpcGuardIk
         const auto& b = triangle[1];
         const auto& c = triangle[2];
         const osg::Vec3f ab = b - a, ac = c - a, ap = point - a;
+        if ((ab ^ ac).length2() < 1e-20f)
+        {
+            // Degenerate triangles are segments or points. Handle them before
+            // the barycentric edge tests, which can also divide by zero.
+            const auto onSegment = [&](const osg::Vec3f& start, const osg::Vec3f& end) {
+                const osg::Vec3f edge = end - start;
+                const float length2 = edge.length2();
+                return length2 > 0.f ? start + edge * std::clamp((point - start) * edge / length2, 0.f, 1.f) : start;
+            };
+            osg::Vec3f closest = onSegment(a, b);
+            for (const auto candidate : { onSegment(a, c), onSegment(b, c) })
+                if ((point - candidate).length2() < (point - closest).length2())
+                    closest = candidate;
+            return closest;
+        }
         const float d1 = ab * ap, d2 = ac * ap;
         if (d1 <= 0.f && d2 <= 0.f)
             return a;
@@ -108,7 +123,10 @@ namespace MWRender::NpcGuardIk
         const float va = d3 * d6 - d5 * d4;
         if (va <= 0.f && d4 - d3 >= 0.f && d5 - d6 >= 0.f)
             return b + (c - b) * ((d4 - d3) / ((d4 - d3) + (d5 - d6)));
-        const float inverse = 1.f / (va + vb + vc);
+        const float sum = va + vb + vc;
+        if (std::abs(sum) < 1e-20f)
+            return a;
+        const float inverse = 1.f / sum;
         return a + ab * (vb * inverse) + ac * (vc * inverse);
     }
 

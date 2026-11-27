@@ -1,6 +1,7 @@
 #ifndef OPENMW_COMPONENTS_FX_TECHNIQUE_HPP
 #define OPENMW_COMPONENTS_FX_TECHNIQUE_HPP
 
+#include <atomic>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -40,6 +41,7 @@ namespace Fx
         DispatchNode(const DispatchNode& other, const osg::CopyOp& copyOp = osg::CopyOp::SHALLOW_COPY)
             : mHandle(other.mHandle)
             , mFlags(other.mFlags)
+            , mActive(other.mActive)
             , mRootStateSet(other.mRootStateSet)
         {
             mPasses.reserve(other.mPasses.size());
@@ -96,6 +98,7 @@ namespace Fx
         std::shared_ptr<Fx::Technique> mHandle = nullptr;
 
         FlagsType mFlags = 0;
+        bool mActive = true;
 
         std::vector<SubPass> mPasses;
 
@@ -145,6 +148,10 @@ namespace Fx
         bool setLastModificationTime(std::filesystem::file_time_type timeStamp);
 
         bool isValid() const { return mValid; }
+
+        // Cull-thread state, copied into the frame's dispatch nodes before draw.
+        void setActive(bool active) { mActive.store(active, std::memory_order_relaxed); }
+        bool isActive() const { return mActive.load(std::memory_order_relaxed); }
 
         bool getHDR() const { return mHDR; }
 
@@ -284,6 +291,7 @@ namespace Fx
         Status mStatus;
 
         bool mEnabled;
+        std::atomic<bool> mActive{ true };
 
         std::filesystem::file_time_type mLastModificationTime;
         bool mValid;

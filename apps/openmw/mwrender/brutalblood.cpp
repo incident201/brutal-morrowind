@@ -33,6 +33,7 @@
 #include <osgUtil/IncrementalCompileOperation>
 
 #include <algorithm>
+#include <tuple>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -187,6 +188,33 @@ namespace MWRender
         {
             seed = seed * 1664525u + 1013904223u;
             return float(seed >> 8) / 16777216.f;
+        }
+
+        unsigned maskVariant(std::uint32_t seed)
+        {
+            return (seed >> 1) % 16;
+        }
+
+        std::uint32_t maskSeed(std::uint32_t seed, Mark mark)
+        {
+            // Only footprints use the low bit to distinguish left and right.
+            return ((maskVariant(seed) + 1) * 0x9e3779b9u & ~1u)
+                | (mark == Mark::Footprint ? seed & 1u : 0u);
+        }
+
+        unsigned footprintAmount(float opacity)
+        {
+            return std::clamp(int(std::lround(opacity * 4.f)), 1, 4);
+        }
+
+        std::uint64_t maskKey(const BrutalBlood::Splat& splat)
+        {
+            const bool footprint = splat.mark == Mark::Footprint;
+            return (std::uint64_t(splat.mark) << 32)
+                | (std::uint64_t(footprint ? splat.style : 0u) << 16)
+                | (footprint ? (footprintAmount(splat.opacity) - 1u) << 9 : 0u)
+                | (unsigned(splat.mark == Mark::Pool && splat.porous) << 8)
+                | (maskVariant(splat.seed) << 1) | (footprint ? splat.seed & 1u : 0u);
         }
 
         float textureNoise(float x, float y, std::uint32_t seed)
@@ -348,7 +376,9 @@ namespace MWRender
                         pixel[0] = static_cast<unsigned char>(108.f - 53.f * pigment);
                         pixel[1] = static_cast<unsigned char>(27.f - 18.f * pigment);
                         pixel[2] = static_cast<unsigned char>(23.f - 16.f * pigment);
-                        pixel[3] = static_cast<unsigned char>(255.f * coverage * splat.opacity * (.88f + .12f * grain));
+                        // The quantized amount shapes dry sole patches; exact
+                        // per-stamp opacity is applied once by the vertex color.
+                        pixel[3] = static_cast<unsigned char>(255.f * coverage * (.88f + .12f * grain));
                     }
                     else
                     {
@@ -471,6 +501,7 @@ namespace MWRender
         state->addUniform(new osg::Uniform("bloodDry", dry), flags);
         state->addUniform(new osg::Uniform("bloodFeather", surface == DecalSurface::Weapon), flags);
         state->addUniform(new osg::Uniform("bloodScale", 1.f), flags);
+        state->addUniform(new osg::Uniform("bloodVertexData", false), flags);
         mResourceSystem->getSceneManager()->setUpNormalsRTForStateSet(state, false);
         mResourceSystem->getSceneManager()->recreateShaders(geometry, "blooddecal");
         osg::ref_ptr<osg::StateSet> result = geometry->getStateSet();
@@ -893,7 +924,7 @@ namespace MWRender
                 continue;
             const float grown = poolScale(pool, hour);
             const auto across = pool.normal ^ pool.tangent;
-            const auto mask = poolMask(pool.seed, pool.porous);
+            const auto mask = poolMask(maskSeed(pool.seed, pool.mark), pool.porous);
             float coverage = 0.f;
             for (float foot : { -.29f, 0.f, .29f })
             {
@@ -1077,20 +1108,34 @@ namespace MWRender
             look = state(splat.style, fade, dry);
         else
         {
-            const auto image = makeMask(splat);
-            if (!mProceduralState)
-                mProceduralState = createState(image, 0.f, 0.f, DecalSurface::World);
-            look = new osg::StateSet(*mProceduralState, osg::CopyOp::SHALLOW_COPY);
+            // Sixteen deterministic masks per surface/style replace one texture
+            // per stamp. Opacity and ageing are carried by the batched vertices.
+            auto& cached = mProceduralLooks[maskKey(splat)];
             const auto flags = osg::StateAttribute::ON | osg::StateAttribute::OVERRIDE | osg::StateAttribute::PROTECTED;
-            look->setTextureAttributeAndModes(0, decalTexture(*mResourceSystem, image), flags);
-            built.fade = new osg::Uniform("bloodFade", fade);
-            built.dry = new osg::Uniform("bloodDry", dry);
-            look->addUniform(built.fade, flags);
-            look->addUniform(built.dry, flags);
-            if (splat.mark == Mark::Pool)
+            if (!cached)
             {
-                built.scale = new osg::Uniform("bloodScale", poolScale(splat, hour));
-                look->addUniform(built.scale, flags);
+                Splat mask = splat;
+                mask.seed = maskSeed(splat.seed, splat.mark);
+                mask.opacity = splat.mark == Mark::Footprint ? footprintAmount(splat.opacity) / 4.f : 1.f;
+                const auto image = makeMask(mask);
+                if (!mProceduralState)
+                    mProceduralState = createState(image, 0.f, 0.f, DecalSurface::World);
+                cached = new osg::StateSet(*mProceduralState, osg::CopyOp::SHALLOW_COPY);
+                cached->setTextureAttributeAndModes(0, decalTexture(*mResourceSystem, image), flags);
+                cached->addUniform(new osg::Uniform("bloodVertexData", true), flags);
+            }
+            look = cached;
+            built.procedural = true;
+            built.fade = fade;
+            built.dry = dry;
+            built.opacity = splat.opacity;
+            if (splat.mark == Mark::Pool && poolScale(splat, hour) < 1.f)
+            {
+                // Keep changing UV scale out of the immutable static batches.
+                built.growth = new osg::Uniform("bloodScale", poolScale(splat, hour));
+                osg::ref_ptr<osg::Vec4Array> color = new osg::Vec4Array;
+                color->push_back(osg::Vec4f(fade, dry, splat.opacity, 1.f));
+                geometry->setColorArray(color, osg::Array::BIND_OVERALL);
             }
         }
         if (!look)
@@ -1100,12 +1145,82 @@ namespace MWRender
         transform->setStateSet(look);
         transform->addChild(geometry);
         removeBuilt(splat.id);
-        mSplatRoot->addChild(transform);
         built.node = transform;
+        built.look = look;
+        if (built.growth)
+        {
+            osg::ref_ptr<osg::StateSet> growing = new osg::StateSet(*look, osg::CopyOp::SHALLOW_COPY);
+            growing->addUniform(built.growth,
+                osg::StateAttribute::ON | osg::StateAttribute::OVERRIDE | osg::StateAttribute::PROTECTED);
+            transform->setStateSet(growing);
+            mSplatRoot->addChild(transform);
+        }
+        else
+            mSplatBatchesDirty = true;
         built.fadeLevel = int(std::lround(fade * FadeLevels));
         built.dryLevel = int(std::lround(dry * DryLevels));
         mBuilt.emplace(splat.id, std::move(built));
         ++mBuiltCount;
+    }
+
+    void BrutalBlood::rebuildSplatBatches()
+    {
+        if (!mSplatBatchesDirty) return;
+        // Immutable replacements keep the draw thread's previous VBOs alive.
+        // Spatial cells retain useful culling and precision in large exteriors.
+        struct Batch
+        {
+            osg::ref_ptr<osg::Geometry> geometry = new osg::Geometry;
+            osg::ref_ptr<osg::Vec3Array> positions = new osg::Vec3Array;
+            osg::ref_ptr<osg::Vec2Array> uvs = new osg::Vec2Array;
+            osg::ref_ptr<osg::Vec4Array> colors = new osg::Vec4Array;
+            osg::Vec3f origin;
+            osg::ref_ptr<osg::StateSet> state;
+        };
+        std::map<std::tuple<osg::StateSet*, int, int, int>, Batch> batches;
+        for (const auto& [id, built] : mBuilt)
+        {
+            if (built.growth)
+                continue;
+            const auto* node = static_cast<const osg::MatrixTransform*>(built.node.get());
+            const auto* source = static_cast<const osg::Geometry*>(node->getChild(0));
+            const auto& positions = *static_cast<const osg::Vec3Array*>(source->getVertexArray());
+            const auto& uvs = *static_cast<const osg::Vec2Array*>(source->getTexCoordArray(0));
+            const auto origin = node->getMatrix().getTrans();
+            const int x = int(std::floor(origin.x() / 1024)), y = int(std::floor(origin.y() / 1024)),
+                z = int(std::floor(origin.z() / 1024));
+            auto* state = built.node->getStateSet();
+            auto& batch = batches[{state, x, y, z}];
+            batch.origin.set(x * 1024.f, y * 1024.f, z * 1024.f);
+            batch.state = state;
+            for (std::size_t i = 0; i < positions.size(); ++i)
+            {
+                batch.positions->push_back(positions[i] + osg::Vec3f(origin) - batch.origin);
+                batch.uvs->push_back(uvs[i]);
+                batch.colors->push_back(osg::Vec4f(built.fade, built.dry, built.opacity, 1.f));
+            }
+        }
+        osg::ref_ptr<osg::Group> root = new osg::Group;
+        for (auto& [key, batch] : batches)
+        {
+            auto& geometry = batch.geometry;
+            geometry->setUseDisplayList(false);
+            geometry->setUseVertexBufferObjects(true);
+            geometry->setVertexArray(batch.positions);
+            geometry->setTexCoordArray(0, batch.uvs, osg::Array::BIND_PER_VERTEX);
+            geometry->setColorArray(batch.colors, osg::Array::BIND_PER_VERTEX);
+            geometry->setStateSet(batch.state);
+            geometry->addPrimitiveSet(new osg::DrawArrays(GL_TRIANGLES, 0, batch.positions->size()));
+            osg::ref_ptr<osg::MatrixTransform> node = new osg::MatrixTransform(osg::Matrix::translate(batch.origin));
+            node->addChild(geometry);
+            root->addChild(node);
+        }
+        root->setNodeMask(Mask_Effect);
+        if (mSplatBatches) mSplatRoot->replaceChild(mSplatBatches, root);
+        else mSplatRoot->addChild(root);
+        mSplatBatches = root;
+        mSplatBatchesDirty = false;
+        ++mSplatBatchBuilds;
     }
 
     void BrutalBlood::removeBuilt(std::uint32_t id)
@@ -1113,7 +1228,10 @@ namespace MWRender
         auto found = mBuilt.find(id);
         if (found != mBuilt.end())
         {
-            mSplatRoot->removeChild(found->second.node);
+            if (found->second.growth)
+                mSplatRoot->removeChild(found->second.node);
+            else
+                mSplatBatchesDirty = true;
             mBuilt.erase(found);
         }
         mRetryAt.erase(id);
@@ -1122,6 +1240,8 @@ namespace MWRender
     void BrutalBlood::unloadSplats()
     {
         mSplatRoot->removeChildren(0, mSplatRoot->getNumChildren());
+        mSplatBatches = nullptr;
+        mSplatBatchesDirty = false;
         mBuilt.clear();
         mRetryAt.clear();
     }
@@ -1136,6 +1256,25 @@ namespace MWRender
         mSteps.clear();
         mNextScan = mNextContactScan = mRealTime;
         mLastHour = -1;
+    }
+
+    void BrutalBlood::updatePoolGrowth(const Splat& splat, double hour)
+    {
+        if (splat.mark != Mark::Pool)
+            return;
+        const auto found = mBuilt.find(splat.id);
+        if (found == mBuilt.end() || !found->second.growth)
+            return;
+        auto& built = found->second;
+        const float scale = poolScale(splat, hour);
+        built.growth->set(scale);
+        if (scale >= 1.f)
+        {
+            mSplatRoot->removeChild(built.node);
+            built.node->setStateSet(built.look);
+            built.growth = nullptr;
+            mSplatBatchesDirty = true;
+        }
     }
 
     void BrutalBlood::update(
@@ -1203,12 +1342,13 @@ namespace MWRender
             mSteps.clear();
         }
         for (const auto& splat : mSplats)
-            if (splat.mark == Mark::Pool)
-                if (const auto found = mBuilt.find(splat.id); found != mBuilt.end() && found->second.scale)
-                    found->second.scale->set(poolScale(splat, hour));
+            updatePoolGrowth(splat, hour);
 
         if (mRealTime < mNextScan)
+        {
+            rebuildSplatBatches();
             return;
+        }
         mNextScan = mRealTime + .12f;
         unsigned builds = 0;
         const auto start = std::chrono::steady_clock::now();
@@ -1244,17 +1384,33 @@ namespace MWRender
             const int dryLevel = int(std::lround(dry * DryLevels));
             if (fadeLevel != built->second.fadeLevel || dryLevel != built->second.dryLevel)
             {
-                if (built->second.fade)
+                auto& stamp = built->second;
+                if (stamp.procedural)
                 {
-                    built->second.fade->set(fade);
-                    built->second.dry->set(dry);
+                    stamp.fade = fade;
+                    stamp.dry = dry;
+                    if (stamp.growth)
+                    {
+                        // Ageing is infrequent. Replace the color-bearing
+                        // geometry without touching the draw thread's arrays.
+                        auto* node = static_cast<osg::MatrixTransform*>(stamp.node.get());
+                        auto* previous = static_cast<osg::Geometry*>(node->getChild(0));
+                        osg::ref_ptr<osg::Geometry> next = new osg::Geometry(*previous, osg::CopyOp::SHALLOW_COPY);
+                        osg::ref_ptr<osg::Vec4Array> color = new osg::Vec4Array;
+                        color->push_back(osg::Vec4f(fade, dry, stamp.opacity, 1.f));
+                        next->setColorArray(color, osg::Array::BIND_OVERALL);
+                        node->replaceChild(previous, next);
+                    }
                 }
                 else if (auto* stateSet = state(splat.style, fade, dry))
-                    built->second.node->setStateSet(stateSet);
+                    stamp.node->setStateSet(stateSet);
+                if (!stamp.growth)
+                    mSplatBatchesDirty = true;
                 built->second.fadeLevel = fadeLevel;
                 built->second.dryLevel = dryLevel;
             }
         }
+        rebuildSplatBatches();
     }
 
     std::string BrutalBlood::save() const
@@ -1515,6 +1671,10 @@ namespace MWRender
             { "splatsBuilt", double(mBuilt.size()) }, { "splatsThrown", double(mThrown) },
             { "splatsLanded", double(mLanded) }, { "splatBuilds", double(mBuiltCount) },
             { "splatSlowestMs", mSlowestBuildMs },
+            { "splatBatches", mSplatBatches ? double(mSplatBatches->getNumChildren()) : 0. },
+            { "splatBatchBuilds", double(mSplatBatchBuilds) },
+            { "growingPools", double(std::ranges::count_if(mBuilt, [](const auto& entry) { return entry.second.growth.valid(); })) },
+            { "proceduralMasks", double(mProceduralLooks.size()) },
             { "worldAvailable", sInstance ? 1. : 0. },
             { "weaponAvailable", const_cast<BrutalBlood*>(this)->hasStyle(Style_Slash) ? 1. : 0. } };
         result["pools"] = result["sprayGroups"] = result["footprints"] = 0.;

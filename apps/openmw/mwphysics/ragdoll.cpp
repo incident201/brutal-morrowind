@@ -1305,11 +1305,21 @@ namespace MWPhysics
         osg::Vec3f center, velocity; float mass = 0.f;
         for (size_t i=0; i<mParts.size(); ++i)
         {
-            const float m = 1.f/mParts[i]->mBody->getInvMass(); mass += m;
+            const auto* body = mParts[i]->mBody;
+            const float inverseMass = body->getInvMass();
+            if (inverseMass <= 0.f || body->isStaticOrKinematicObject())
+                continue;
+            const float m = 1.f / inverseMass;
+            mass += m;
             center += Misc::Convert::toOsg(mLastTransforms[i].getOrigin())*m;
             velocity += Misc::Convert::toOsg(mLinearVelocities[i])*m;
         }
-        return {center/mass, velocity/mass, mInheritedVelocity, mInitialCOMVelocity,
+        if (mass > 0.f)
+        {
+            center /= mass;
+            velocity /= mass;
+        }
+        return {center, velocity, mInheritedVelocity, mInitialCOMVelocity,
             mImpulse, mContact, osg::Vec3f(mInitialPoseError, mMaxSpeed, mMaxAngularSpeed)};
     }
 

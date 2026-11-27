@@ -28,7 +28,7 @@ local function equipmentKey(actor)
     return table.concat(parts,';')
 end
 local function newEntry(actor,data)
-    return {velocity=data.velocity,age=0,retry=0,equipment=equipmentKey(actor)}
+    return {velocity=data.velocity,age=0,retry=0,equipment=equipmentKey(actor),fromSave=data.fromSave==true}
 end
 return {
     eventHandlers = {BrutalRagdollDeath = function(data)
@@ -45,6 +45,7 @@ return {
             and not types.Player.objectIsInstance(data.actor) then
             local entry = pending[data.actor] or newEntry(data.actor,data)
             entry.decapitate = true
+            entry.fromSave = data.fromSave == true
             entry.age, entry.retry = 0, 0
             entry.cutDirection = data.cutDirection
             pending[data.actor] = entry
@@ -56,6 +57,7 @@ return {
             and not types.Player.objectIsInstance(data.actor) then
             local entry = pending[data.actor] or newEntry(data.actor,data)
             entry.bisect = true
+            entry.fromSave = data.fromSave == true
             entry.age, entry.retry = 0, 0
             entry.cutDirection = data.cutDirection
             entry.savedPose = data.savedPose
@@ -69,6 +71,7 @@ return {
             and data.mask>=1 and data.mask<=15 and data.mask==math.floor(data.mask) then
             local entry = pending[data.actor] or newEntry(data.actor,data)
             entry.limbs, entry.savedPose = data.mask, data.savedPose
+            entry.fromSave = data.fromSave == true
             entry.age, entry.retry, entry.cutDirection = 0, 0, data.cutDirection
             pending[data.actor] = entry
         end
@@ -87,7 +90,7 @@ return {
                     or not types.Actor.isDead(actor) or entry.age>10 then
                     pending[actor]=nil
                 else
-                local fresh=entry.savedPose==nil or entry.savedPose==''
+                local fresh=not entry.fromSave
                 if fresh and (entry.age>FRESH_WINDOW or equipmentKey(actor)~=entry.equipment) then
                     entry.decapitate,entry.bisect,entry.limbs=nil,nil,nil
                     entry.velocity=util.vector3(0,0,0)

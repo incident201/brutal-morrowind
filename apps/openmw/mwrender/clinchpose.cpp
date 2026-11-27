@@ -231,8 +231,8 @@ namespace MWRender
         const bool contest = stats.mBrutalClinchActive && stats.mBrutalClinchPhase <= 2;
         const bool polearm = hasPolearmViewmodel();
         auto world = MWBase::Environment::get().getWorld();
-        auto* opponent = stats.mBrutalClinchOpponent.isEmpty() ? nullptr
-            : dynamic_cast<NpcAnimation*>(world->getAnimation(stats.mBrutalClinchOpponent));
+        auto* opponent = stats.mBrutalClinchOpponent.ptrOrEmpty().isEmpty() ? nullptr
+            : dynamic_cast<NpcAnimation*>(world->getAnimation(stats.mBrutalClinchOpponent.ptrOrEmpty()));
         const auto playerMatrix = nodeWorld(getWeaponNode());
         const auto opponentMatrix = opponent ? nodeWorld(opponent->getWeaponNode()) : std::nullopt;
         osg::Vec3f correction;

@@ -570,7 +570,7 @@ namespace MWMechanics
         if (mAnimation->isRagdollPose())
             return true;
         auto& stats = mPtr.getClass().getCreatureStats(mPtr);
-        if (stats.isDead() || !stats.mBrutalClinchOpponent.isEmpty())
+        if (stats.isDead() || !stats.mBrutalClinchOpponent.ptrOrEmpty().isEmpty())
             return false;
         // A slight forward slump: the legs give way under the actor's own weight.
         const float yaw = mPtr.getRefData().getPosition().rot[2];
@@ -1696,7 +1696,7 @@ namespace MWMechanics
         // spends the charge only through the ordinary melee receipt.
         const auto& stats = mPtr.getClass().getCreatureStats(mPtr);
         if (mPtr == getPlayer() && stats.mBrutalSlideAttack && !stats.mPowerStrike.token.empty()
-            && stats.mPowerStrike.weapon == mWeapon)
+            && stats.mPowerStrike.weapon.ptrOrEmpty() == mWeapon)
             mAttackStrength = 1.f;
         ESM::WeaponType::Class weapclass = getWeaponType(mWeaponType)->mWeaponClass;
         if (weapclass != ESM::WeaponType::Ranged)
@@ -2026,7 +2026,7 @@ namespace MWMechanics
         const auto& stats = target.getClass().getCreatureStats(target);
         const auto& npcStats = target.getClass().getNpcStats(target);
         if (stats.isDead() || stats.getHealth().getCurrent() <= 0.f || npcStats.isWerewolf()
-            || stats.getKnockedDown() || stats.mBrutalClinchActive || !stats.mBrutalClinchOpponent.isEmpty()
+            || stats.getKnockedDown() || stats.mBrutalClinchActive || !stats.mBrutalClinchOpponent.ptrOrEmpty().isEmpty()
             || stats.mBrutalBackstabVictim)
             return false;
         const auto& seq = stats.getAiSequence();
@@ -2105,7 +2105,7 @@ namespace MWMechanics
         mBackstab.mWeapon = MWWorld::SafePtr(mWeapon);
         auto& stats = mPtr.getClass().getCreatureStats(mPtr);
         stats.mBrutalBackstabPhase = static_cast<int>(mBackstab.mPhase);
-        stats.mBrutalBackstabTarget = target;
+        stats.mBrutalBackstabTarget = MWWorld::SafePtr(target);
         // Keep the last pose until the controller can replace it on the next update.
         playBlendedAnimation(sBackstabIn, Priority_Weapon, MWRender::BlendMask_All,
             false, 1.f, "start", "stop", 0.f, 0);
@@ -2184,11 +2184,11 @@ namespace MWMechanics
         mBackstab.mReleased = false;
 
         playerStats.mBrutalBackstabPhase = static_cast<int>(BrutalBackstabPhase::Executing);
-        playerStats.mBrutalBackstabTarget = victim;
+        playerStats.mBrutalBackstabTarget = MWWorld::SafePtr(victim);
         playerStats.mBrutalBackstabLastDamage = totalDamage;
 
         victimStats.mBrutalBackstabVictim = true;
-        victimStats.mBrutalBackstabTarget = mPtr;
+        victimStats.mBrutalBackstabTarget = MWWorld::SafePtr(mPtr);
         victimStats.mBrutalSilentBackstab = true;
         world->queueMovement(victim, {});
         world->clearActorExternalVelocity(victim);
@@ -2230,7 +2230,7 @@ namespace MWMechanics
         victimStats.mBrutalBackstabVictim = false;
         if (!victimStats.isDead())
         {
-            victimStats.mBrutalBackstabTarget = MWWorld::Ptr();
+            victimStats.mBrutalBackstabTarget = {};
             victimStats.mBrutalSilentBackstab = false;
         }
         if (auto* victimAnim = MWBase::Environment::get().getWorld()->getAnimation(victim))
@@ -2278,7 +2278,7 @@ namespace MWMechanics
         {
             auto& stats = mPtr.getClass().getCreatureStats(mPtr);
             stats.mBrutalBackstabPhase = static_cast<int>(mBackstab.mPhase);
-            stats.mBrutalBackstabTarget = MWWorld::Ptr();
+            stats.mBrutalBackstabTarget = {};
             stats.mBrutalBackstabEyeLift = 0.f;
         }
     }
@@ -2319,13 +2319,18 @@ namespace MWMechanics
             outward = osg::Vec3f(0.f, 0.f, 1.f);
         auto* playerNpc = dynamic_cast<MWRender::NpcAnimation*>(mAnimation);
         const osg::Vec3f contact = backstabContact(victim, playerNpc, step, outward);
-        if (Settings::game().mBrutalBloodEffects)
+        const bool redBlood = victim.get<ESM::NPC>()->mBase->mBloodType == 0;
+        if (Settings::game().mBrutalEnabled && Settings::game().mBrutalBloodEffects && redBlood)
         {
             world->spawnBrutalImpact("blood", contact, outward, 1.8f, true);
-            if (auto* victimNpc = dynamic_cast<MWRender::NpcAnimation*>(world->getAnimation(victim)))
-                victimNpc->addBloodDecal(contact, outward, "stab", true, -1);
         }
-        if (playerNpc && Settings::game().mBrutalWeaponBlood && victim.get<ESM::NPC>()->mBase->mBloodType == 0)
+        if (Settings::game().mBrutalEnabled && Settings::game().mNpcBloodDecals && redBlood)
+        {
+            if (auto* victimNpc = dynamic_cast<MWRender::NpcAnimation*>(world->getAnimation(victim)))
+                if (victimNpc->addBloodDecal(contact, outward, "stab", true, -1))
+                    MWBase::Environment::get().getLuaManager()->storeNpcBloodDecals(victim, victimNpc->getBloodDecalData());
+        }
+        if (playerNpc && Settings::game().mBrutalEnabled && Settings::game().mBrutalWeaponBlood && redBlood)
             playerNpc->addWeaponBlood(contact, "stab", true);
 
         const float hp = victimStats.getHealth().getCurrent();
@@ -2404,7 +2409,7 @@ namespace MWMechanics
             stats.mBrutalBackstabVictim = false;
             return false;
         }
-        const MWWorld::Ptr attacker = stats.mBrutalBackstabTarget;
+        const MWWorld::Ptr attacker = stats.mBrutalBackstabTarget.ptrOrEmpty();
         const bool attackerValid = !attacker.isEmpty() && attacker.isInCell() && attacker.getClass().isActor()
             && !attacker.getClass().getCreatureStats(attacker).isDead()
             && attacker.getClass().getCreatureStats(attacker).mBrutalBackstabPhase
@@ -2439,7 +2444,7 @@ namespace MWMechanics
         auto& playerStats = mPtr.getClass().getCreatureStats(mPtr);
         const auto syncStats = [&] {
             playerStats.mBrutalBackstabPhase = static_cast<int>(mBackstab.mPhase);
-            playerStats.mBrutalBackstabTarget = mBackstab.mVictim.ptrOrEmpty();
+            playerStats.mBrutalBackstabTarget = mBackstab.mVictim;
         };
 
         if (mBackstab.mPhase == BrutalBackstabPhase::Executing)
@@ -3669,7 +3674,7 @@ namespace MWMechanics
             auto& inventory = cls.getInventoryStore(mPtr);
             auto equipped = inventory.getSlot(MWWorld::InventoryStore::Slot_CarriedRight);
             auto& armed = cls.getCreatureStats(mPtr).mPowerStrike;
-            if (equipped == inventory.end() || *equipped != armed.weapon || cls.getCreatureStats(mPtr).isDead())
+            if (equipped == inventory.end() || *equipped != armed.weapon.ptrOrEmpty() || cls.getCreatureStats(mPtr).isDead())
                 armed = {};
         }
 
@@ -4717,7 +4722,7 @@ namespace MWMechanics
     bool CharacterController::stagger(std::string_view preferred)
     {
         if (mPtr.getClass().isActor() && (mPtr.getClass().getCreatureStats(mPtr).mBrutalClinchActive
-                || !mPtr.getClass().getCreatureStats(mPtr).mBrutalClinchOpponent.isEmpty()))
+                || !mPtr.getClass().getCreatureStats(mPtr).mBrutalClinchOpponent.ptrOrEmpty().isEmpty()))
             return false; // The paired animation owns recovery until it releases this actor.
         if (!mAnimation || !mPtr.getClass().isActor() || mPtr == getPlayer()
             || mPtr.getClass().getCreatureStats(mPtr).isDead() || isDead()
@@ -4827,7 +4832,7 @@ namespace MWMechanics
             const auto world = MWBase::Environment::get().getWorld();
             if (target.isEmpty() || !target.getRefData().isEnabled() || !target.getRefData().getBaseNode()
                 || target.getClass().getCreatureStats(target).isDead()
-                || !target.getClass().getCreatureStats(target).mBrutalClinchOpponent.isEmpty()
+                || !target.getClass().getCreatureStats(target).mBrutalClinchOpponent.ptrOrEmpty().isEmpty()
                 || !isInMeleeReach(attacker, target, reach) || !world->isOnGround(attacker)
                 || world->isSwimming(attacker) || world->isFlying(attacker))
                 return std::nullopt;
@@ -4883,7 +4888,7 @@ namespace MWMechanics
         fatigue.setCurrent(fatigue.getCurrent() - cost);
         stats.setFatigue(fatigue);
         mBrutalBowKickTarget = MWWorld::SafePtr(target);
-        mBrutalBowKickWeapon = mWeapon;
+        mBrutalBowKickWeapon = MWWorld::SafePtr(mWeapon);
         mBrutalBowKickReadyAt = brutalSimulationTime() + 10.;
         return true;
     }
@@ -4892,7 +4897,7 @@ namespace MWMechanics
     {
         const auto& stats = mPtr.getClass().getCreatureStats(mPtr);
         const MWWorld::Ptr target = std::exchange(mBrutalBowKickTarget, {}).ptrOrEmpty();
-        const MWWorld::Ptr weapon = std::exchange(mBrutalBowKickWeapon, {});
+        const MWWorld::Ptr weapon = std::exchange(mBrutalBowKickWeapon, {}).ptrOrEmpty();
         if (target.isEmpty() || weapon.isEmpty() || !isBrutalBowKicking() || stats.isDead()
             || stats.isParalyzed() || stats.getKnockedDown() || stats.getDrawState() != DrawState::Weapon)
             return;
@@ -4924,7 +4929,7 @@ namespace MWMechanics
         if (!stagger(group))
             return false;
         mBrutalPickupGroup = group;
-        mBrutalPickupItem = item;
+        mBrutalPickupItem = MWWorld::SafePtr(item);
         mPtr.getClass().getCreatureStats(mPtr).mBrutalPickupTable = group == BrutalPickupTableGroup;
         Log(Debug::Info) << "Brutal pickup: " << mPtr.getCellRef().getRefId() << " plays " << group << " for "
                          << item.getCellRef().getRefId() << " " << height << " units over its feet";
@@ -4933,19 +4938,19 @@ namespace MWMechanics
 
     void CharacterController::updateBrutalPickup()
     {
-        if (mBrutalPickupItem.isEmpty())
+        if (mBrutalPickupItem.ptrOrEmpty().isEmpty())
             return;
         // Another reaction, a knockdown or death replaced the crouch: the item stays where it lies.
         if (!isBrutalPickingUp() || mPtr.getClass().getCreatureStats(mPtr).isDead())
         {
-            mBrutalPickupItem = MWWorld::Ptr();
+            mBrutalPickupItem = {};
             return;
         }
         const float contact = mAnimation->getTextKeyTime(mBrutalPickupGroup + ": pickup contact");
         if (mAnimation->getCurrentTime(mBrutalPickupGroup) < contact)
             return;
-        const MWWorld::Ptr item = mBrutalPickupItem;
-        mBrutalPickupItem = MWWorld::Ptr();
+        const MWWorld::Ptr item = mBrutalPickupItem.ptrOrEmpty();
+        mBrutalPickupItem = {};
         if (!takeBrutalPickup(item))
             Log(Debug::Verbose) << "Brutal pickup by " << mPtr.getCellRef().getRefId() << " found nothing to take";
     }
@@ -4954,7 +4959,7 @@ namespace MWMechanics
     {
         auto world = MWBase::Environment::get().getWorld();
         // The player may have taken or grabbed it, or it fell out of reach during the crouch.
-        if (!item.isInCell() || item.getCellRef().getCount() <= 0 || !item.getRefData().isEnabled()
+        if (item.isEmpty() || !item.isInCell() || item.getCellRef().getCount() <= 0 || !item.getRefData().isEnabled()
             || !item.getRefData().getBaseNode() || world->getHeldObject() == item
             || (item.getRefData().getPosition().asVec3() - mPtr.getRefData().getPosition().asVec3()).length() > 160.f)
             return false;
@@ -5136,7 +5141,7 @@ namespace MWMechanics
                 && (mUpperBodyState == UpperBodyState::AttackWindUp
                     || mUpperBodyState == UpperBodyState::AttackRelease);
             const bool handContactWindow = mBrutalSlideAge < .95f && !stats.mPowerStrike.token.empty()
-                && stats.mPowerStrike.weapon == mWeapon && isBrutalOneHanded(mWeaponType);
+                && stats.mPowerStrike.weapon.ptrOrEmpty() == mWeapon && isBrutalOneHanded(mWeaponType);
             // A front target can stop travel before the held blade lands. Keep
             // that collision in the low pose through the strike. Only supported
             // downhill travel with forward held can extend the ordinary timeout.
@@ -6299,20 +6304,20 @@ namespace MWMechanics
     void CharacterController::updateBrutalWounded()
     {
         auto& stats = mPtr.getClass().getCreatureStats(mPtr);
-        if (!stats.mBrutalWoundedFallAttacker.isEmpty())
+        if (stats.mBrutalWoundedFall.length2() > 0.f)
         {
             const osg::Vec3f push = stats.mBrutalWoundedFall;
-            const MWWorld::Ptr attacker = stats.mBrutalWoundedFallAttacker;
+            const MWWorld::Ptr attacker = stats.mBrutalWoundedFallAttacker.ptrOrEmpty();
             stats.mBrutalWoundedFall = osg::Vec3f();
-            stats.mBrutalWoundedFallAttacker = MWWorld::Ptr();
-            if (!stats.isDead() && !stats.getKnockedDown() && stats.mBrutalClinchOpponent.isEmpty())
+            stats.mBrutalWoundedFallAttacker = {};
+            if (!stats.isDead() && !stats.getKnockedDown() && stats.mBrutalClinchOpponent.ptrOrEmpty().isEmpty())
                 MWBase::Environment::get().getWorld()->applyNpcKick(mPtr, push, attacker, true);
         }
         if (stats.isDead() || mAnimation->isRagdollPose())
             return;
         const bool wounded = isBrutalWoundedNpc(mPtr);
         // A claimed paired animation keeps its pose; the change waits until it ends.
-        if (wounded == mBrutalWounded || stats.mBrutalClinchActive || !stats.mBrutalClinchOpponent.isEmpty())
+        if (wounded == mBrutalWounded || stats.mBrutalClinchActive || !stats.mBrutalClinchOpponent.ptrOrEmpty().isEmpty())
             return;
         mBrutalWounded = wounded;
         if (mAnimation->setBrutalWounded(wounded))
@@ -6322,7 +6327,7 @@ namespace MWMechanics
     void CharacterController::forceStateUpdate()
     {
         if (mPtr.getClass().isActor() && (mPtr.getClass().getCreatureStats(mPtr).mBrutalClinchActive
-                || !mPtr.getClass().getCreatureStats(mPtr).mBrutalClinchOpponent.isEmpty()))
+                || !mPtr.getClass().getCreatureStats(mPtr).mBrutalClinchOpponent.ptrOrEmpty().isEmpty()))
             return; // Equipment/control refreshes must not replace a claimed paired animation.
         if (!mAnimation)
             return;
@@ -6389,6 +6394,7 @@ namespace MWMechanics
     {
         if (mDeathState == CharState_None)
         {
+            cancelBackstab(false);
             cancelGroundFinisher();
             auto& stats = mPtr.getClass().getCreatureStats(mPtr);
             const osg::Vec3f deathPush = std::exchange(stats.mBrutalPlayerDeathPush, {});
@@ -6706,7 +6712,7 @@ namespace MWMechanics
     {
         const auto& stats = mPtr.getClass().getCreatureStats(mPtr);
         return stats.getAttackingOrSpell() && !stats.mBrutalClinchActive
-            && stats.mBrutalClinchOpponent.isEmpty() && !stats.mBrutalClinchReleaseUse;
+            && stats.mBrutalClinchOpponent.ptrOrEmpty().isEmpty() && !stats.mBrutalClinchReleaseUse;
     }
 
     std::string_view CharacterController::getDesiredAttackType() const

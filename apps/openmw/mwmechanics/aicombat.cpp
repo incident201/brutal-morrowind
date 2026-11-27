@@ -259,6 +259,11 @@ namespace MWMechanics
 
     void AiCombat::init() {}
 
+    void AiCombat::clearBrutalPickupClaims()
+    {
+        sBrutalPickupClaims.clear();
+    }
+
     /*
      * Current AiCombat movement states (as of 0.29.0), ignoring the details of the
      * attack states such as CombatMove, Strike and ReadyToAttack:
@@ -557,7 +562,7 @@ namespace MWMechanics
             && health < Settings::game().mBrutalNpcFleeHealthFraction * stats.getHealth().getModified();
         if (storage.isFleeing() || shouldFlee || stats.getKnockedDown() || stats.isParalyzed()
             || characterController.isKnockedDown() || characterController.isKnockedOut() || stats.mBrutalClinchActive
-            || !stats.mBrutalClinchOpponent.isEmpty())
+            || !stats.mBrutalClinchOpponent.ptrOrEmpty().isEmpty())
             return finish(false);
 
         const bool armed = hasWeapon(actor);

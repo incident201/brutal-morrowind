@@ -44,21 +44,21 @@ local rangedDamageMultiplier = { head = 2, body = 1, limb = 0.65 }
 local hasStagger, stagger = pcall(function() return types.Actor.stagger end)
 local heavyStaggers = 0
 
-local function requestDecapitation(velocity, cutDirection)
+local function requestDecapitation(velocity, cutDirection, fromSave)
     if not settings.get('dismemberment') then return end
     core.sendGlobalEvent('BrutalDecapitationDeath', {actor = self, velocity = velocity,
-        cutDirection = cutDirection or util.vector3(0, 0, 0)})
+        cutDirection = cutDirection or util.vector3(0, 0, 0), fromSave=fromSave==true})
 end
-local function requestBisection(velocity, cutDirection, savedPose)
+local function requestBisection(velocity, cutDirection, savedPose, fromSave)
     if not settings.get('dismemberment') then return end
     core.sendGlobalEvent('BrutalBisectionDeath', {actor=self, velocity=velocity,
-        cutDirection=cutDirection or util.vector3(0, 0, 0), savedPose=savedPose or ''})
+        cutDirection=cutDirection or util.vector3(0, 0, 0), savedPose=savedPose or '', fromSave=fromSave==true})
 end
-local function requestLimbs(mask, cutDirection, savedPose)
+local function requestLimbs(mask, cutDirection, savedPose, fromSave)
     if not settings.get('dismemberment') then return end
     core.sendGlobalEvent('BrutalLimbSeveringDeath', {actor=self, mask=mask,
         velocity=util.vector3(0,0,0), cutDirection=cutDirection or util.vector3(0,0,0),
-        savedPose=savedPose or ''})
+        savedPose=savedPose or '', fromSave=fromSave==true})
 end
 local function validLimbMask(mask)
     return type(mask)=='number' and mask>=1 and mask<=15 and mask==math.floor(mask)
@@ -190,7 +190,7 @@ interface.onHit = function(attack)
     currentAttack, selectedArmor = outerAttack, outerArmor
     local healthDamage = (attack.damage or {}).health or 0
     local ranged = attack.sourceType == 'ranged'
-    if (ranged or attack.sourceType == 'melee') and settings.get('adrenalineEnabled')
+    if (ranged or attack.sourceType == 'melee')
         and attack.brutalAttackId and attack.brutalAttackId ~= 0 then
         -- Combat queues damage. Wait for the receipt from the action that actually applied it.
         pendingHits[attack.brutalAttackId] = {attack = attack, age = 0}
@@ -343,7 +343,7 @@ return {
             end
             if restoreLimbs then
                 restoreLimbs=false
-                if limbMask~=0 then requestLimbs(limbMask,nil,limbPose) end
+                if limbMask~=0 then requestLimbs(limbMask,nil,limbPose,true) end
             end
             torsoPoseWait = math.max(0, torsoPoseWait-dt)
             if torsoSelected and torsoPoseWait==0 and type(types.Actor.getTorsoSeveredPoseData)=='function' then
@@ -355,14 +355,14 @@ return {
             end
             if restoreBisection then
                 restoreBisection = false
-                if torsoSelected then requestBisection(util.vector3(0, 0, 0), nil, torsoPoseData) end
+                if torsoSelected then requestBisection(util.vector3(0, 0, 0), nil, torsoPoseData,true) end
             end
             if decapSelected and not types.Actor.isDead(self) then
                 decapSelected, restoreDecapitation, headDone = false, false, false
             end
             if restoreDecapitation then
                 restoreDecapitation = false
-                if decapSelected then requestDecapitation(util.vector3(0, 0, 0)) end
+                if decapSelected then requestDecapitation(util.vector3(0, 0, 0),nil,true) end
             end
             if requestAvailability then
                 requestAvailability = false

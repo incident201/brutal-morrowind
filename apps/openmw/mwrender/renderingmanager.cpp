@@ -1197,7 +1197,7 @@ namespace MWRender
                 // body is outside this ray and another actor stands behind it.
                 std::vector<MWWorld::Ptr> actors;
                 MWBase::Environment::get().getMechanicsManager()->getActorsInRange(
-                    origin, static_cast<float>(Settings::game().mActorsProcessingRange), actors);
+                    origin, std::sqrt(lengthSquared) + 128.f, actors);
                 float closest = result.mHit ? result.mRatio : 1.f;
                 for (const auto& actor : actors)
                 {

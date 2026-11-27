@@ -160,10 +160,10 @@ namespace MWMechanics
         bool mBrutalSprintAnim{ false }; // the current movement clip is the sprint
         bool mBrutalWounded{ false }; // the NPC plays Dark Messiah's wounded clips
         // ACT_GRAB_WEAPON: the world item this NPC takes into its hand at "pickup contact".
-        MWWorld::Ptr mBrutalPickupItem;
+        MWWorld::SafePtr mBrutalPickupItem;
         std::string mBrutalPickupGroup; // the crouch from the ground or the reach to a table
         MWWorld::SafePtr mBrutalBowKickTarget;
-        MWWorld::Ptr mBrutalBowKickWeapon;
+        MWWorld::SafePtr mBrutalBowKickWeapon;
         double mBrutalBowKickReadyAt = 0.;
         float mBrutalStepPhase{ 0.f }; // player footstep clock, a fraction of the leg cycle
         int mBrutalStepGait{ 0 }; // BrutalFootsteps::Gait of the last player step

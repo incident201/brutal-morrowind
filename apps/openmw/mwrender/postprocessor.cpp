@@ -326,8 +326,9 @@ namespace MWRender
             mStateUpdater->setFrameNumber(static_cast<int>(stamp->getFrameNumber()));
             mLastSimulationTime = stamp->getSimulationTime();
 
-            for (const auto& dispatchNode : mCanvases[frameId]->getPasses())
+            for (auto& dispatchNode : mCanvases[frameId]->getPasses())
             {
+                dispatchNode.mActive = dispatchNode.mHandle->isActive();
                 for (auto& uniform : dispatchNode.mHandle->getUniformMap())
                 {
                     if (uniform->getType().has_value() && !uniform->mSamplerType)
@@ -582,6 +583,7 @@ namespace MWRender
             Fx::DispatchNode node;
 
             node.mFlags = technique->getFlags();
+            node.mActive = technique->isActive();
 
             if (technique->getHDR())
                 mHDR = true;

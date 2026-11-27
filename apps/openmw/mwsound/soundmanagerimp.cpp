@@ -4,6 +4,7 @@
 #include <map>
 #include <numeric>
 #include <sstream>
+#include <unordered_map>
 
 #include <osg/Matrixf>
 
@@ -621,10 +622,14 @@ namespace MWSound
             { "Brutal Backstab Voice Female", "backstab_voice_female", 2, { .85f, 1.f }, { .96f, 1.04f }, "Health Damage" },
             { "Brutal Backstab Voice Orc", "backstab_voice_orc", 2, { .85f, 1.f }, { .96f, 1.04f }, "Health Damage" },
         };
-        const Replacement* replacement = nullptr;
-        for (const Replacement& candidate : replacements)
-            if (soundId == ESM::RefId::stringRefId(candidate.mSoundId))
-                replacement = &candidate;
+        static const auto replacementById = [] {
+            std::unordered_map<ESM::RefId, const Replacement*> result;
+            for (const auto& candidate : replacements)
+                result.emplace(ESM::RefId::stringRefId(candidate.mSoundId), &candidate);
+            return result;
+        }();
+        const auto found = replacementById.find(soundId);
+        const Replacement* replacement = found == replacementById.end() ? nullptr : found->second;
         if (!replacement || (!allowOrdinaryReplacements && !replacement->mRangeFrom))
             return nullptr;
 

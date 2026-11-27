@@ -445,14 +445,15 @@ namespace MWPhysics
             constexpr btScalar gravity = 627.2f, linearDrag = 2.2f, angularDrag = 3.f;
             for (const auto& [body, density] : mWaterBodies)
             {
-                if (!body->isActive()) continue;
+                const btScalar inverseMass = body->getInvMass();
+                if (!body->isActive() || inverseMass <= 0 || body->isStaticOrKinematicObject()) continue;
                 btVector3 lo, hi;
                 body->getCollisionShape()->getAabb(body->getWorldTransform(), lo, hi);
                 const btScalar height = hi.z() - lo.z();
                 const btScalar submerged = height > 1e-3f
                     ? btClamped((btScalar(mConfig.waterHeight) - lo.z()) / height, btScalar(0), btScalar(1)) : btScalar(0);
                 if (submerged <= 0) continue;
-                body->applyCentralImpulse(btVector3(0, 0, gravity * dt * submerged / (density * body->getInvMass())));
+                body->applyCentralImpulse(btVector3(0, 0, gravity * dt * submerged / (density * inverseMass)));
                 body->setLinearVelocity(body->getLinearVelocity() * btExp(-linearDrag * submerged * dt));
                 body->setAngularVelocity(body->getAngularVelocity() * btExp(-angularDrag * submerged * dt));
             }

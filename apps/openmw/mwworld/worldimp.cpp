@@ -1383,7 +1383,7 @@ namespace MWWorld
         if (ptr.getClass().isActor())
         {
             const auto& stats = ptr.getClass().getCreatureStats(ptr);
-            if (!stats.mBrutalClinchOpponent.isEmpty() && !stats.mBrutalClinchApplyingLossDamage)
+            if (!stats.mBrutalClinchOpponent.ptrOrEmpty().isEmpty() && !stats.mBrutalClinchApplyingLossDamage)
                 return;
         }
         if (auto* actor = mPhysics->getActor(ptr); actor && actor->isActive() && actor->getCollisionMode())
@@ -1659,14 +1659,14 @@ namespace MWWorld
     bool World::applyNpcKick(const Ptr& ptr, const osg::Vec3f& kick, const Ptr& attacker, bool knockDown, bool slideTrip)
     {
         if (!ptr.isEmpty() && ptr.getClass().isActor()
-            && !ptr.getClass().getCreatureStats(ptr).mBrutalClinchOpponent.isEmpty())
+            && !ptr.getClass().getCreatureStats(ptr).mBrutalClinchOpponent.ptrOrEmpty().isEmpty())
             return false;
         return mPhysics->applyNpcKick(ptr,kick,attacker,false,knockDown,slideTrip);
     }
     bool World::applyNpcSuperKick(const Ptr& ptr, const osg::Vec3f& kick, const Ptr& attacker, std::uint64_t kickId)
     {
         if (!ptr.isEmpty() && ptr.getClass().isActor()
-            && !ptr.getClass().getCreatureStats(ptr).mBrutalClinchOpponent.isEmpty())
+            && !ptr.getClass().getCreatureStats(ptr).mBrutalClinchOpponent.ptrOrEmpty().isEmpty())
             return false;
         return mPhysics->applyNpcSuperKick(ptr,kick,attacker,kickId);
     }
@@ -2106,7 +2106,7 @@ namespace MWWorld
             return false;
         if (throwSpeed > 0.f)
         {
-            mHeldThrow = HeldThrow{ mPhysics->getHeldObject(), eyePos, throwDir, throwSpeed, adrenaline };
+            mHeldThrow = HeldThrow{ SafePtr(mPhysics->getHeldObject()), throwDir, throwSpeed, adrenaline };
             return true;
         }
         mHeldThrow.reset();
@@ -2468,7 +2468,8 @@ namespace MWWorld
             ? (corpse ? corpse->getDetachedFragmentNodes(fragment) : std::vector<osg::Node*>())
             : std::vector<osg::Node*>{ node };
         if (!node || !item.getRefData().isEnabled() || !item.isInCell() || !player.isInCell()
-            || item.getCell() != player.getCell() || !isFirstPerson() || nodes.empty())
+            || item.getCell()->getCell()->getWorldSpace() != player.getCell()->getCell()->getWorldSpace()
+            || !isFirstPerson() || nodes.empty())
         {
             clearHeldVisual();
             mHeldThrow.reset();
@@ -2480,7 +2481,7 @@ namespace MWWorld
             osg::Vec3f position;
             osg::Quat rotation;
             bool lifted = false;
-            const osg::Vec3f eye = osg::Matrixf::inverse(camera->getViewMatrix()).getTrans();
+            const osg::Vec3f eye(camera->getViewPosition());
             const auto sweep = [&](const osg::Vec3f& from, const osg::Vec3f& to, const osg::Quat& orientation) {
                 return mPhysics->sweepHeldObject(from, to, orientation);
             };
@@ -2510,7 +2511,7 @@ namespace MWWorld
                 }
             }
         }
-        if (!mHeldThrow || mHeldThrow->item != item)
+        if (!mHeldThrow || mHeldThrow->item.ptrOrEmpty() != item)
         {
             mHeldThrow.reset();
             return;
@@ -2527,7 +2528,8 @@ namespace MWWorld
         clearHeldVisual();
         const auto aim = osg::Quat(camera->getPitch(), osg::Vec3f(1, 0, 0))
             * osg::Quat(camera->getYaw(), osg::Vec3f(0, 0, 1));
-        mPhysics->releaseHeldObject(player, mHeldThrow->eye,
+        const osg::Vec3f eye(camera->getViewPosition());
+        mPhysics->releaseHeldObject(player, eye,
             atRelease ? aim * osg::Vec3f(0, 1, 0) : mHeldThrow->direction,
             mHeldThrow->speed, mHeldThrow->adrenaline);
         mHeldThrow.reset();

@@ -85,7 +85,7 @@ namespace MWRender
         {
             const auto& node = mPasses[i];
 
-            if (mMask & node.mFlags)
+            if (!node.mActive || (mMask & node.mFlags))
                 continue;
 
             filtered.push_back(i);

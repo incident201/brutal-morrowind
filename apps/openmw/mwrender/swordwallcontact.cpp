@@ -53,6 +53,52 @@ namespace MWRender
             {
                 setTraversalMask(~(Mask_UpdateVisitor | Mask_Effect | Mask_ParticleSystem));
             }
+            void limitSamples()
+            {
+                // Keep real material edges, including all six coordinate
+                // extrema. Dense replacement meshes must not make every swing
+                // trace tens of thousands of almost identical segments.
+                constexpr std::size_t limit = 64;
+                if (edges.size() <= limit)
+                    return;
+                std::vector<std::pair<osg::Vec3f, osg::Vec3f>> selected;
+                std::vector<bool> used(edges.size(), false);
+                std::vector<float> distance(edges.size(), std::numeric_limits<float>::infinity());
+                const auto take = [&](std::size_t index) {
+                    if (used[index]) return;
+                    used[index] = true;
+                    const auto edge = edges[index];
+                    selected.push_back(edge);
+                    for (std::size_t i = 0; i < edges.size(); ++i)
+                    {
+                        const auto center = (edges[i].first + edges[i].second) * .5f;
+                        distance[i] = std::min(distance[i], std::min((center - edge.first).length2(),
+                            (center - edge.second).length2()));
+                    }
+                };
+                for (unsigned axis = 0; axis < 3; ++axis)
+                    for (const float sign : { -1.f, 1.f })
+                    {
+                        std::size_t best = 0;
+                        float support = -std::numeric_limits<float>::infinity();
+                        for (std::size_t i = 0; i < edges.size(); ++i)
+                        {
+                            const float value = std::max(edges[i].first[axis] * sign, edges[i].second[axis] * sign);
+                            if (value > support) { support = value; best = i; }
+                        }
+                        take(best);
+                    }
+                while (selected.size() < limit)
+                {
+                    std::size_t best = edges.size();
+                    float farthest = -1.f;
+                    for (std::size_t i = 0; i < edges.size(); ++i)
+                        if (!used[i] && distance[i] > farthest) { best = i; farthest = distance[i]; }
+                    if (best == edges.size()) break;
+                    take(best);
+                }
+                edges = std::move(selected);
+            }
             void apply(osg::Geometry& geometry) override
             {
                 const auto* array = dynamic_cast<const osg::Vec3Array*>(geometry.getVertexArray());
@@ -78,7 +124,10 @@ namespace MWRender
                             continue;
                         if (a > b)
                             std::swap(a, b);
-                        if (unique.emplace(a, b).second)
+                        const auto finite = [](const osg::Vec3f& point) {
+                            return std::isfinite(point.x()) && std::isfinite(point.y()) && std::isfinite(point.z());
+                        };
+                        if (finite(points[a]) && finite(points[b]) && unique.emplace(a, b).second)
                             edges.emplace_back(points[a], points[b]);
                     }
             }
@@ -392,6 +441,7 @@ namespace MWRender
             {
                 BladeMeshVisitor mesh(node);
                 node->accept(mesh);
+                mesh.limitSamples();
                 weapon.tip = mesh.tip;
                 weapon.base = 0.f;
                 const auto vertex = [&](const osg::Vec3f& point) {
@@ -617,8 +667,9 @@ namespace MWRender
                 const float penalty = std::max(required - budget, 0.f) * 10.f
                     + std::max(minimumDepth - nearest, 0.f) * 20.f + reachPenalty * 40.f;
                 if (penalty < bestPenalty
-                    || ((shortBlade || pairedGrasp) && penalty < .001f && bestPenalty < .001f
-                        && movement < bestMovement))
+                    || (penalty < .001f && bestPenalty < .001f
+                        && ((shortBlade || pairedGrasp) ? movement < bestMovement
+                            : std::abs(degrees) < std::abs(selectedDegrees))))
                 {
                     bestPenalty = penalty;
                     bestMovement = movement;
@@ -628,24 +679,41 @@ namespace MWRender
                     selectedRequired = required;
                     selectedDepth = nearest;
                 }
-                return penalty < .001f;
+                return std::pair(penalty, shortBlade || pairedGrasp ? movement : float(std::abs(degrees)));
             };
-            for (int option = 0; option <= 360; ++option)
+            const auto search = [&](const osg::Vec3f& foldAxis, float budget, int center) {
+                std::array<int, 2> coarseBest{ -91, 91 };
+                const std::pair<float, float> worst{ std::numeric_limits<float>::infinity(),
+                    std::numeric_limits<float>::infinity() };
+                std::array<std::pair<float, float>, 2> score{ worst, worst };
+                // Coarse sweep followed by one-degree local refinement. The
+                // previous fold is an exact candidate, keeping recoil stable.
+                for (int option = 0; option <= 36; ++option)
+                {
+                    const int magnitude = ((option + 1) / 2) * 10;
+                    const int degrees = center + (option % 2 ? magnitude : -magnitude);
+                    if (std::abs(degrees) > 90) continue;
+                    const auto candidate = consider(foldAxis, degrees, budget);
+                    const unsigned side = degrees < 0 ? 0 : 1;
+                    if (candidate < score[side]) { score[side] = candidate; coarseBest[side] = degrees; }
+                }
+                // Equal coarse fits on opposite sides can hide different
+                // one-degree minima. Refine both signs rather than whichever
+                // happened to be visited first.
+                for (const int coarse : coarseBest)
+                    if (std::abs(coarse) <= 90)
+                        for (int delta = -9; delta <= 9; ++delta)
+                            if (delta && std::abs(coarse + delta) <= 90)
+                                consider(foldAxis, coarse + delta, budget);
+            };
+            if (axisLength >= .01f)
+                search(axis, maximumWithdrawal, !fresh && weapon.recoilFoldValid ? weapon.recoilFoldDegrees : 0);
+            else
+                consider(axis, 0, maximumWithdrawal);
+            if (bestPenalty > .001f && axisLength >= .01f)
             {
-                const int magnitude = (option + 1) / 2;
-                const int center = !fresh && weapon.recoilFoldValid ? weapon.recoilFoldDegrees : 0;
-                const int degrees = center + (option % 2 ? magnitude : -magnitude);
-                if (std::abs(degrees) > 90)
-                    continue;
-                if (degrees && axisLength < .01f)
-                    break;
-                if (consider(axis, degrees, maximumWithdrawal))
-                    break;
-            }
-            if ((shortBlade || pairedGrasp) && bestPenalty > .001f && axisLength >= .01f)
-            {
-                // The sword's up/down fold can be blocked by the eye plane during
-                // an overhead short-blade return. Search the other stable fold
+                // The primary fold can be blocked by the eye plane, including
+                // an ordinary longsword alongside a sloping wall. Search other
                 // planes, accepting only full mesh clearance AND actual near depth.
                 // Prefer the feasible correction with least material displacement.
                 osg::Vec3f crossAxis = bladeDirection ^ axis;
@@ -658,15 +726,12 @@ namespace MWRender
                 // first fold, while the old 32-unit budget left visible penetration.
                 // Try all additional planes within 32 first, expanding to 48 only
                 // if none clears both the real wall and the real eye plane.
-                for (const float budget : { 32.f, 48.f })
+                const std::array<float, 2> budgets{
+                    maximumWithdrawal, shortBlade || pairedGrasp ? 48.f : 24.f };
+                for (const float budget : budgets)
                 {
-                    for (unsigned plane = budget == 32.f ? 1u : 0u; plane < axes.size(); ++plane)
-                        for (int option = 1; option <= 180; ++option)
-                        {
-                            const int magnitude = (option + 1) / 2;
-                            const int degrees = option % 2 ? magnitude : -magnitude;
-                            consider(axes[plane], degrees, budget);
-                        }
+                    for (unsigned plane = budget == maximumWithdrawal ? 1u : 0u; plane < axes.size(); ++plane)
+                        search(axes[plane], budget, 0);
                     if (bestPenalty < .001f)
                         break;
                 }
@@ -768,8 +833,8 @@ namespace MWRender
             buckets.push_back(bucket);
         };
         osg::Matrixf p = previous;
-        // Retain every original mesh edge and vertex trajectory, in its
-        // original order. Bounds only select possible exact triangle hits.
+        // Sweep the cached material samples; broad-phase bounds only select
+        // candidates and the renderer still certifies each actual contact.
         for (const auto& [i, j] : weapon.edges)
             add(weapon.vertices[i] * previous, weapon.vertices[j] * previous, 0.f, 0.f, false,
                 weapon.vertices[i], weapon.vertices[j], 0);

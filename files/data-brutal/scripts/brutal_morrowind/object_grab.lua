@@ -99,7 +99,7 @@ local function aimVectors()
 end
 
 local function canGrab(obj)
-    if not obj or not obj:isValid() or not obj.enabled or obj.cell ~= self.cell then return false end
+    if not obj or not obj:isValid() or not obj.enabled or not obj.cell or not obj.cell:isInSameSpace(self) then return false end
     return type(types.Actor.canHoldObject) == 'function' and types.Actor.canHoldObject(obj)
 end
 
@@ -306,7 +306,7 @@ local function onUpdate(dt)
 
     -- Picking, holding, or raising: the engine publishes the evaluated grip.
     local target = heldItem or requestedItem
-    if not target or not target:isValid() or not target.enabled or target.cell ~= self.cell then
+    if not target or not target:isValid() or not target.enabled or not target.cell or not target.cell:isInSameSpace(self) then
         startDrop(true)
         return
     end

@@ -127,8 +127,8 @@ end
 
 -- Both a foot strike and slide contact use the same hit and native launch receipt.
 -- Only the slide requests an unconditional ordinary knockdown on level ground.
-local function strikeActor(target, direction, slide)
-    payKick(C.kickStaminaNpc)
+local function strikeActor(target, direction, slide, chargeStamina)
+    if not slide or chargeStamina then payKick(C.kickStaminaNpc) end
     local superKickId
     -- A slide only trips; its adrenaline is reserved for the sword finisher.
     if not slide and superKickAvailable and I.BrutalAdrenaline then
@@ -156,7 +156,8 @@ end
 local METAL = {'iron', 'steel', 'silver', 'ebony', 'dwemer', 'dwarven', 'daedric', 'adamantium', 'orcish'}
 local function shieldSound()
     local shield = types.Actor.getEquipment(self)[types.Actor.EQUIPMENT_SLOT.CarriedLeft]
-    local name = shield and (shield.recordId .. ' ' .. (types.Armor.record(shield).model or '')):lower() or ''
+    if not shield or not types.Armor.objectIsInstance(shield) then return nil end
+    local name = (shield.recordId .. ' ' .. (types.Armor.record(shield).model or '')):lower()
     for _, family in ipairs(METAL) do
         if name:find(family, 1, true) then return 'Brutal Shield Metal' end
     end
@@ -311,10 +312,15 @@ return {
         version = 1,
         kick = tryKick,
         bash = tryBash,
-        slideHit = function(target, direction)
+        slideHit = function(target, direction, chargeStamina)
             if not settings.get('slideEnabled') or not sliding() or not target or not target:isValid() or types.Actor.isDead(target)
                 or not types.Actor.objectIsInstance(target) or direction:length() < .01 then return false end
-            strikeActor(target, direction:normalize(), true)
+            chargeStamina = chargeStamina ~= false
+            if chargeStamina and settings.get('staminaEnabled') then
+                local fatigue = types.Actor.stats.dynamic.fatigue(self)
+                if fatigue.current < fatigue.base * C.kickStaminaNpc / C.staminaMax then return false end
+            end
+            strikeActor(target, direction:normalize(), true, chargeStamina)
             return true
         end,
         status = function() return {cooldown = cooldown, result = lastResult, strikes = strikes,

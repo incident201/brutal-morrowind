@@ -138,8 +138,8 @@ namespace MWMechanics
         }
         // Claim both actors at the contact callback. Ordinary combat cannot steal
         // the pending pair before its authored animation starts next update.
-        player.getClass().getCreatureStats(player).mBrutalClinchOpponent = opponent;
-        opponent.getClass().getCreatureStats(opponent).mBrutalClinchOpponent = player;
+        player.getClass().getCreatureStats(player).mBrutalClinchOpponent = MWWorld::SafePtr(opponent);
+        opponent.getClass().getCreatureStats(opponent).mBrutalClinchOpponent = MWWorld::SafePtr(player);
         // Deliberately defer animation changes until the next actor update. This
         // request is called inside the opponent's running melee text-key callback.
         return true;
@@ -154,6 +154,9 @@ namespace MWMechanics
         };
         if (!mSwordClinch)
             return invalid("missing_session");
+        if (!Settings::game().mBrutalEnabled || !Settings::game().mBrutalClinch
+            || !Settings::game().mDarkMessiahSwordParry)
+            return invalid("settings");
         const auto& session = *mSwordClinch;
         auto world = MWBase::Environment::get().getWorld();
         for (const MWWorld::Ptr& actor : { session.player, session.opponent })
@@ -238,7 +241,7 @@ namespace MWMechanics
             auto& stats = actor.getClass().getCreatureStats(actor);
             stats.mBrutalClinchActive = true;
             stats.mBrutalClinchId = session.id;
-            stats.mBrutalClinchOpponent = actor == session.player ? session.opponent : session.player;
+            stats.mBrutalClinchOpponent = MWWorld::SafePtr(actor == session.player ? session.opponent : session.player);
             stats.mBrutalClinchPhase = session.phase;
             stats.mBrutalClinchClicks = session.clicks;
             stats.mBrutalClinchTarget = session.requiredClicks;
@@ -297,9 +300,7 @@ namespace MWMechanics
 
     void Actors::cancelSwordClinch(const MWWorld::Ptr& participant, std::string_view reason)
     {
-        // Gameplay events never cancel an accepted contest. Scene teardown
-        // still releases references when an actor is actually removed.
-        if (reason == "removed" && mSwordClinch
+        if (mSwordClinch
             && (participant == mSwordClinch->player || participant == mSwordClinch->opponent))
             finishSwordClinch(reason);
     }
@@ -308,20 +309,14 @@ namespace MWMechanics
     {
         if (!mSwordClinch)
             return;
+        std::string reason;
+        if (!validSwordClinch(false, &reason))
+        {
+            finishSwordClinch(reason);
+            return;
+        }
         if (paused || MWBase::Environment::get().getWindowManager()->isGuiMode())
             return;
-        // Eligibility was decided by the parry. Once accepted, only Attack
-        // presses and the original animation deadline decide its outcome.
-        for (const auto& actor : { mSwordClinch->player, mSwordClinch->opponent })
-        {
-            const auto it = mIndex.find(actor.mRef);
-            if (it == mIndex.end() || it->second->isInvalid() || !actor.isInCell()
-                || !actor.getRefData().isEnabled() || !actor.getRefData().getBaseNode())
-            {
-                finishSwordClinch("actor_unavailable");
-                return;
-            }
-        }
         auto& session = *mSwordClinch;
         auto world = MWBase::Environment::get().getWorld();
         auto& playerController = mIndex.at(session.player.mRef)->getCharacterController();

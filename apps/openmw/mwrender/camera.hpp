@@ -97,6 +97,8 @@ namespace MWRender
 
         osg::Vec3d getTrackedPosition() const { return mTrackedPosition; }
         const osg::Vec3d& getPosition() const { return mPosition; }
+        // Final eye position after this frame's first-person animation correction.
+        const osg::Vec3d& getViewPosition() const { return mViewPosition; }
         void setStaticPosition(const osg::Vec3d& pos);
 
         bool isVanityOrPreviewModeEnabled() const { return mMode == Mode::Vanity || mMode == Mode::Preview; }
@@ -148,6 +150,7 @@ namespace MWRender
         float mExtraPitch = 0, mExtraYaw = 0, mExtraRoll = 0;
         bool mLockPitch = false, mLockYaw = false;
         osg::Vec3d mPosition;
+        osg::Vec3d mViewPosition;
         osg::Matrixf mViewMatrix;
         osg::Matrixf mProjectionMatrix;
 

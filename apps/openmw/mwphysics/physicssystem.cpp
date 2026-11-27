@@ -484,9 +484,18 @@ namespace MWPhysics
 
     void PhysicsSystem::remove(const MWWorld::Ptr& ptr)
     {
-        if (ptr == mHeldObject)
-            mHeldObject = MWWorld::Ptr();
         stopNpcRagdoll(ptr);
+        if (ptr == mHeldObject)
+        {
+            mHeldObject = {};
+            mHeldFragment = 0;
+        }
+        for (auto& [ref, source] : mSuperKickSources)
+            if (source.attacker == ptr) source.attacker = {};
+        for (auto& [ref, watch] : mKickWatches)
+            if (watch.attacker == ptr) watch.attacker = {};
+        for (auto& [ref, push] : mPushRagdolls)
+            if (push.attacker == ptr) push.attacker = {};
         mKickWatches.erase(ptr.mRef);
         mRagdollAnimation.erase(ptr.mRef);
         if (auto foundObject = mObjects.find(ptr.mRef); foundObject != mObjects.end())
@@ -521,6 +530,10 @@ namespace MWPhysics
         }
         for (auto& [ref, source] : mSuperKickSources)
             if (source.attacker == old) source.attacker = updated;
+        for (auto& [ref, watch] : mKickWatches)
+            if (watch.attacker == old) watch.attacker = updated;
+        for (auto& [ref, push] : mPushRagdolls)
+            if (push.attacker == old) push.attacker = updated;
         if (old.mRef != updated.mRef)
             if (auto sample = mRagdollAnimation.extract(old.mRef); !sample.empty())
             { sample.key() = updated.mRef; mRagdollAnimation.insert(std::move(sample)); }
@@ -962,6 +975,11 @@ namespace MWPhysics
 
     void PhysicsSystem::stopNpcRagdoll(const MWWorld::Ptr& ptr)
     {
+        if (ptr == mHeldObject && (mHeldFragment != 0 || mRagdolls.contains(ptr.mRef)))
+        {
+            mHeldObject = {};
+            mHeldFragment = 0;
+        }
         mSuperKickSources.erase(ptr.mRef);
         mSuperKickVictims.erase(ptr.mRef);
         const auto found = mRagdolls.find(ptr.mRef);
@@ -2446,7 +2464,7 @@ namespace MWPhysics
             || !hit.victim.getClass().isActor() || hit.victim == hit.attacker)
             return result;
         auto& stats = hit.victim.getClass().getCreatureStats(hit.victim);
-        if (!stats.mBrutalClinchOpponent.isEmpty())
+        if (!stats.mBrutalClinchOpponent.ptrOrEmpty().isEmpty())
             return result;
 
         if (const auto ragIt = mRagdolls.find(hit.victim.mRef); ragIt != mRagdolls.end())

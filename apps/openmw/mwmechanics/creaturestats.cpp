@@ -562,6 +562,13 @@ namespace MWMechanics
     void CreatureStats::readState(const ESM::CreatureStats& state)
     {
         mBrutalPlayerDeathPush = {};
+        mBrutalWoundedFall = {};
+        mBrutalWoundedFallAttacker = {};
+        mBrutalChargedBlowBy = {};
+        mBrutalBackstabTarget = {};
+        mBrutalBackstabPhase = 0;
+        mBrutalBackstabVictim = mBrutalSilentBackstab = false;
+        mBrutalBackstabEyeLift = 0.f;
         mPowerStrike = {};
         mLastConsumedPowerStrikeToken.clear();
         mBrutalAdrenalineEffectActive = false;

@@ -123,6 +123,7 @@ namespace MWMechanics
         explicit AiCombat(const ESM::AiSequence::AiCombat* combat);
 
         void init();
+        static void clearBrutalPickupClaims();
 
         bool execute(const MWWorld::Ptr& actor, CharacterController& characterController, AiState& state,
             float duration) override;

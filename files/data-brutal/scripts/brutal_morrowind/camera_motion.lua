@@ -245,7 +245,7 @@ local function actionSample()
             local weight=0
             if not polearm then
                 local stop=animation.getTextKeyTime(self,GROUND_FINISHER..': stop')
-                local fade=math.max(0,math.min(1,math.min(groundTime,stop-groundTime)/.30))
+                local fade=stop and math.max(0,math.min(1,math.min(groundTime,stop-groundTime)/.30)) or 0
                 weight=fade*fade*(3-2*fade)
             end
             return {motion[1]*(polearm and .85 or .55),motion[2]*.55,motion[3],

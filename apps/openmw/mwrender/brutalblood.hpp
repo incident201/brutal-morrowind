@@ -206,6 +206,8 @@ namespace MWRender
         float poolScale(const Splat& splat, double hour) const;
         void buildSplat(const Splat& splat);
         void removeBuilt(std::uint32_t id);
+        void rebuildSplatBatches();
+        void updatePoolGrowth(const Splat& splat, double hour);
         osg::StateSet* state(unsigned style, float fade, float dry, bool weapon = false);
         enum class DecalSurface
         {
@@ -231,10 +233,18 @@ namespace MWRender
         struct Built
         {
             osg::ref_ptr<osg::Node> node;
-            osg::ref_ptr<osg::Uniform> fade, dry, scale;
+            osg::ref_ptr<osg::StateSet> look;
+            // Only a growing pool owns a uniform and a separate scene node.
+            osg::ref_ptr<osg::Uniform> growth;
+            float fade = 0.f, dry = 0.f;
+            bool procedural = false;
             int fadeLevel = -1, dryLevel = -1;
+            float opacity = 1.f;
         };
         osg::ref_ptr<osg::StateSet> mProceduralState;
+        std::map<std::uint64_t, osg::ref_ptr<osg::StateSet>> mProceduralLooks;
+        osg::ref_ptr<osg::Group> mSplatBatches;
+        bool mSplatBatchesDirty = false;
         std::map<std::uint32_t, Built> mBuilt;
         std::map<std::uint32_t, float> mRetryAt;
         std::uint32_t mNextId = 1;
@@ -243,6 +253,7 @@ namespace MWRender
         float mRealTime = 0, mNextScan = 0, mNextContactScan = 0;
         double mLastHour = -1, mElapsedHours = 0, mSlowestBuildMs = 0;
         std::uint64_t mThrown = 0, mLanded = 0, mBuiltCount = 0, mWeaponAdds = 0;
+        std::uint64_t mSplatBatchBuilds = 0;
     };
 }
 

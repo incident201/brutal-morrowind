@@ -765,7 +765,8 @@ namespace MWLua
     {
         const bool rangedContact
             = sourceType == MWMechanics::DamageSourceType::Ranged && contactNormal && victim.getClass().isNpc();
-        if (rangedContact && Settings::game().mNpcBloodDecals)
+        if (rangedContact && Settings::game().mBrutalEnabled && Settings::game().mNpcBloodDecals
+            && successful && !brutalBlocked && victim.get<ESM::NPC>()->mBase->mBloodType == 0)
         {
             // Anchor to the pose that was hit, before damage or the next animation step moves the surface.
             if (auto* npc

@@ -48,6 +48,7 @@
 
 #include "actor.hpp"
 #include "actorutil.hpp"
+#include "aicombat.hpp"
 #include "aicombataction.hpp"
 #include "aifollow.hpp"
 #include "aipursue.hpp"
@@ -1394,8 +1395,15 @@ namespace MWMechanics
         return false;
     }
 
-    void Actors::updateActor(const MWWorld::Ptr& old, const MWWorld::Ptr& ptr) const
+    void Actors::updateActor(const MWWorld::Ptr& old, const MWWorld::Ptr& ptr)
     {
+        if (mSwordClinch)
+        {
+            if (mSwordClinch->player == old)
+                mSwordClinch->player = ptr;
+            if (mSwordClinch->opponent == old)
+                mSwordClinch->opponent = ptr;
+        }
         const auto iter = mIndex.find(old.mRef);
         if (iter != mIndex.end())
             iter->second->updatePtr(ptr);
@@ -2445,6 +2453,7 @@ namespace MWMechanics
     void Actors::clear()
     {
         finishSwordClinch("loaded");
+        AiCombat::clearBrutalPickupClaims();
         mSwordClinchUseHeld = false;
         mIndex.clear();
         mActors.clear();

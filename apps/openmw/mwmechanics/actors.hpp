@@ -69,7 +69,7 @@ namespace MWMechanics
 
         void castSpell(const MWWorld::Ptr& ptr, const ESM::RefId& spellId, bool scriptedSpell = false) const;
 
-        void updateActor(const MWWorld::Ptr& old, const MWWorld::Ptr& ptr) const;
+        void updateActor(const MWWorld::Ptr& old, const MWWorld::Ptr& ptr);
         ///< Updates an actor with a new Ptr
 
         void dropActors(const MWWorld::CellStore* cellStore, const MWWorld::Ptr& ignore);

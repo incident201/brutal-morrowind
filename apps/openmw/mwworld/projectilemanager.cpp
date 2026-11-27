@@ -471,7 +471,7 @@ namespace MWWorld
             && MWMechanics::supportsRangedFinisher(bow.get<ESM::Weapon>()->mBase->mData.mType))
         {
             const auto& stats = actor.getClass().getCreatureStats(actor);
-            if (!stats.isDead() && !stats.mPowerStrike.token.empty() && stats.mPowerStrike.weapon == bow)
+            if (!stats.isDead() && !stats.mPowerStrike.token.empty() && stats.mPowerStrike.weapon.ptrOrEmpty() == bow)
                 selected = findFinisherTarget(actor, pos, *mRendering->getCamera(), *mPhysics);
         }
         if (!immediateTarget.isEmpty() && (!selected || selected->mActor != immediateTarget))
@@ -564,6 +564,9 @@ namespace MWWorld
         MWWorld::CellStore* cell = world->getPlayerPtr().getCell();
         if (cell == nullptr)
             return {};
+        if (cell->isExterior())
+            cell = &MWBase::Environment::get().getWorldModel()->getExterior(
+                ESM::positionToExteriorCellLocation(tip.x(), tip.y(), cell->getCell()->getWorldSpace()));
         osg::Vec3f d = direction;
         d.normalize();
         MWWorld::ManualRef ref(*MWBase::Environment::get().getESMStore(), id, 1);
