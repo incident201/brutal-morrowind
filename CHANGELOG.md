@@ -1,4 +1,4 @@
-Brutal Morrowind (unreleased)
+Brutal Morrowind 0.3.0
 ----------------------------
 
     NPCs enter combat and finish drawing their weapon before raising an adaptive guard. An opening projectile hit can no longer leave them fighting with a hidden weapon.

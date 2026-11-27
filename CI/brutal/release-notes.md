@@ -1,41 +1,56 @@
-Morrowind with the melee combat of Dark Messiah of Might and Magic, built on OpenMW 0.51.0.
-You need your own copies of Morrowind and Dark Messiah of Might and Magic.
+## Melee Combat & Weapons
+- **Two-handed weapons** are now functional and use custom attack animations created from the one-handed animations.
+- **Spears and halberds** now have dedicated thrust animations for quick attacks and charged attacks with forward/backward steps. Side swings remain shared with staves.
+- **Staff and spear attacks** can now hit multiple targets. The first target takes full damage, while subsequent targets take half base damage, mitigated by their defense.
+- **Ground finishers:** Added an animated finishing move against downed NPCs, performed with a fully charged attack when the fallen target has less than 30% health.
+- **Dual-dagger backstab:** While dual-wielding daggers, you can perform an animated backstab by sneaking up behind an enemy.
+- **Blocking & Fatigue:** Holding block now slows down Fatigue regeneration. Both blocking attacks and hitting a blocking target consume additional Fatigue.
+- **Adrenaline:** Reworked adrenaline gain formulas.
 
-This is an alpha release: the combat works, the game balance is not tuned yet.
+## Ranged Combat & Projectiles
+- **Bows and thrown weapons** now feature animations and mechanics from *Dark Messiah*.
+- **Physical projectiles:** Arrows, darts, and throwing stars are now real physical projectiles that fly in an arc, register hits on contact, and react differently to surfaces—sticking into wood, NPC bodies, ground, and fabric, or ricocheting off stone and metal.
+- **Defending against projectiles:** Shields and parrying now work against ranged attacks. Arrows stick into wooden shields and bounce off metal ones. Arrows and bolts can also be deflected with a weapon during the parry window.
+- **Adrenaline shot:** Arrows fired while in adrenaline mode fly straight for an NPC's head and kill in a single shot.
 
-## Fixed in 0.2.1
+## Skills & Movement
+- **Acrobatics:** Jump height now scales with the Acrobatics skill. The Scroll of Icarian Flight now works and grants the expected super-jump effect.
+- **Athletics:** Fatigue regeneration rate and Fatigue drain while sprinting now scale with the Athletics skill.
+- **Weapon skills:** Attack damage now scales with the corresponding weapon skill level.
+- **Encumbrance:** While over-encumbered, the character can no longer run or jump, but can still walk (as if holding `Alt`).
 
-* **Linux startup:** the launcher, game and helper programs find their bundled libraries when
-  the `.x86_64` files are started directly, including from another working directory. This fixes
-  the missing Boost library error reported in #4; installing a different system Boost is unnecessary.
-* **Qt plugins:** the launcher and installation wizard find their own X11 and Wayland plugins.
-  Missing plugin dependencies are included, and unused embedded-display and compositor plugins
-  have been removed.
-* **Game plugins:** OpenSceneGraph plugins are found relative to the game executable, so starting
-  the game from a shortcut or another folder works.
-* **Importer runtime:** completed the Linux Python library dependencies and kept the bundled
-  Python isolated from the game's libraries. GCF and VPK imports were verified through the launcher.
+## NPC AI & Behavior
+- **Improved combat reactions:** NPCs respond better to player actions in combat—blocking with weapons or shields against flurries of quick attacks, and using charged attacks to break through the player's block.
+- **Wounded state:** NPCs below 30% health become wounded, changing their walk and attack animations, weakening their guard, and making them lose balance more frequently.
+- **Fleeing:** A hit that leaves an NPC with less than 10% health can cause them to flee.
+- **Weapon pickup:** Disarmed NPCs will search for a suitable weapon nearby and pick it up.
+- **Ranged NPC kicks:** NPCs armed with ranged weapons can kick the player away if they get too close.
+- **Group flanking:** Groups of NPCs no longer crowd together when attacking the player; instead, they attempt to flank when possible so they don't obstruct each other's attacks.
+- **Out-of-combat movement:** Restored the standard walking animation for NPCs when out of combat.
 
-Linux packages now pass automated startup checks on clean **Fedora 45** and **Ubuntu 24.04**
-environments, including X11 and Wayland windows, the importer runtime and game initialization.
+## Physics, Ragdoll & Interaction
+- **Object throwing:** Small objects can now be picked up from the ground and thrown. Throw damage scales with momentum, and headshots can knock NPCs down.
+- **Death drops:** Standard deaths now always cause NPCs to drop their held weapon, shield, and light source.
+- **Dropped weapon physics:** Dropped weapons stay grounded better and scatter less erratically when knocked out of hands.
+- **Exhaustion ragdoll:** Exhausted NPCs now collapse into ragdoll instead of playing Morrowind's default animation, getting back up once their Fatigue recovers.
 
-## Updating
+## Camera, Visuals & Audio
+- **Combat & movement camera:** Added *Dark Messiah* camera movements for walking, running, jumping, and various combat actions.
+- **First-person body tracking:** The first-person camera now follows the visible body when moving and crouching.
+- **First-person shadows:** The first-person player shadow now includes the head and arms when player shadows are enabled.
+- **DeathCam:** Added a new DeathCam that shows the player's body falling upon death.
+- **Screen blood effects:** Added *Dark Messiah* screen blood overlays for the player.
+- **Environmental blood:** Slain NPCs bleed out, leaving a pool of blood on the ground, while combat leaves blood splatters on walls.
+- **Bloody weapons:** Weapons now get stained with blood. One-handed swords also feature a blood-wiping animation when sheathing (only when no shield is equipped).
+- **Player voice:** Added a separate toggle for the player's voice. Female characters now use female *Dark Messiah* vocalizations.
 
-Existing imports and settings from **0.2.0** are reused. You do not need to import Dark Messiah again.
-Replace the unpacked Linux package or run the updated Windows installer.
+## Settings
+- Added configuration options for physical projectiles, object grabbing, NPC wounding and fleeing, weapon pickup, finishers, camera sway, and blood.
+- Merged body physics and dropped equipment settings into the **Ragdoll** section.
 
-## Downloads
-
-* **Linux** (Debian 13, Ubuntu 24.04 with updates, Fedora 45 or newer, x86-64):
-  `BrutalMorrowind-0.2.1-Linux-64Bit.tar.gz`. Unpack it anywhere and run `brutalmorrowind-launcher`.
-  Requires glibc 2.38+, a GCC 14-compatible C++ runtime and desktop OpenGL libraries.
-* **Windows** (Windows 10 or newer, 64-bit): `BrutalMorrowind-0.2.1-Windows-x64.exe`. Run the installer.
-
-For Steam and Steam Deck, **Steam Linux Runtime 4.0** is the recommended compatibility tool
-for the native Linux package. The older scout, soldier and sniper containers are not supported.
-Proton is for the Windows package.
-
-On the first run the launcher imports Dark Messiah's animations, sounds and textures from your copy
-of the game; this takes about half a minute.
-
-See the README in the repository for requirements, the first run and the FAQ.
+## Performance & Bug Fixes
+- Optimized performance of weapon-to-wall collision checks.
+- Fixed delayed impulses and dismemberment occurring after looting a corpse.
+- Fixed slicing behavior on open armor.
+- Fixed clinch participant positioning on uneven terrain.
+- Fixed Argonian and Khajiit movement issues.
