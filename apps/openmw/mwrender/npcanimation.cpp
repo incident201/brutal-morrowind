@@ -73,6 +73,7 @@
 #include "../mwmechanics/actorutil.hpp"
 #include "../mwmechanics/npcstats.hpp"
 #include "../mwmechanics/weapontype.hpp"
+#include "../mwphysics/playerkinetics.hpp"
 #include "../mwphysics/raycasting.hpp"
 
 #include "../mwbase/environment.hpp"
@@ -90,6 +91,15 @@
 
 namespace
 {
+    // The native digitigrade torso leans farther forward than the imported
+    // viewmodel's standing eye. Leave room for the chest and its armor.
+    constexpr double sBeastBodyRetreat = 14.;
+
+    osg::Matrixd bodyAwarenessMount(bool beast)
+    {
+        const double forward = Settings::game().mFirstPersonBodyForward.get() + (beast ? sBeastBodyRetreat : 0.);
+        return osg::Matrixd::translate(0., -forward, 0.);
+    }
 
     bool decapitationAuditEnabled()
     {
@@ -1526,7 +1536,11 @@ namespace MWRender
         // Separate player and NPC paths keep their last-priority overrides isolated.
         // The helper maps this virtual model path to animations/brutal_firstperson/*.kf.
         if ((useFullBodyFirstPerson() || mBodyAwareness) && MWMechanics::brutalDmFirstPerson())
+        {
             loadAdditionalAnimations(VFS::Path::NormalizedView("meshes/brutal_firstperson.nif"), smodel);
+            if (mBodyAwareness && mBeastRace)
+                loadAdditionalAnimations(VFS::Path::NormalizedView("meshes/brutal_beast_body.nif"), smodel);
+        }
         else if (!isWerewolf && mPtr != MWMechanics::getPlayer() && Settings::game().mUseAdditionalAnimSources
             && !Settings::game().mBrutalClassicNpcAnimations)
         {
@@ -1543,8 +1557,8 @@ namespace MWRender
     bool NpcAnimation::skipAdditionalAnimation(const VFS::Path::Normalized& kf) const
     {
         // Dark Messiah's human legs do not fit digitigrade beast anatomy. Beast NPCs
-        // and a beast player's visible body keep Morrowind's idle stance, walk, run,
-        // sneak and (as the run) sprint; combat, kicks, clinch and recovery stay Dark Messiah.
+        // and a beast player's visible body keep their native gait and anatomy.
+        // The player additionally has digitigrade crouch and sprint variants.
         // A wounded beast likewise keeps its stance and walk and fights with the wounded attacks.
         if (!mBeastRace)
             return false;
@@ -1601,8 +1615,7 @@ namespace MWRender
             // Sample a standing pose before mirroring the player's state. A body
             // created while already crouching cannot wait for a standing idle
             // to establish where its eye belongs.
-            mBodyAwarenessRoot->setMatrix(osg::Matrixd::translate(
-                0., -Settings::game().mFirstPersonBodyForward.get(), 0.));
+            mBodyAwarenessRoot->setMatrix(bodyAwarenessMount(mBeastRace));
             auto& body = *mBodyAwarenessAnimation;
             body.play("idle", Animation::AnimPriority(0), BlendMask_All, false, 0.f, "start", "stop", 0.f, 0);
             body.runAnimation(0.f);
@@ -1656,8 +1669,7 @@ namespace MWRender
 
     void NpcAnimation::alignBodyAwareness(float duration)
     {
-        const osg::Matrixd mount = osg::Matrixd::translate(
-            0., -Settings::game().mFirstPersonBodyForward.get(), 0.);
+        const osg::Matrixd mount = bodyAwarenessMount(mBeastRace && MWMechanics::brutalDmFirstPerson());
         mBodyAwarenessRoot->setMatrix(mount);
         const auto paths = mInsert->getParentalNodePaths();
         if (paths.empty())
@@ -1860,8 +1872,23 @@ namespace MWRender
             && MWBase::Environment::get().getWorld()->isFirstPerson();
     }
 
-    std::string NpcAnimation::bodyAwarenessGroup(const NpcAnimation& body, const std::string& group, bool sneaking) const
+    std::string NpcAnimation::bodyAwarenessGroup(
+        const NpcAnimation& body, const std::string& group, bool sneaking, bool sprinting) const
     {
+        constexpr std::string_view sprintPrefix = "brutal_sprint";
+        constexpr std::string_view runPrefix = "runforward";
+        const bool sprintGroup = group.starts_with(sprintPrefix);
+        if (body.mBeastRace && (sprintGroup || (sprinting && group.starts_with(runPrefix))))
+        {
+            const std::string suffix = group.substr(sprintGroup ? sprintPrefix.size() : runPrefix.size());
+            const std::string sprint = "brutal_sprint" + suffix;
+            if (body.hasAnimation(sprint))
+                return sprint;
+            if (!suffix.empty() && body.hasAnimation("brutal_sprint1h"))
+                return "brutal_sprint1h";
+            const std::string run = "runforward" + suffix;
+            return body.hasAnimation(run) ? run : "runforward";
+        }
         // The paired arms reuse the matching sword clock. The visible body has
         // no arms or weapon, so it can use the same imported lower-body motion.
         if (hasPairedViewmodel())
@@ -1879,8 +1906,10 @@ namespace MWRender
         // imported crouch), but the visible legs and torso must crouch whenever the
         // player sneaks. The body has no arms, head or items, so the imported crouch
         // and sneak walk fit every stance; armed stances use the armed variant.
-        if (!sneaking || group.starts_with("idlesneak") || group.starts_with("idleswim"))
+        if (!sneaking || group.starts_with("idleswim"))
             return group;
+        if (group.starts_with("idlesneak"))
+            return body.hasAnimation(group) || !body.hasAnimation("idlesneak") ? group : "idlesneak";
         std::string base;
         std::string_view suffix;
         if (group.starts_with("idle"))
@@ -2039,7 +2068,12 @@ namespace MWRender
         if (mPlayerShadowAnimation)
         {
             if (mBodyAwarenessRoot)
-                mPlayerShadowRoot->setMatrix(mBodyAwarenessRoot->getMatrix());
+            {
+                auto mount = mBodyAwarenessRoot->getMatrix();
+                if (mBeastRace && MWMechanics::brutalDmFirstPerson())
+                    mount.preMultTranslate(osg::Vec3d(0., sBeastBodyRetreat, 0.));
+                mPlayerShadowRoot->setMatrix(mount);
+            }
             mPlayerShadowAnimation->setPitchFactor(mPitchFactor);
             syncFirstPersonBodyPose(*mPlayerShadowAnimation, duration);
         }
@@ -2058,6 +2092,8 @@ namespace MWRender
         MWBase::World* world = MWBase::Environment::get().getWorld();
         const bool sneaking = MWMechanics::brutalDmFirstPerson() && stats.getStance(MWMechanics::CreatureStats::Stance_Sneak)
             && !world->isSwimming(mPtr) && !world->isFlying(mPtr);
+        const bool sprinting = MWMechanics::brutalDmFirstPerson()
+            && stats.mBrutalGait == MWPhysics::PlayerKinetics::Gait_Sprint;
         std::vector<std::pair<std::string, const AnimState*>> sources;
         std::set<std::string, std::less<>> wanted;
         for (const auto& [group, source] : mStates)
@@ -2068,7 +2104,7 @@ namespace MWRender
             const bool spearStep = mViewmodelSet == BrutalViewmodel_Spear && group == "weapononehand"
                 && (source.mStartKey.starts_with("fast") || source.mStartKey.starts_with("thrust "))
                 && body.hasAnimation("brutal_spear_step");
-            std::string target = spearStep ? "brutal_spear_step" : bodyAwarenessGroup(body, group, sneaking);
+            std::string target = spearStep ? "brutal_spear_step" : bodyAwarenessGroup(body, group, sneaking, sprinting);
             if (wanted.insert(target).second)
                 sources.emplace_back(std::move(target), &source);
         }

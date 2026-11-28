@@ -352,7 +352,8 @@ namespace MWRender
         void syncBodyAwareness(float duration);
         void syncFirstPersonBodyPose(NpcAnimation& body, float duration);
         void alignBodyAwareness(float duration);
-        std::string bodyAwarenessGroup(const NpcAnimation& body, const std::string& group, bool sneaking) const;
+        std::string bodyAwarenessGroup(
+            const NpcAnimation& body, const std::string& group, bool sneaking, bool sprinting) const;
 
         // The first-person eye rides on the visible torso: the body rig's neck
         // displacement from its settled standing pose, in object root space.

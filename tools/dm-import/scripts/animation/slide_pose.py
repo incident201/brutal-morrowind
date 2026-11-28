@@ -164,7 +164,7 @@ class Rig:
 
 def write_kf(path, times, poses, marks):
     s=nif.NiStream();s.root=nif.NiSequenceStreamHelper(extra_data=nif.NiTextKeyExtraData(
-        keys=np.array([(float(t),'brutal_slide: '+m) for t,m in marks],dtype='<f,O')))
+        keys=np.array([(float(t), path.stem + ': ' + m) for t,m in marks],dtype='<f,O')))
     names=list(poses[0]);duration=float(times[-1])
     for n in names:
         rotations=np.array([[t,*matrix_quat(p[n][0])] for t,p in zip(times,poses)],np.float32)

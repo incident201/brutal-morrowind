@@ -29,9 +29,9 @@ ANIMATION = ROOT / 'scripts/animation'
 CREATURES = ROOT / 'scripts/creatures'
 EFFECTS = ROOT / 'scripts/effects'
 CALIBRATION = HERE / 'calibration'
-RECIPE_VERSION = 34  # Misc::DarkMessiahData::sRecipe in the engine must match.
+RECIPE_VERSION = 36  # Misc::DarkMessiahData::sRecipe in the engine must match.
 # Conversion steps per import, for progress reporting.
-TOTAL_STEPS = 46
+TOTAL_STEPS = 47
 KEYFRAMES = ('.kf', '.yaml')
 # Steps run side by side, one core each; the matrices involved are 4x4.
 ENVIRONMENT = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1')
@@ -43,6 +43,7 @@ from dm_sources import source_root  # noqa: E402
 
 MORROWIND_MESHES = (
     'meshes/xbase_anim.nif', 'meshes/xbase_anim.kf',
+    'meshes/xbase_animkna.nif', 'meshes/xbase_animkna.kf',
     'meshes/xbase_anim.1st.nif', 'meshes/xbase_anim.1st.kf',
     'meshes/a/shield_steel.nif',
     'meshes/b/b_n_dark elf_f_hands.1st.nif', 'meshes/b/b_n_dark elf_m_hands.1st.nif',
@@ -180,6 +181,9 @@ class Importer:
         self.run('Player body', ANIMATION / 'import_body_awareness.py',
                  '--vpk-root', self.vpks, '--work-dir', self.cache,
                  '--skeleton', self.meshes / 'xbase_anim.nif', '--output', self.stage('body'))
+        self.run('Beast player locomotion', ANIMATION / 'beast_body.py',
+                 '--skeleton', self.meshes / 'xbase_animkna.nif',
+                 '--animation', self.meshes / 'xbase_animkna.kf', '--output', self.stage('body'))
 
     def npc(self):
         self.run('NPC combat', ANIMATION / 'import_npc.py',
@@ -581,7 +585,7 @@ def main():
     parser = argparse.ArgumentParser(prog='dm-import', description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--dark-messiah', type=Path, required=True,
-                        help='Dark Messiah folder with VPK/GCF archives, or an extracted mm folder')
+                        help='Dark Messiah folder with VPK/GCF archives, an extracted mm folder, or their parent folder')
     parser.add_argument('--morrowind', type=Path, required=True,
                         help='Morrowind folder or its Data Files folder (the one holding Morrowind.bsa)')
     parser.add_argument('--output', type=Path, required=True, help='Folder that receives the eight data directories')

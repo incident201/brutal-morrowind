@@ -32,10 +32,11 @@ folder together; Qt and Boost are bundled.
 ## First run
 
 1. The launcher opens the installation wizard. Choose your Morrowind folder.
-2. Open the Dark Messiah page. The launcher finds a Steam installation of Dark Messiah by itself;
-   otherwise choose its folder. Steam VPK archives, older GCF archives (including those
-   inside `mm/`) and an already extracted `mm/` folder are supported. VPK directory
-   archives may have any name ending in `_dir.vpk`; Steam depot names are not required.
+2. Open the Dark Messiah page. If the launcher doesn't find your Steam installation, choose
+   the game folder or the parent folder containing a single installation.
+   Steam VPK archives, older GCF archives (including those inside `mm/`) and an already
+   extracted `mm/` folder are supported. Loose resources override the same files in archives.
+   VPK directory archives may have any name ending in `_dir.vpk`.
 3. Press Play. The first time, the launcher imports Dark Messiah's animations, sounds and textures
    (about half a minute) and then starts the game.
 
