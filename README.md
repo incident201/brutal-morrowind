@@ -42,7 +42,7 @@ folder together; Qt and Boost are bundled.
 
 Run `brutalmorrowind-import --recipe` from the package directory to see its recipe number
 (`./brutalmorrowind-import` on Linux, `brutalmorrowind-import.exe` on Windows). See the
-[changelog](CHANGELOG.md) for the import changes in this branch.
+[changelog](CHANGELOG.md) for the import changes in each release.
 
 Settings, saves and the imported data are kept apart from OpenMW's: in `~/.config/brutalmorrowind`
 and `~/.local/share/brutalmorrowind` on Linux, in `Documents\My Games\Brutal Morrowind` on Windows.

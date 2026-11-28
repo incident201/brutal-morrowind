@@ -1,5 +1,5 @@
-Unreleased
-----------
+Brutal Morrowind 0.3.2
+----------------------------
 
     Refine first-person two-handed weapon draws, quick attack recoveries and charged windups. Spear and halberd thrusts and guard transitions use a consistent grip. Attacking during a sprint carries momentum into a single forward lunge, with the right arm extending as the left hand releases the shaft.
     Argonian and Khajiit first-person bodies keep their own gait when sprinting and crouching. The camera lowers with the crouch, and armor stays clear of the center of the view when looking down.
