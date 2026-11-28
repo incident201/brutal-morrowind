@@ -243,13 +243,16 @@ class Grasp:
         palm_along = hand[:3, :3] @ self.palm_along
 
         def frames(angle):
-            elbow = base + height * (np.cos(angle) * pole + np.sin(angle) * tangent)
+            bend = np.cos(angle) * pole + np.sin(angle) * tangent
+            elbow = base + height * bend
             fore_axis = unit(wrist - elbow)
             # Let axial forearm rotation absorb palm roll while respecting the
             # bent elbow. The angle between forearm and native palm stays measurable.
             flex = np.arccos(np.clip(fore_axis @ desired_fore[:, 0], -1., 1.))
             palm_flex = np.arccos(np.clip(fore_axis @ palm_along, -1., 1.))
-            normal = cross(elbow - shoulder, wrist - elbow)
+            # The arm segments can be collinear at full extension. Their
+            # plane still follows the same elbow bend used by the solver.
+            normal = cross(bend, axis)
             upper_rotation = basis(elbow - shoulder, normal) @ self.upper_frame
             fore_rotation = basis(wrist - elbow, normal) @ self.fore_frame
             twist_sine = fore_rotation[:, 2] @ desired_fore[:, 1] - fore_rotation[:, 1] @ desired_fore[:, 2]
