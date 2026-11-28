@@ -158,7 +158,7 @@ namespace MWMechanics
         float mMovementAnimSpeed{ 0.f };
         bool mAdjustMovementAnimSpeed{ false };
         bool mBrutalSprinting{ false }; // kinetic player sprints forward this frame
-        bool mBrutalSprintAnim{ false }; // the current movement clip is the sprint
+        bool mBrutalSprintRequested{ false }; // sprint request at the last movement animation refresh
         bool mBrutalWounded{ false }; // the NPC plays Dark Messiah's wounded clips
         // ACT_GRAB_WEAPON: the world item this NPC takes into its hand at "pickup contact".
         MWWorld::SafePtr mBrutalPickupItem;

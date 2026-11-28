@@ -516,6 +516,7 @@ namespace MWMechanics
     {
         clearStateAnimation(mCurrentMovement);
         mMovementState = CharState_None;
+        mBrutalSprintRequested = false;
         mMovementAnimationHasMovement = false;
     }
 
@@ -858,7 +859,8 @@ namespace MWMechanics
         if (mPtr.getClass().isNpc() && mPtr != getPlayer()
             && mAnimation->setNpcCombatWalking(mPtr.getClass().getCreatureStats(mPtr).getAiSequence().isInCombat()))
             force |= mCurrentMovement.starts_with("walk");
-        if (movement == mMovementState && !force)
+        const bool sprintRequested = mBrutalSprinting && movement == CharState_RunForward;
+        if (movement == mMovementState && !force && sprintRequested == mBrutalSprintRequested)
             return;
 
         std::string_view movementAnimGroup = movementStateToAnimGroup(movement);
@@ -873,6 +875,7 @@ namespace MWMechanics
         std::string movementAnimName{ movementAnimGroup };
 
         mMovementState = movement;
+        mBrutalSprintRequested = sprintRequested;
         std::string::size_type swimpos = movementAnimName.find("swim");
         if (!mAnimation->hasAnimation(movementAnimName))
         {
@@ -913,8 +916,8 @@ namespace MWMechanics
         }
 
         // Dark Messiah's player sprint (@Megasprint_*) replaces the forward run.
-        mBrutalSprintAnim = false;
-        if (mBrutalSprinting && movement == CharState_RunForward)
+        bool sprintAnim = false;
+        if (sprintRequested)
         {
             std::string sprint = "brutal_sprint";
             sprint += weapShortGroup;
@@ -922,13 +925,11 @@ namespace MWMechanics
             // groups already use that fallback; the sprint must use it too.
             if (!mAnimation->hasAnimation(sprint) && mWeaponType == ESM::Weapon::ShortBladeOneHand)
                 sprint = "brutal_sprint1h";
-            if (!mAnimation->hasAnimation(sprint) && weapShortGroup.empty())
-                sprint = "brutal_sprint";
             if (mAnimation->hasAnimation(sprint))
             {
                 movementAnimName = std::move(sprint);
                 movemask = MWRender::BlendMask_All;
-                mBrutalSprintAnim = true;
+                sprintAnim = true;
             }
         }
 
@@ -999,7 +1000,7 @@ namespace MWMechanics
                     // Imported Dark Messiah clips play at their authored rate at DM's speeds.
                     namespace K = MWPhysics::PlayerKinetics;
                     mMovementAnimSpeed = sneaking ? K::SneakSpeed
-                        : mBrutalSprintAnim     ? K::SprintSpeed
+                        : sprintAnim            ? K::SprintSpeed
                         : isRunning()           ? K::RunSpeed
                                                 : K::WalkSpeed;
                 }
@@ -4209,10 +4210,8 @@ namespace MWMechanics
                 // the next gait or idle is ready to blend it back onto the grip.
                 std::optional<MWRender::Animation::ScopedDeferActiveGroupReset> sprintReset;
                 const bool sprinting = mBrutalSprinting && movestate == CharState_RunForward;
-                if (sprinting != mCurrentMovement.starts_with("brutal_sprint") && usesBrutalPairedWeapon())
+                if (sprinting != mBrutalSprintRequested && usesBrutalPairedWeapon())
                     sprintReset.emplace(*mAnimation);
-                if (mBrutalSprinting != mBrutalSprintAnim && movestate == CharState_RunForward)
-                    refreshMovementAnims(movestate, true);
                 refreshCurrentAnims(idlestate, movestate, jumpstate, updateWeaponState());
                 sprintReset.reset();
                 updateBrutalShieldBlock();

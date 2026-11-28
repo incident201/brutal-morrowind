@@ -342,6 +342,9 @@ namespace MWRender
 
         void handleTextKey(AnimState& state, std::string_view groupname, SceneUtil::TextKeyMap::ConstIterator key,
             const SceneUtil::TextKeyMap& map);
+        /// Returns false if a text-key listener removed or replaced the playing state.
+        bool handleTextKeys(AnimState& state, SceneUtil::TextKeyMap::ConstIterator& key);
+        osg::Vec3f advanceAnimationStates(float duration);
 
         /** Sets the root model of the object.
          *

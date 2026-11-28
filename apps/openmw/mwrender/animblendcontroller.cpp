@@ -323,38 +323,19 @@ namespace MWRender
             mBlendTrigger = false;
             mBlendStartTime = mBlendAnimationTime ? mAnimState.mStartTime : time;
 
-            // Nif mRotationScale is used here because it's unaffected by the side-effects of RotationController
+            // Start from the animated pose when a later RotateController applies
+            // view pitch and eye offsets on top of it.
             mBlendStartRot = node->mRotationScale.toOsgMatrix().getRotate();
             mBlendStartTrans = node->getMatrix().getTrans();
             mBlendStartScale = node->mScale;
 
-            // Subtract any rotate controller's offset from start transform (if it appears after this callback)
-            // this is required otherwise the blend start will be with an offset, then offset could be applied again
-            // fixes an issue with camera jumping during first person sneak jumping camera
-            osg::Callback* updateCb = node->getUpdateCallback()->getNestedCallback();
-            while (updateCb)
+            for (auto* callback = getNestedCallback(); callback; callback = callback->getNestedCallback())
             {
-                MWRender::RotateController* rotateController = dynamic_cast<MWRender::RotateController*>(updateCb);
-                if (rotateController)
+                if (dynamic_cast<RotateController*>(callback))
                 {
-                    const osg::Quat& rotate = rotateController->getRotate();
-                    const osg::Vec3f& offset = rotateController->getOffset();
-
-                    osg::NodePathList nodepaths = node->getParentalNodePaths(rotateController->getRelativeTo());
-                    osg::Quat worldOrient;
-                    if (!nodepaths.empty())
-                    {
-                        osg::Matrixf worldMat = osg::computeLocalToWorld(nodepaths[0]);
-                        worldOrient = worldMat.getRotate();
-                    }
-
-                    worldOrient = worldOrient * rotate.inverse();
-                    const osg::Quat worldOrientInverse = worldOrient.inverse();
-
-                    mBlendStartTrans -= worldOrientInverse * offset;
+                    mBlendStartTrans = node->mTranslation;
+                    break;
                 }
-
-                updateCb = updateCb->getNestedCallback();
             }
         }
 

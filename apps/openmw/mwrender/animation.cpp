@@ -1593,6 +1593,29 @@ namespace MWRender
         }
     }
 
+    bool Animation::handleTextKeys(AnimState& state, SceneUtil::TextKeyMap::ConstIterator& key)
+    {
+        const auto& keys = state.mSource->getTextKeys();
+        if (key == keys.end() || key->first > state.getTime())
+            return true;
+
+        // A hit can break a weapon and rebuild the viewmodel inside the listener.
+        // Keep the key data alive and stop processing if playback was replaced.
+        const auto source = state.mSource;
+        const auto clock = state.mTime;
+        const std::string group = state.mGroupname;
+        do
+        {
+            handleTextKey(state, group, key, source->getTextKeys());
+            const auto current = mStates.find(group);
+            if (current == mStates.end() || current->second.mTime != clock)
+                return false;
+            ++key;
+        } while (key != keys.end() && key->first <= state.getTime());
+
+        return true;
+    }
+
     void Animation::play(std::string_view groupname, const AnimPriority& priority, int blendMask, bool autodisable,
         float speedmult, std::string_view start, std::string_view stop, float startpoint, uint32_t loops,
         bool loopfallback)
@@ -1671,11 +1694,8 @@ namespace MWRender
                 if (state.mPlaying)
                 {
                     auto textkey = textkeys.lowerBound(state.getTime());
-                    while (textkey != textkeys.end() && textkey->first <= state.getTime())
-                    {
-                        handleTextKey(state, groupname, textkey, textkeys);
-                        ++textkey;
-                    }
+                    if (!handleTextKeys(state, textkey))
+                        return;
                 }
 
                 if (state.getTime() >= state.mLoopStopTime && state.mLoopCount > 0)
@@ -1687,11 +1707,8 @@ namespace MWRender
                         break;
 
                     auto textkey = textkeys.lowerBound(state.getTime());
-                    while (textkey != textkeys.end() && textkey->first <= state.getTime())
-                    {
-                        handleTextKey(state, groupname, textkey, textkeys);
-                        ++textkey;
-                    }
+                    if (!handleTextKeys(state, textkey))
+                        return;
                 }
 
                 break;
@@ -2153,8 +2170,8 @@ namespace MWRender
                     // existing global/imported-NPC blending path are unchanged.
                     if (dynamic_cast<NifOsg::MatrixTransform*>(node.get()))
                     {
-                        // Neck has an aimed-pivot RotateController applied after its raw
-                        // KF. Never capture that already-aimed translation into a second fade.
+                        // The neck already receives the crouch offset from its
+                        // RotateController. The scoped camera fade covers the other ancestors.
                         const bool primaryCameraAncestor = Misc::StringUtils::ciEqual(it->first, "Camera")
                             || Misc::StringUtils::ciEqual(it->first, "Bip01 Pelvis")
                             || Misc::StringUtils::ciEqual(it->first, "Bip01 Spine")
@@ -2795,30 +2812,8 @@ namespace MWRender
             saveBodyProjectiles();
     }
 
-    osg::Vec3f Animation::runAnimation(float duration)
+    osg::Vec3f Animation::advanceAnimationStates(float duration)
     {
-        if (!mStuckProjectiles.empty())
-        {
-            mStuckProjectileCheck += duration;
-            if (mStuckProjectileCheck >= 0.25f)
-            {
-                mStuckProjectileCheck = 0.f;
-                syncStuckProjectiles();
-            }
-        }
-        if (mRagdollRecoveryProgress)
-        {
-            *mRagdollRecoveryProgress=std::min(1.f,*mRagdollRecoveryProgress+duration/mRagdollRecoveryDuration);
-            if (*mRagdollRecoveryProgress>=1.f)
-            {
-                for (const auto& [node,callback]:mRagdollRecoveryControllers)
-                {
-                    dynamic_cast<RagdollRecovery*>(callback.get())->finish(static_cast<osg::MatrixTransform*>(node.get()));
-                    node->removeUpdateCallback(callback);
-                }
-                mRagdollRecoveryControllers.clear();mRagdollRecoveryProgress.reset();
-            }
-        }
         osg::Vec3f movement(0.f, 0.f, 0.f);
         AnimStateMap::iterator stateiter = mStates.begin();
         while (stateiter != mStates.end())
@@ -2855,11 +2850,8 @@ namespace MWRender
                     state.mPlaying = (state.getTime() < state.mStopTime);
                     timepassed = targetTime - state.getTime();
 
-                    while (textkey != textkeys.end() && textkey->first <= state.getTime())
-                    {
-                        handleTextKey(state, stateiter->first, textkey, textkeys);
-                        ++textkey;
-                    }
+                    if (!handleTextKeys(state, textkey))
+                        return movement;
                 }
                 if (state.shouldLoop())
                 {
@@ -2868,11 +2860,8 @@ namespace MWRender
                     state.mPlaying = true;
 
                     textkey = textkeys.lowerBound(state.getTime());
-                    while (textkey != textkeys.end() && textkey->first <= state.getTime())
-                    {
-                        handleTextKey(state, stateiter->first, textkey, textkeys);
-                        ++textkey;
-                    }
+                    if (!handleTextKeys(state, textkey))
+                        return movement;
 
                     if (state.getTime() >= state.mLoopStopTime)
                         break;
@@ -2892,7 +2881,34 @@ namespace MWRender
             else
                 ++stateiter;
         }
+        return movement;
+    }
 
+    osg::Vec3f Animation::runAnimation(float duration)
+    {
+        if (!mStuckProjectiles.empty())
+        {
+            mStuckProjectileCheck += duration;
+            if (mStuckProjectileCheck >= 0.25f)
+            {
+                mStuckProjectileCheck = 0.f;
+                syncStuckProjectiles();
+            }
+        }
+        if (mRagdollRecoveryProgress)
+        {
+            *mRagdollRecoveryProgress=std::min(1.f,*mRagdollRecoveryProgress+duration/mRagdollRecoveryDuration);
+            if (*mRagdollRecoveryProgress>=1.f)
+            {
+                for (const auto& [node,callback]:mRagdollRecoveryControllers)
+                {
+                    dynamic_cast<RagdollRecovery*>(callback.get())->finish(static_cast<osg::MatrixTransform*>(node.get()));
+                    node->removeUpdateCallback(callback);
+                }
+                mRagdollRecoveryControllers.clear();mRagdollRecoveryProgress.reset();
+            }
+        }
+        osg::Vec3f movement = advanceAnimationStates(duration);
         updateEffects();
 
         const float epsilon = 0.001f;

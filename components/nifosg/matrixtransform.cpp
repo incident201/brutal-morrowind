@@ -6,6 +6,7 @@ namespace NifOsg
         : osg::MatrixTransform(transform.toMatrix())
         , mScale(transform.mScale)
         , mRotationScale(transform.mRotation)
+        , mTranslation(transform.mTranslation)
     {
     }
 
@@ -13,6 +14,7 @@ namespace NifOsg
         : osg::MatrixTransform(copy, copyop)
         , mScale(copy.mScale)
         , mRotationScale(copy.mRotationScale)
+        , mTranslation(copy.mTranslation)
     {
     }
 
@@ -66,6 +68,7 @@ namespace NifOsg
     void MatrixTransform::setTranslation(const osg::Vec3f& translation)
     {
         // The translation is independent from the rotation and scale so we can apply it directly.
+        mTranslation = translation;
         _matrix.setTrans(translation);
 
         _inverseDirty = true;
