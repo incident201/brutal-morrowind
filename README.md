@@ -37,8 +37,12 @@ folder together; Qt and Boost are bundled.
    Steam VPK archives, older GCF archives (including those inside `mm/`) and an already
    extracted `mm/` folder are supported. Loose resources override the same files in archives.
    VPK directory archives may have any name ending in `_dir.vpk`.
-3. Press Play. The first time, the launcher imports Dark Messiah's animations, sounds and textures
-   (about half a minute) and then starts the game.
+3. Press Play and choose **Import and play**. The launcher builds the import from your installed
+   games on first use or when the build requires a newer recipe. Allow about a minute.
+
+Run `brutalmorrowind-import --recipe` from the package directory to see its recipe number
+(`./brutalmorrowind-import` on Linux, `brutalmorrowind-import.exe` on Windows). See the
+[changelog](CHANGELOG.md) for the import changes in this branch.
 
 Settings, saves and the imported data are kept apart from OpenMW's: in `~/.config/brutalmorrowind`
 and `~/.local/share/brutalmorrowind` on Linux, in `Documents\My Games\Brutal Morrowind` on Windows.
@@ -63,7 +67,7 @@ It runs just like the normal OpenMW engine. Dark Messiah files are only used as 
 
 You need your own installed copy of the game. Animations and resources from Dark Messiah are not included in this repository for obvious legal reasons.
 
-The mod will automatically import all the necessary resources from the game files on startup.
+The launcher imports the resources from your game files when you choose **Import and play**.
 
 ### 4. Why do you need these engine modifications? Wasn't Lua scripting enough?
 
@@ -101,9 +105,8 @@ Keep that in mind.
 
 ### 9. Is the magic system also changed? Do you have any plans for magic?
 
-Currently, only melee combat has been implemented (swords, shields, daggers, and staves).
-
-Even two-handed swords still use Morrowind's original animations because there were no suitable animations for two-handed weapons in Dark Messiah.
+The combat changes cover melee weapons, bows, and thrown weapons. Two-handed swords,
+battle axes, warhammers, spears, and halberds have their own adapted first-person animations.
 
 ### 10. I only want ragdoll physics / FPV / (something else) from the mod, but I don't want the other features. Is that possible?
 
