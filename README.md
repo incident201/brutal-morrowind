@@ -1,6 +1,6 @@
 # Brutal Morrowind
 
-Brutal Morrowind is Morrowind with the melee combat of Dark Messiah of Might and Magic: kicks,
+Brutal Morrowind is Morrowind with the combat of Dark Messiah of Might and Magic: kicks,
 directional and charged attacks, parries, sliding, adrenaline finishers, ragdolls and dismemberment,
 with Dark Messiah's own first-person animations. It is a fork of [OpenMW](https://openmw.org) 0.51.0.
 
@@ -100,9 +100,7 @@ Keep that in mind.
 
 ### 9. Is the magic system also changed? Do you have any plans for magic?
 
-Currently, only melee combat has been implemented (swords, shields, daggers, and staves).
-
-Even two-handed swords still use Morrowind's original animations because there were no suitable animations for two-handed weapons in Dark Messiah.
+Currently, only melee combat and ranged combat has been implemented (swords, shields, daggers, staves, bows, etc).
 
 ### 10. I only want ragdoll physics / FPV / (something else) from the mod, but I don't want the other features. Is that possible?
 
