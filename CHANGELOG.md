@@ -1,3 +1,8 @@
+Brutal Morrowind 0.3.1
+----------------------------
+
+    Single short blades use the one-handed sword camera motion, matching their arm animations. Only two equipped daggers use the paired dagger camera.
+
 Brutal Morrowind 0.3.0
 ----------------------------
 

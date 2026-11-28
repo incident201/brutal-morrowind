@@ -203,8 +203,9 @@ local function folder(ground)
         return 'brutal_fp_shield'
     end
     if staff then return 'brutal_fp_staff' end
-    if kind==W.ShortBladeOneHand and (not ground or
-        (settings.get('dualWieldEnabled') and weaponKind(left)==W.ShortBladeOneHand)) then
+    -- A single short blade plays the sword arms. Only two equipped short
+    -- blades use the paired dagger head clips and their different timings.
+    if kind==W.ShortBladeOneHand and settings.get('dualWieldEnabled') and weaponKind(left)==W.ShortBladeOneHand then
         return 'brutal_fp_dagger'
     end
     return 'brutal_fp'
