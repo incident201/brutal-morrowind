@@ -62,15 +62,15 @@ local function addSpearHeadMotion(set, clips)
         clips[name]={fps=12,loop=false,frames=frames}
         set[#set+1]={start=group..' '..from,stop=group..' '..to,clip=name,duration=1}
     end
-    -- Keep the point readable through the fast drive. The eye dips briefly as
-    -- the forward foot takes the weight, then settles while the hands return.
+    -- Directional head commitment matching each chamber's strike line.
+    -- Roll carries the shoulder drive without pulling the point off-aim.
     local quick={
-        fasta={cock={0.2,-0.15,0.55,0,0,0},drive={1.6,0.3,-1.8,0,0,0},kick={3.1,0.45,-3.1,0,0,0},rebound={0.6,0,0.30,0,0,0}},
-        fastb={cock={0.2,-0.10,0.45,0,0,0},drive={1.4,0.2,-1.5,0,0,0},kick={2.8,0.35,-2.7,0,0,0},rebound={0.5,0,0.20,0,0,0}},
-        fastc={cock={0.25,-0.20,0.65,0,0,0},drive={1.7,0.4,-2.0,0,0,0},kick={3.3,0.55,-3.4,0,0,0},rebound={0.6,0,0.35,0,0,0}},
-        fastd={cock={0.30,-0.25,0.80,0,0,0},drive={1.9,0.5,-2.4,0,0,0},kick={3.6,0.65,-4.0,0,0,0},rebound={0.7,0,0.45,0,0,0}},
+        fasta={cock={-0.35,-0.25,0.85,0,0,0},drive={1.9,0.35,-2.3,0,0,0},kick={3.4,0.55,-3.6,0,0,0},rebound={0.6,0,0.30,0,0,0}},
+        fastb={cock={-0.55, 0.25,1.35,0,0,0},drive={2.2,-0.45,-2.6,0,0,0},kick={3.8,-0.65,-4.0,0,0,0},rebound={0.7,0,0.35,0,0,0}},
+        fastc={cock={ 0.45,-0.35,-0.95,0,0,0},drive={1.6,0.45,-2.4,0,0,0},kick={3.1,0.65,-3.8,0,0,0},rebound={0.5,0,0.25,0,0,0}},
+        fastd={cock={-0.25,-0.45,1.25,0,0,0},drive={2.0,0.55,-2.8,0,0,0},kick={3.7,0.75,-4.3,0,0,0},rebound={0.7,0,0.40,0,0,0}},
+        fastloopa={cock={0.35,0.20,-0.75,0,0,0},drive={1.8,-0.30,-2.4,0,0,0},kick={3.4,-0.45,-3.8,0,0,0},rebound={0.6,0,0.30,0,0,0}},
     }
-    quick.fastloopa=quick.fasta
     for _,group in ipairs({'fasta','fastloopa','fastb','fastc','fastd'}) do
         local q=quick[group]
         add(group,'start','plant',ZERO,q.cock)
@@ -79,19 +79,22 @@ local function addSpearHeadMotion(set, clips)
         add(group,'weight forward','settle end',q.kick,q.rebound)
         add(group,'settle end','stop',q.rebound,ZERO)
     end
-    -- Charged: a long cock-back held while charging, then DM's staff lunge.
-    local charged={0.5,-1.5,3.85,0,0,0}
-    local inhale={0.5,-1.7,4.29,0,0,0}
-    local drive={2.4,1.88,-7.7,0,0,0}
-    local kick={3,2.12,-9.35,0,0,0}
-    local rebound={0.5,-1.25,-2.75,0,0,0}
-    add('thrust','start','max attack',ZERO,charged)
-    add('thrust hold','start','breath',charged,inhale)
-    add('thrust hold','breath','stop',inhale,charged)
-    add('thrust','plant','hit',charged,drive,'drive')
-    add('thrust','hit','weight forward',drive,kick,'snap')
-    add('thrust','weight forward','settle end',kick,rebound)
-    add('thrust','settle end','large follow stop',rebound,ZERO)
+    -- Charged: deep coiled draw-back, taut hold breath, then heavy piercing lunge.
+    -- Apply identically to both moving ('thrust') and standing ('neutral') charges.
+    local charged={0.6,-1.6,4.2,0,0,0}
+    local inhale={0.4,-1.85,4.7,0,0,0}
+    local drive={2.8,2.0,-8.2,0,0,0}
+    local kick={3.6,2.3,-10.0,0,0,0}
+    local rebound={0.6,-1.1,-2.6,0,0,0}
+    for _,group in ipairs({'thrust','neutral'}) do
+        add(group,'start','max attack',ZERO,charged)
+        add(group..' hold','start','breath',charged,inhale)
+        add(group..' hold','breath','stop',inhale,charged)
+        add(group,'plant','hit',charged,drive,'drive')
+        add(group,'hit','weight forward',drive,kick,'snap')
+        add(group,'weight forward','settle end',kick,rebound)
+        add(group,'settle end','large follow stop',rebound,ZERO)
+    end
 end
 if data and data.sets and data.sets.brutal_fp_spear then
     addSpearHeadMotion(data.sets.brutal_fp_spear.weapononehand, data.clips)
