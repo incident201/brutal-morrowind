@@ -25,6 +25,7 @@ WINDUPS = {
     'slash': ((2., 6., -5.), -6., .10),
 }
 EQUIP_TIMING = (0.11, 0.44, 0.68)  # attach, left-hand catch, stop
+SWORD_DRAW_TIMING = (.26, .72, .94)  # grasp behind the shoulder, left-hand catch, stop
 # Target KF durations for the authored Dark Messiah fast combo (played at 0.86x for attacks,
 # 1.0x for fastenda). Preserves all 5 authored swings (A..E), fastenda and transA..E continuity.
 FAST_TARGETS = {
@@ -105,6 +106,11 @@ def smoothstep(weight):
     return weight * weight * (3. - 2. * weight)
 
 
+def blend_transform(first, second, weight):
+    a, b = (matrix_quat(pose[:3, :3]) for pose in (first, second))
+    return matrix(quat_matrix(slerp(a, b, weight)[[1, 2, 3, 0]]), lerp(first[:3, 3], second[:3, 3], weight))
+
+
 def charge_weight(time, marks, draw_time, return_start, return_stop):
     if marks['hold start'] <= time <= marks['hold stop']:
         return 1.
@@ -125,9 +131,7 @@ def blend_with_sword(pose, paired, weight, *, sword_grip, left_pose=None):
         if weight >= 1.:
             paired[name] = sword
         else:
-            first, second = (matrix_quat(m[:3, :3]) for m in (transform, sword))
-            rotation = quat_matrix(slerp(first, second, weight)[[1, 2, 3, 0]])
-            paired[name] = matrix(rotation, lerp(transform[:3, 3], sword[:3, 3], weight))
+            paired[name] = blend_transform(transform, sword, weight)
 
 
 class Pose:
@@ -357,7 +361,7 @@ EQUIP_KNOTS = (
 
 
 class Retarget:
-    def __init__(self, rig, sword_idle, native, blunt):
+    def __init__(self, rig, sword_idle, native, blunt, empty):
         self.rig = rig
         self.source_idle = sword_idle.world(ITEM)
         self.idle = native.world(ITEM).copy()
@@ -366,6 +370,54 @@ class Retarget:
         self.stance_offset = matrix_quat(self.source_idle[:3, :3].T @ self.idle[:3, :3])
         self.grasps = [Grasp(native, side, blunt) for side in SIDES]
         self.item_mount = inverse(self.grasps[0].grip)
+        self.empty = empty
+
+    def sword_transfer_pose(self, pose, time):
+        """One continuous reach, pull and catch, sampled in reverse to stow."""
+        attach, catch, stop = SWORD_DRAW_TIMING
+        guard = self.idle
+        stowed = matrix(turn_about((1., 0., 0.), 164.) @ guard[:3, :3], (21., -15., 132.))
+        supported = guard.copy()
+        supported[:3, 3] += (4., -3., 3.)
+        supported, _ = self.fit_item(supported)
+        right, left = self.grasps
+        empty_right, empty_left = (self.empty.world(bone(side, 'Hand')) for side in SIDES)
+
+        if time <= attach:
+            # Bring the empty hand up the right edge before reaching back.
+            reach = smoothstep(time / attach)
+            grip = stowed @ right.grip
+            hand = blend_transform(empty_right, grip, reach)
+            high = np.array((27., 30., 127.))
+            hand[:3, 3] = lerp(lerp(empty_right[:3, 3], high, reach),
+                                lerp(high, grip[:3, 3], reach), reach)
+            arms = [right.fit_hand(hand), left.fit_hand(empty_left)]
+        elif time < catch:
+            pull = smoothstep((time - attach) / (catch - attach))
+            # Draw along the back first. Turn the long blade out around the
+            # right shoulder as the hilt comes forward.
+            high, forward = np.array(((28., -7., 147.), (33., 23., 135.)))
+            start = lerp(stowed[:3, 3], high, pull)
+            middle = lerp(high, forward, pull)
+            end = lerp(forward, supported[:3, 3], pull)
+            position = lerp(lerp(start, middle, pull), lerp(middle, end, pull), pull)
+            rotation = (turn_about((0., 0., 1.), 38. * np.sin(np.pi * pull))
+                        @ turn_about((1., 0., 0.), 164. * (1. - pull)) @ guard[:3, :3])
+            item, arms = self.fit_item(matrix(rotation, position), one_hand=True)
+            meet = smoothstep((time - .48) / (catch - .48))
+            free = blend_transform(empty_left, item @ left.grip, meet)
+            arms.append(left.fit_hand(free))
+        else:
+            settle = smoothstep((time - catch) / (stop - catch))
+            _, arms = self.fit_item(blend_transform(supported, guard, settle))
+        result = self.pack_arms(pose, arms)
+        # Start and finish on the lowered idle's actual arms and fingers.
+        # Keep the weapon socket fixed in the palm through the hidden reach.
+        if time < .12:
+            mount = result[ITEM]
+            blend_with_sword(self.empty, result, 1. - smoothstep(time / .12), sword_grip=True)
+            result[ITEM] = mount
+        return result
 
     def fit(self, turn, position, weight, contest):
         # Keep the same, rigid item-space offsets for both palms. Bring the
@@ -423,6 +475,8 @@ class Retarget:
     def equip_pose(self, pose, local_t):
         """Clean over-the-back two-handed draw: right hand pulls over right shoulder,
         left hand rises from lower-left to catch the grip at EQUIP_TIMING[1]."""
+        if self.empty is not None:
+            return self.sword_transfer_pose(pose, local_t)
         _, catch_t, stop_t = EQUIP_TIMING
         t = float(np.clip(local_t, 0., stop_t))
         pos_off, (rx, ry, rz) = eval_key_curve(t, EQUIP_KNOTS)
@@ -586,6 +640,11 @@ def build_fast_time_warp(source_keys, group):
     return spans, src_to_dst, dst_to_src
 
 
+def retime_interval(time, start, end, duration):
+    length = end - start
+    return time + (duration - length) * np.clip((time - start) / length, 0., 1.)
+
+
 def convert(source, target, retarget):
     stream = load(source)
     group = source.stem
@@ -603,7 +662,8 @@ def convert(source, target, retarget):
     windup_sections = []
     single_hand_sections = {}
     slashright_section = None
-    equip_range = None
+    equip_orig_stop = None
+    sheath_start = sheath_end = None
     fast_src_ranges = []
     src_to_dst = lambda t: float(t)
     dst_to_src = lambda t: float(t)
@@ -620,30 +680,38 @@ def convert(source, target, retarget):
         windup_sections = [(charged[attack], *bias) for attack, bias in WINDUPS.items()]
         single_hand_sections = {attack: charged[attack] for attack in ('chop', 'thrust')}
         slashright_section = charged['slashright']
-        # Over-the-back draw fits inside the original equip interval [0, equip stop].
-        equip_attach, equip_catch, equip_stop = EQUIP_TIMING
+        sword = retarget.empty is not None
+        equip_attach, equip_catch, equip_stop = SWORD_DRAW_TIMING if sword else EQUIP_TIMING
         equip_orig_stop = next(t for t, l in source_keys if l == f'{group}: equip stop')
-        equip_range = (0.0, equip_stop, equip_orig_stop)
         # Retime the 5 authored DM fast swings + fastenda with a smooth weight curve.
-        fast_spans, src_to_dst, dst_to_src = build_fast_time_warp(source_keys, group)
+        fast_spans, fast_forward, fast_reverse = build_fast_time_warp(source_keys, group)
         fast_src_ranges = [(s0, s1) for name, s0, s1, _, _, _ in fast_spans if name != 'fastenda']
+        src_to_dst, dst_to_src = fast_forward, fast_reverse
+        ignored = {f'{group}: equip attach', f'{group}: equip stop'}
+        extra_keys = [(equip_attach, 'equip attach'), (equip_catch, 'equip catch'), (equip_stop, 'equip stop')]
+        if sword:
+            sheath_start = next(t for t, l in source_keys if l == f'{group}: unequip start')
+            sheath_end = next(t for t, l in source_keys if l == f'{group}: unequip stop')
+            next_stop = sheath_start + equip_stop
+            src_to_dst = lambda t: retime_interval(fast_forward(t), sheath_start, sheath_end, equip_stop)
+            dst_to_src = lambda t: fast_reverse(retime_interval(t, sheath_start, next_stop, sheath_end - sheath_start))
+            ignored.update((f'{group}: unequip detach', f'{group}: unequip stop'))
+            extra_keys += [(next_stop - equip_catch, 'unequip release'),
+                           (next_stop - equip_attach, 'unequip detach'), (next_stop, 'unequip stop')]
         # Remap every text key cleanly to the new timeline.
-        remapped = []
-        for t, lbl in source_keys:
-            if lbl in (f'{group}: equip attach', f'{group}: equip stop'):
-                continue
-            remapped.append((src_to_dst(t), lbl))
-        remapped += [
-            (equip_attach, f'{group}: equip attach'),
-            (equip_catch, f'{group}: equip catch'),
-            (equip_stop, f'{group}: equip stop'),
-        ]
+        remapped = [(src_to_dst(t), label) for t, label in source_keys if label not in ignored]
+        remapped += [(t, f'{group}: {label}') for t, label in extra_keys]
         source_keys = sorted(remapped, key=lambda key: key[0])
         # Build dense destination times across equip and warped fast sections.
         dst_times = np.array([src_to_dst(t) for t in src_times], float)
         extra_dst = [np.linspace(0.0, equip_stop, int(np.ceil(equip_stop * 60)) + 1)]
+        if sword:
+            extra_dst.extend(([time for time, _ in extra_keys], sheath_start + extra_dst[0]))
         for _, _, _, d0, d1, _ in fast_spans:
-            extra_dst.append(np.linspace(d0, d1, int(np.ceil((d1 - d0) * 60)) + 1))
+            samples = np.linspace(d0, d1, int(np.ceil((d1 - d0) * 60)) + 1)
+            if sword:
+                samples += next_stop - sheath_end
+            extra_dst.append(samples)
         dst_times = np.unique(np.concatenate([dst_times, *extra_dst]))
         src_times = np.array([dst_to_src(t) for t in dst_times], float)
     else:
@@ -657,9 +725,13 @@ def convert(source, target, retarget):
         turn = matrix_quat(pose.world(ITEM)[:3, :3] @ retarget.source_idle[:3, :3].T)
         if previous is not None and previous @ turn < 0:
             turn = -turn
-        if equip_range is not None and time <= equip_range[2] + 1e-5:
-            result = retarget.equip_pose(pose, min(dst_t, equip_range[1]))
-            poses.append(result)
+        if equip_orig_stop is not None and time <= equip_orig_stop + 1e-5:
+            poses.append(retarget.equip_pose(pose, min(dst_t, equip_stop)))
+            previous = turn
+            continue
+        if sheath_start is not None and sheath_start - 1e-5 <= time <= sheath_end + 1e-5:
+            local = np.clip(sheath_start + equip_stop - dst_t, 0., equip_stop)
+            poses.append(retarget.sword_transfer_pose(pose, local))
             previous = turn
             continue
         contest = 0.
@@ -688,7 +760,7 @@ def convert(source, target, retarget):
                                 slashright_arc=slashright_arc, fast_swing=fast_swing)
         for attack, section in single_hand_sections.items():
             recover, end = section['hit'] + .25, section['large follow stop']
-            if time == section['start']:
+            if abs(time - section['start']) < 1e-6:
                 paired_guards[attack] = result
             elif recover < time <= end:
                 # Regrip the drawn guard as the sword settles, without fitting a
@@ -756,6 +828,7 @@ def build(arms, clinch, native_skeleton, native_animation):
     folder = arms / 'Animations/brutal_fp'
     rig = Rig(arms / 'meshes/brutal_fp/xbase_anim.1st.nif')
     idle = Pose(rig, tracks(folder / 'idle1h.kf'), 0.)
+    empty = Pose(rig, tracks(folder / 'idle.kf'), 0.)
     native = Pose(Rig(native_skeleton), tracks(native_animation), native_starts(native_animation)['idle2c: start'])
     sources = sorted(path for path in folder.glob('*1h.kf')
                      if path.stem.startswith(('idle', 'walk', 'run', 'sneak', 'jump', 'brutal_sprint')))
@@ -768,7 +841,7 @@ def build(arms, clinch, native_skeleton, native_animation):
         blunt = family == '2b'
         output = folder.with_name('brutal_fp_paired_blunt' if blunt else 'brutal_fp_paired')
         output.mkdir()
-        retarget = Retarget(rig, idle, native, blunt)
+        retarget = Retarget(rig, idle, native, blunt, None if blunt else empty)
         convert(folder / 'weapononehand.kf', output / (weapon_group + '.kf'), retarget)
         for path in sources:
             convert(path, output / (path.stem[:-2] + family + '.kf'), retarget)

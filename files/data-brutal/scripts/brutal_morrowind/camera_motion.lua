@@ -179,6 +179,11 @@ local function addPairedHeadMotion(set, clips, tag)
     add('equip_reach','equip start','equip attach',ZERO,reach)
     add('equip_pull','equip attach','equip catch',reach,settle)
     add('equip_settle','equip catch','equip stop',settle,ZERO)
+    if tag=='2c' then
+        add('unequip_release','unequip start','unequip release',ZERO,settle)
+        add('unequip_stow','unequip release','unequip detach',settle,reach)
+        add('unequip_return','unequip detach','unequip stop',reach,ZERO)
+    end
     -- Heavy two-handed fast chain: anticipation counter-roll -> committed cut drive -> settle.
     local fast={
         fasta={hit='slashright hit',antic={-0.6,1.1,1.8,0,0,0},drive={1.6,-2.2,-4.4,0,0,0}},

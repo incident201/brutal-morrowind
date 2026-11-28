@@ -1,10 +1,11 @@
 Brutal Morrowind 0.3.2
 ----------------------------
 
+    First-person two-handed sword draws and sheathes follow the right hand past the shoulder.
     Refine first-person two-handed weapon draws, quick attack recoveries and charged windups. Spear and halberd thrusts and guard transitions use a consistent grip. Attacking during a sprint carries momentum into a single forward lunge, with the right arm extending as the left hand releases the shaft.
     Argonian and Khajiit first-person bodies keep their own gait when sprinting and crouching. The camera lowers with the crouch, and armor stays clear of the center of the view when looking down.
     The launcher and importer accept the parent of a single Dark Messiah installation. Extracted resources take priority over copies in VPK or GCF archives.
-    Dark Messiah import recipe 36 includes the new first-person animations. Choose Import and play to rebuild the import from the installed games.
+    Dark Messiah import recipe 37 includes the new first-person animations. Choose Import and play to rebuild the import from the installed games.
 
 Brutal Morrowind 0.3.1
 ----------------------------
