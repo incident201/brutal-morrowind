@@ -201,7 +201,9 @@ def main():
     sword = sets['brutal_fp']
     for folder, attack in (('brutal_fp_paired', 'weapontwohand'), ('brutal_fp_paired_blunt', 'blunttwohand')):
         sets[folder] = {name: parts for name, parts in sword.items() if name != 'weapononehand'}
-        sets[folder][attack] = sword['weapononehand']
+        # Paired two-handed weapons use their own over-the-back draw and heavy
+        # fast-swing head curves in camera_motion.lua instead of the 1H draw flourish.
+        sets[folder][attack] = [part for part in sword['weapononehand'] if part['stop'] != 'equip stop']
 
     def lua(value, indent=''):
         if isinstance(value, dict):

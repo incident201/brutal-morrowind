@@ -97,6 +97,56 @@ if data and data.sets and data.sets.brutal_fp_spear then
     addSpearHeadMotion(data.sets.brutal_fp_spear.weapononehand, data.clips)
 end
 
+-- Two-handed swords, battle axes and warhammers: a subtle over-the-back draw
+-- weight shift (without the 1H flourish sway) and torso inertia on wide fast swings.
+local function addPairedHeadMotion(set, clips, tag)
+    if not set then return end
+    local function add(name, from, to, a, b, shape)
+        local key='paired_'..tag..'_'..name
+        local frames={}
+        for i=0,12 do
+            local u=i/12
+            local w
+            if shape=='drive' then w=u*u*(2.5-1.5*u)
+            elseif shape=='out' then w=1-(1-u)*(1-u)
+            else w=u*u*(3-2*u) end
+            local frame={0,0,0,0,0,0}
+            for k=1,3 do frame[k]=math.rad(a[k]+(b[k]-a[k])*w) end
+            for k=4,6 do frame[k]=a[k]+(b[k]-a[k])*w end
+            frames[#frames+1]=frame
+        end
+        clips[key]={fps=12,loop=false,frames=frames}
+        set[#set+1]={start=from,stop=to,clip=key,duration=1}
+    end
+    -- Clean over-the-back draw: slight reach right, then a single weighty settle.
+    local reach={-0.6,0.9,1.2,0,0,0}
+    local settle={1.0,-0.4,-1.0,0,0,0}
+    add('equip_reach','equip start','equip attach',ZERO,reach)
+    add('equip_pull','equip attach','equip catch',reach,settle)
+    add('equip_settle','equip catch','equip stop',settle,ZERO)
+    -- Heavy two-handed fast chain: anticipation counter-roll -> committed cut drive -> settle.
+    local fast={
+        fasta={hit='slashright hit',antic={-0.6,1.1,1.8,0,0,0},drive={1.6,-2.2,-4.4,0,0,0}},
+        fastb={hit='slash hit',antic={-0.6,-1.1,-1.8,0,0,0},drive={1.5,2.2,4.4,0,0,0}},
+        fastc={hit='slashright hit',antic={-1.0,1.0,1.6,0,0,0},drive={2.2,-1.9,-4.6,0,0,0}},
+        fastd={hit='slash hit',antic={0.9,-1.0,-1.6,0,0,0},drive={-1.2,2.1,4.2,0,0,0}},
+        faste={hit='slashright hit',antic={-0.7,1.1,1.8,0,0,0},drive={1.8,-2.1,-4.5,0,0,0}},
+    }
+    for name,cfg in pairs(fast) do
+        add(name..'_antic',name..' start',name..' swing',ZERO,cfg.antic)
+        add(name..'_drive',name..' swing',name..' '..cfg.hit,cfg.antic,cfg.drive,'drive')
+        add(name..'_follow',name..' '..cfg.hit,name..' stop',cfg.drive,ZERO,'out')
+    end
+end
+if data and data.sets then
+    if data.sets.brutal_fp_paired then
+        addPairedHeadMotion(data.sets.brutal_fp_paired.weapontwohand, data.clips, '2c')
+    end
+    if data.sets.brutal_fp_paired_blunt then
+        addPairedHeadMotion(data.sets.brutal_fp_paired_blunt.blunttwohand, data.clips, '2b')
+    end
+end
+
 local function sample(clip,t)
     local frames=clip.frames
     local n=#frames

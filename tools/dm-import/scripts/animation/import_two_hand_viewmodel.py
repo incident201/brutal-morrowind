@@ -3,6 +3,7 @@
 import argparse
 import json
 from pathlib import Path
+import re
 
 import numpy as np
 
@@ -16,8 +17,24 @@ ROOT = 'ModelRoot'
 SIDES = ('R', 'L')
 ARM = ('Clavicle', 'UpperArm', 'Forearm', 'Hand')
 SWIVELS = np.linspace(-1.2, 1.2, 17)
+EYE = np.array((0.02, 5.88, 124.71))
 # Offset from the paired grip, outward tilt, and time to finish easing out after contact.
-WINDUPS = {'neutral': ((2., 9., -23.), 0., .15), 'slashright': ((16., 7., -7.), 24., 0.)}
+WINDUPS = {
+    'neutral': ((2., 9., -23.), 0., .15),
+    'slashright': ((16., 7., -7.), 24., 0.),
+    'slash': ((2., 6., -5.), -6., .10),
+}
+EQUIP_TIMING = (0.11, 0.44, 0.68)  # attach, left-hand catch, stop
+# Target KF durations for the authored Dark Messiah fast combo (played at 0.86x for attacks,
+# 1.0x for fastenda). Preserves all 5 authored swings (A..E), fastenda and transA..E continuity.
+FAST_TARGETS = {
+    'fasta': 0.46,
+    'fastb': 0.50,
+    'fastc': 0.50,
+    'fastd': 0.50,
+    'faste': 0.48,
+    'fastenda': 0.56,
+}
 
 
 def bone(side, joint):
@@ -37,6 +54,21 @@ def basis(axis, normal):
     axis = unit(axis)
     normal = unit(normal - axis * (axis @ normal))
     return np.column_stack((axis, cross(normal, axis), normal))
+
+
+def rotate_vec(src, dst):
+    """Shortest-arc rotation matrix taking unit vector src to unit vector dst."""
+    src, dst = unit(src), unit(dst)
+    c = float(np.clip(src @ dst, -1., 1.))
+    if c > 1. - 1e-7:
+        return np.eye(3)
+    axis = cross(src, dst)
+    s = norm(axis)
+    if s < 1e-7:
+        return np.eye(3)
+    axis = axis / s
+    angle = np.arctan2(s, c)
+    return turn_about(axis, np.degrees(angle))
 
 
 def scale_turn(quaternion, weight):
@@ -154,7 +186,10 @@ class Grasp:
     def __init__(self, native, side, blunt):
         self.names = [bone(side, joint) for joint in ARM]
         self.clavicle, upper, fore, hand = map(native.world, self.names)
+        self.clav_root = self.clavicle[:3, 3].copy()
         self.shoulder, self.elbow, self.wrist = upper[:3, 3], fore[:3, 3], hand[:3, 3]
+        self.clav_vec = self.shoulder - self.clav_root
+        self.clav_len = norm(self.clav_vec)
         self.grip = inverse(native.world(ITEM)) @ hand
         self.segments = (norm(self.elbow - self.shoulder), norm(self.wrist - self.elbow))
         axis = unit(self.wrist - self.shoulder)
@@ -174,17 +209,24 @@ class Grasp:
             # Keep the same closed fingers and radial contact on the shaft.
             self.grip[1, 3] -= 7.
 
-    def fit(self, item, elbow_hint=None, swivels=SWIVELS, smooth_bend=False):
-        hand = item @ self.grip
+    def shoulder_pose(self, shift=None):
+        if shift is None or norm(shift) < 1e-6:
+            return self.clavicle, self.shoulder
+        new_dir = unit(self.clav_vec + shift)
+        rot = rotate_vec(self.clav_vec, new_dir)
+        return matrix(rot @ self.clavicle[:3, :3], self.clav_root), self.clav_root + new_dir * self.clav_len
+
+    def fit_hand(self, hand, elbow_hint=None, swivels=SWIVELS, smooth_bend=False, shoulder_shift=None):
+        clavicle, shoulder = self.shoulder_pose(shoulder_shift)
         wrist = hand[:3, 3]
-        delta = wrist - self.shoulder
+        delta = wrist - shoulder
         distance = norm(delta)
         axis = delta / distance
         upper_length, fore_length = self.segments
         projection = (distance ** 2 + upper_length ** 2 - fore_length ** 2) / (2 * distance)
         height = np.sqrt(max(0., upper_length ** 2 - projection ** 2))
-        base = self.shoulder + axis * projection
-        guide = self.pole if elbow_hint is None else elbow_hint - self.shoulder
+        base = shoulder + axis * projection
+        guide = self.pole if elbow_hint is None else elbow_hint - shoulder
         if smooth_bend:
             # Carry the bind elbow plane with the wrist axis. Projecting a
             # fixed pole can flip the elbow when a wide swing aligns with it.
@@ -203,8 +245,8 @@ class Grasp:
             # bent elbow. The angle between forearm and native palm stays measurable.
             flex = np.arccos(np.clip(fore_axis @ desired_fore[:, 0], -1., 1.))
             palm_flex = np.arccos(np.clip(fore_axis @ palm_along, -1., 1.))
-            normal = cross(elbow - self.shoulder, wrist - elbow)
-            upper_rotation = basis(elbow - self.shoulder, normal) @ self.upper_frame
+            normal = cross(elbow - shoulder, wrist - elbow)
+            upper_rotation = basis(elbow - shoulder, normal) @ self.upper_frame
             fore_rotation = basis(wrist - elbow, normal) @ self.fore_frame
             twist_sine = fore_rotation[:, 2] @ desired_fore[:, 1] - fore_rotation[:, 1] @ desired_fore[:, 2]
             if smooth_bend:
@@ -231,8 +273,12 @@ class Grasp:
         twist = np.clip(twist, -1.05, 1.05)
         c, s = np.cos(twist), np.sin(twist)
         fore_rotation = fore_rotation @ np.array(((1., 0., 0.), (0., c, -s), (0., s, c)))
-        return (self.clavicle, matrix(upper_rotation, self.shoulder), matrix(fore_rotation, elbow), hand), max(
+        return (clavicle, matrix(upper_rotation, shoulder), matrix(fore_rotation, elbow), hand), max(
             flex, palm_flex - .18)
+
+    def fit(self, item, elbow_hint=None, swivels=SWIVELS, smooth_bend=False, shoulder_shift=None):
+        return self.fit_hand(item @ self.grip, elbow_hint=elbow_hint, swivels=swivels,
+                             smooth_bend=smooth_bend, shoulder_shift=shoulder_shift)
 
 
 def keys(stream):
@@ -247,6 +293,67 @@ def load(path):
 
 def native_starts(path):
     return {key.lower(): float(time) for time, text in keys(load(path)).keys for key in text.splitlines() if key}
+
+
+def eval_key_curve(u, knots):
+    """Evaluate a piecewise smoothstep-interpolated (t, pos, euler_xyz) keyframe curve."""
+    if u <= knots[0][0]:
+        return np.asarray(knots[0][1], float), tuple(knots[0][2])
+    if u >= knots[-1][0]:
+        return np.asarray(knots[-1][1], float), tuple(knots[-1][2])
+    for i in range(len(knots) - 1):
+        t0, p0, r0 = knots[i]
+        t1, p1, r1 = knots[i + 1]
+        if t0 <= u <= t1:
+            f = smoothstep((u - t0) / max(1e-6, t1 - t0))
+            pos = lerp(np.asarray(p0, float), np.asarray(p1, float), f)
+            rot = tuple(lerp(a, b, f) for a, b in zip(r0, r1))
+            return pos, rot
+    return np.asarray(knots[-1][1], float), tuple(knots[-1][2])
+
+
+def rot_xyz(rx, ry, rz):
+    """World-space pitch (X), roll (Y), yaw (Z) rotation in degrees."""
+    return turn_about((0, 0, 1), rz) @ turn_about((0, 1, 0), ry) @ turn_about((1, 0, 0), rx)
+
+
+def soft_min(value, ceiling, softness=4.0):
+    """Smooth C-infinity upper bound that approaches value below ceiling without hard clamping."""
+    diff = (ceiling - value) / softness
+    if diff > 20.:
+        return value
+    if diff < -20.:
+        return ceiling
+    return ceiling - softness * np.log1p(np.exp(diff))
+
+
+def soft_max(value, floor, softness=3.5):
+    """Smooth C-infinity lower bound without hard clamping."""
+    return -soft_min(-value, -floor, softness)
+
+
+def warp_weight_u(u_dst, strength=0.36):
+    """Monotonic weight curve u_dst -> u_src: slower anticipation & follow-through, brisker mid-strike."""
+    u = float(np.clip(u_dst, 0., 1.))
+    return u - strength * np.sin(2. * np.pi * u) / (2. * np.pi)
+
+
+def inv_warp_weight_u(u_src, strength=0.36):
+    """Inverse of warp_weight_u: maps a source fraction u_src to its warped destination fraction."""
+    grid = np.linspace(0., 1., 513)
+    src = grid - strength * np.sin(2. * np.pi * grid) / (2. * np.pi)
+    return float(np.interp(np.clip(u_src, 0., 1.), src, grid))
+
+
+# Clean over-the-back draw: pull over right shoulder, left hand catches at t=0.44, subtle settle to idle2c.
+EQUIP_KNOTS = (
+    (0.00, ( 13.5, -18.5,  15.5), ( 56., -24., -16.)),
+    (0.11, ( 13.0, -17.0,  16.5), ( 50., -22., -14.)),
+    (0.27, ( 10.5,  -7.5,  10.5), ( 20., -12.,  -6.)),
+    (0.44, (  1.5,  -0.5,  -2.0), ( -4.,   2.,   0.)),
+    (0.56, (  0.3,   0.1,  -0.5), ( -1.,   0.,   0.)),
+    (0.68, (  0.0,   0.0,   0.0), (  0.,   0.,   0.)),
+)
 
 
 class Retarget:
@@ -273,19 +380,83 @@ class Retarget:
             item[:3, 3] += np.array((-3., -2., -4.)) * contest
         return self.fit_item(item)
 
-    def fit_item(self, item, swing=False, one_hand=False):
+    def shoulder_shifts(self, item, weight):
+        if weight <= 1e-6:
+            return [None, None]
+        shifts = []
+        for grasp in self.grasps:
+            wrist = (item @ grasp.grip)[:3, 3]
+            delta = wrist - grasp.shoulder
+            shift = np.array((
+                np.clip(delta[0] * 0.14, -2.5, 2.5),
+                np.clip((delta[1] - 16.0) * 0.45, 0.0, 6.5),
+                -3.0,
+            )) * weight
+            shifts.append(shift)
+        return shifts
+
+    def fit_item(self, item, swing=False, one_hand=False, shoulder_weight=0.):
         grasps = self.grasps[:1] if one_hand else self.grasps
+        shifts = self.shoulder_shifts(item, shoulder_weight if swing and not one_hand else 0.)
+        shoulders = [grasp.shoulder_pose(shift)[1] for grasp, shift in zip(grasps, shifts)]
         for _ in range(4):
-            for grasp in grasps:
+            for grasp, shoulder in zip(grasps, shoulders):
                 wrist = (item @ grasp.grip)[:3, 3]
-                delta = wrist - grasp.shoulder
+                delta = wrist - shoulder
                 length = norm(delta)
                 reachable = np.clip(length, 11. if swing else 8., sum(grasp.segments) - 1.3)
                 item[:3, 3] += delta * (reachable / length - 1.)
-        arms = [grasp.fit(item, smooth_bend=swing) for grasp in grasps]
+        arms = [grasp.fit(item, smooth_bend=swing, shoulder_shift=shift)
+                for grasp, shift in zip(grasps, shifts)]
         return item, arms
 
-    def swing_item(self, source, delta, turn, falling, windup):
+    def pack_arms(self, pose, arms):
+        result = {ITEM: self.item_mount}
+        for grasp, (chain, _) in zip(self.grasps, arms):
+            parent = pose.world(self.rig.parents[grasp.names[0]])
+            for name, transform in zip(grasp.names, chain):
+                result[name] = inverse(parent) @ transform
+                parent = transform
+            result.update(grasp.fingers)
+        return result
+
+    def equip_pose(self, pose, local_t):
+        """Clean over-the-back two-handed draw: right hand pulls over right shoulder,
+        left hand rises from lower-left to catch the grip at EQUIP_TIMING[1]."""
+        _, catch_t, stop_t = EQUIP_TIMING
+        t = float(np.clip(local_t, 0., stop_t))
+        pos_off, (rx, ry, rz) = eval_key_curve(t, EQUIP_KNOTS)
+        item = matrix(rot_xyz(rx, ry, rz) @ self.idle[:3, :3], self.idle[:3, 3] + pos_off)
+        if t >= catch_t:
+            _, arms = self.fit_item(item, swing=False)
+            return self.pack_arms(pose, arms)
+        # Right hand draws the weapon over the right shoulder with slight shoulder lift.
+        r_shift = np.array((1.0, 1.5, 2.0)) * (1. - smoothstep(t / catch_t))
+        r_grasp, l_grasp = self.grasps
+        _, r_sh = r_grasp.shoulder_pose(r_shift)
+        for _ in range(3):
+            wrist = (item @ r_grasp.grip)[:3, 3]
+            delta = wrist - r_sh
+            length = norm(delta)
+            reachable = np.clip(length, 9., sum(r_grasp.segments) - 1.3)
+            item[:3, 3] += delta * (reachable / length - 1.)
+        # Keep smooth_bend=False throughout equip so there is zero elbow/wrist pop at catch_t.
+        r_arm = r_grasp.fit(item, smooth_bend=False, shoulder_shift=r_shift)
+        # Left hand waits low-left and rises smoothly to meet the lower grip at catch_t.
+        catch_w = smoothstep((t - 0.14) / max(1e-6, catch_t - 0.14))
+        target_l = item @ l_grasp.grip
+        idle_l = self.idle @ l_grasp.grip
+        low_l_pos = idle_l[:3, 3] + np.array((-12.0, -8.0, -10.0))
+        low_l_rot = turn_about((0, 0, 1), -18.) @ turn_about((1, 0, 0), -12.) @ idle_l[:3, :3]
+        q0, q1 = matrix_quat(low_l_rot), matrix_quat(target_l[:3, :3])
+        if q0 @ q1 < 0:
+            q1 = -q1
+        l_hand = matrix(quat_matrix(slerp(q0, q1, catch_w)[[1, 2, 3, 0]]),
+                        lerp(low_l_pos, target_l[:3, 3], catch_w))
+        l_arm = l_grasp.fit_hand(l_hand, smooth_bend=False)
+        return self.pack_arms(pose, [r_arm, l_arm])
+
+    def swing_item(self, source, delta, turn, falling, windup, slashright_arc=None, fast_swing=False):
         # The paired guard is higher than the sword's. As the hands leave it,
         # remove most of that offset so the authored swing crosses the view.
         angle = 2. * np.arccos(np.clip(abs(turn[0]), 0., 1.))
@@ -293,8 +464,14 @@ class Retarget:
         weight = motion * motion * (3. - 2. * motion)
         offset = slerp(self.stance_offset, np.array((1., 0., 0., 0.)), .72 * weight)
         rotation = source[:3, :3] @ quat_matrix(offset[[1, 2, 3, 0]])
-        position = self.idle[:3, 3] + delta * (1., .88, .95) + weight * np.array((0., 0., -22.))
+        scale = (1.22, .96, .95) if fast_swing else (1., .88, .95)
+        position = self.idle[:3, 3] + delta * scale + weight * np.array((0., 0., -22.))
         position[1] = max(13., position[1])
+        if fast_swing:
+            # Widen the authored Dark Messiah fast combo cleanly without hard wall clamps:
+            # keep high fastC/fastD arcs smoothly below eye level and forward of the lens.
+            position[1] = soft_max(position[1] + 3.5 * weight, EYE[1] + 17.5, softness=3.5)
+            position[2] = soft_min(position[2], EYE[2] - 8.5, softness=4.0)
         if falling and rotation[1, 1] < 0.:
             # Compress the part of the arc behind the eye towards overhead.
             # The rate matches the unaltered forward arc at the vertical pose.
@@ -309,7 +486,18 @@ class Retarget:
             offset, tilt, amount = windup
             rotation = turn_about((0, 1, 0), tilt * amount) @ rotation
             position += amount * np.asarray(offset)
-        return matrix(rotation, position)
+        if slashright_arc is not None:
+            # Smoothly lower the left-step charged slash plane across impact AND carry
+            # its follow-through down-left off the bottom-left edge of the viewport
+            # (instead of freezing on-screen or sweeping across the eyes).
+            hit_w, follow_w = slashright_arc
+            position[1] += 5.5 * hit_w
+            position[2] -= 10.5 * hit_w
+            if follow_w > 0.:
+                position[0] -= 7.5 * follow_w
+                position[2] -= 17.5 * follow_w
+                rotation = turn_about((0, 1, 0), -28.0 * follow_w) @ rotation
+        return matrix(rotation, position), weight
 
     def sprint_item(self, source, sword_start):
         # Carry the long weapon lower on the right. Follow the sword's cycle
@@ -320,7 +508,8 @@ class Retarget:
         position = np.array((23., 24., 95.)) + travel * (source[:3, 3] - sword_start[:3, 3])
         return matrix(scale_turn(turn, travel) @ carry, position)
 
-    def adapt(self, pose, turn, attacking, contest, swing, falling, *, windup, running, sprint_start):
+    def adapt(self, pose, turn, attacking, contest, swing, falling, *,
+              windup, running, sprint_start, slashright_arc=None, fast_swing=False):
         source = pose.world(ITEM)
         delta = source[:3, 3] - self.source_idle[:3, 3]
         # Transfer the sword's world-space swing about our different idle
@@ -329,7 +518,13 @@ class Retarget:
             # Keep the authored free left arm and fingers from the sword sprint.
             _, arms = self.fit_item(self.sprint_item(source, sprint_start), swing=True, one_hand=True)
         elif swing:
-            _, arms = self.fit_item(self.swing_item(source, delta, turn, falling, windup), swing=True)
+            item, motion = self.swing_item(
+                source, delta, turn, falling, windup,
+                slashright_arc=slashright_arc, fast_swing=fast_swing)
+            # Keep neutral's low strike clearance (shoulders stay at bind height) while
+            # protracting shoulders on side slashes and wide fast swings.
+            sh_w = motion if (slashright_arc is not None or fast_swing or windup is None or windup[0][2] > -15.) else 0.
+            _, arms = self.fit_item(item, swing=True, shoulder_weight=sh_w)
         else:
             travel = (.66, .53, .66) if attacking else (.47, .52, .53)
             position = self.idle[:3, 3] + delta * travel
@@ -339,14 +534,56 @@ class Retarget:
             excess = max(0., max(flex for _, flex in arms) - .88)
             if excess:
                 _, arms = self.fit(turn, position, weight / (1. + .75 * excess), contest)
-        result = {ITEM: self.item_mount}
-        for grasp, (chain, _) in zip(self.grasps, arms):
-            parent = pose.world(self.rig.parents[grasp.names[0]])
-            for name, transform in zip(grasp.names, chain):
-                result[name] = inverse(parent) @ transform
-                parent = transform
-            result.update(grasp.fingers)
-        return result
+        return self.pack_arms(pose, arms)
+
+
+def build_fast_time_warp(source_keys, group):
+    """Build a monotonic time remapping for the authored fastA..E + fastendA sections.
+
+    Returns (spans, src_to_dst, dst_to_src) where spans is [(name, s0, s1, d0, d1, warped), ...].
+    Sections before fasta stay at their original times; sections after fastenda shift by the
+    exact cumulative added duration so every channel and text key stays aligned.
+    """
+    key_map = {lbl.removeprefix(group + ': '): t for t, lbl in source_keys}
+    order = ('fasta', 'fastb', 'fastc', 'fastd', 'faste', 'fastenda')
+    spans = []
+    shift = 0.0
+    for name in order:
+        s0, s1 = key_map[f'{name} start'], key_map[f'{name} stop']
+        target_dur = FAST_TARGETS[name]
+        d0 = s0 + shift
+        d1 = d0 + target_dur
+        warped = name != 'fastenda'
+        spans.append((name, s0, s1, d0, d1, warped))
+        shift += target_dur - (s1 - s0)
+
+    def src_to_dst(t):
+        t = float(t)
+        if t < spans[0][1]:
+            return t
+        for _, s0, s1, d0, d1, warped in spans:
+            if t <= s1 + 1e-6:
+                if t <= s0:
+                    return d0 - (s0 - t)
+                u_src = (t - s0) / max(1e-6, s1 - s0)
+                u_dst = inv_warp_weight_u(u_src) if warped else u_src
+                return d0 + u_dst * (d1 - d0)
+        return t + shift
+
+    def dst_to_src(td):
+        td = float(td)
+        if td < spans[0][3]:
+            return td
+        for _, s0, s1, d0, d1, warped in spans:
+            if td <= d1 + 1e-6:
+                if td <= d0:
+                    return s0 - (d0 - td)
+                u_dst = (td - d0) / max(1e-6, d1 - d0)
+                u_src = warp_weight_u(u_dst) if warped else u_dst
+                return s0 + u_src * (s1 - s0)
+        return td - shift
+
+    return spans, src_to_dst, dst_to_src
 
 
 def convert(source, target, retarget):
@@ -358,14 +595,20 @@ def convert(source, target, retarget):
     # Densify the moving intervals so interpolation between local bone keys
     # keeps the left palm close to its rigid item-space target as well.
     midpoints = (original_times[:-1] + original_times[1:]) * .5
-    times = np.sort(np.r_[original_times, midpoints[np.diff(original_times) > .022]])
+    src_times = np.sort(np.r_[original_times, midpoints[np.diff(original_times) > .022]])
     attacking = group == 'weapononehand'
     falling = group == 'brutal_fallattack'
     running = group.startswith('run')
     sprint_start = Pose(retarget.rig, channels, 0.).world(ITEM) if group == 'brutal_sprint1h' else None
     windup_sections = []
     single_hand_sections = {}
+    slashright_section = None
+    equip_range = None
+    fast_src_ranges = []
+    src_to_dst = lambda t: float(t)
+    dst_to_src = lambda t: float(t)
     swing_start = 0. if falling else np.inf
+    source_keys = [(float(time), str(label)) for time, label in marks.keys]
     if group == 'weapononehand':
         charged = {}
         for attack in ('chop', 'thrust', *WINDUPS):
@@ -376,14 +619,49 @@ def convert(source, target, retarget):
         swing_start = charged['chop']['start']
         windup_sections = [(charged[attack], *bias) for attack, bias in WINDUPS.items()]
         single_hand_sections = {attack: charged[attack] for attack in ('chop', 'thrust')}
+        slashright_section = charged['slashright']
+        # Over-the-back draw fits inside the original equip interval [0, equip stop].
+        equip_attach, equip_catch, equip_stop = EQUIP_TIMING
+        equip_orig_stop = next(t for t, l in source_keys if l == f'{group}: equip stop')
+        equip_range = (0.0, equip_stop, equip_orig_stop)
+        # Retime the 5 authored DM fast swings + fastenda with a smooth weight curve.
+        fast_spans, src_to_dst, dst_to_src = build_fast_time_warp(source_keys, group)
+        fast_src_ranges = [(s0, s1) for name, s0, s1, _, _, _ in fast_spans if name != 'fastenda']
+        # Remap every text key cleanly to the new timeline.
+        remapped = []
+        for t, lbl in source_keys:
+            if lbl in (f'{group}: equip attach', f'{group}: equip stop'):
+                continue
+            remapped.append((src_to_dst(t), lbl))
+        remapped += [
+            (equip_attach, f'{group}: equip attach'),
+            (equip_catch, f'{group}: equip catch'),
+            (equip_stop, f'{group}: equip stop'),
+        ]
+        source_keys = sorted(remapped, key=lambda key: key[0])
+        # Build dense destination times across equip and warped fast sections.
+        dst_times = np.array([src_to_dst(t) for t in src_times], float)
+        extra_dst = [np.linspace(0.0, equip_stop, int(np.ceil(equip_stop * 60)) + 1)]
+        for _, _, _, d0, d1, _ in fast_spans:
+            extra_dst.append(np.linspace(d0, d1, int(np.ceil((d1 - d0) * 60)) + 1))
+        dst_times = np.unique(np.concatenate([dst_times, *extra_dst]))
+        src_times = np.array([dst_to_src(t) for t in dst_times], float)
+    else:
+        dst_times = src_times.copy()
+
     paired_guards = {}
     poses = []
     previous = None
-    for time in times:
+    for dst_t, time in zip(dst_times, src_times):
         pose = Pose(retarget.rig, channels, time)
         turn = matrix_quat(pose.world(ITEM)[:3, :3] @ retarget.source_idle[:3, :3].T)
         if previous is not None and previous @ turn < 0:
             turn = -turn
+        if equip_range is not None and time <= equip_range[2] + 1e-5:
+            result = retarget.equip_pose(pose, min(dst_t, equip_range[1]))
+            poses.append(result)
+            previous = turn
+            continue
         contest = 0.
         if group.startswith('brutal_clinch'):
             contest = 1.
@@ -395,8 +673,19 @@ def convert(source, target, retarget):
             weight = charge_weight(time, section, .28, section['min hit'], section['hit'] + follow)
             if weight:
                 windup = offset, tilt, weight
+        slashright_arc = None
+        if slashright_section is not None:
+            r0 = slashright_section['min hit']
+            rh = slashright_section['hit']
+            r1 = slashright_section['large follow stop']
+            if r0 < time < r1:
+                hit_w = smoothstep((time - r0) / 0.16) * smoothstep((r1 - time) / 0.24)
+                follow_w = smoothstep((time - (rh - 0.03)) / 0.16) * smoothstep((r1 - time) / 0.26)
+                slashright_arc = (hit_w, follow_w)
+        fast_swing = any(s0 - 1e-5 <= time <= s1 + 1e-5 for s0, s1 in fast_src_ranges)
         result = retarget.adapt(pose, turn, attacking, contest, time >= swing_start,
-                                falling, windup=windup, running=running, sprint_start=sprint_start)
+                                falling, windup=windup, running=running, sprint_start=sprint_start,
+                                slashright_arc=slashright_arc, fast_swing=fast_swing)
         for attack, section in single_hand_sections.items():
             recover, end = section['hit'] + .25, section['large follow stop']
             if time == section['start']:
@@ -413,9 +702,18 @@ def convert(source, target, retarget):
                     blend_with_sword(pose, result, weight, sword_grip=False)
         poses.append(result)
         previous = turn
+    final_stop = float(dst_times[-1])
     names = [extra.string_data for extra in stream.root.extra_datas if isinstance(extra, nif.NiStringExtraData)]
     for name, controller in zip(names, stream.root.controllers):
+        controller.stop_time = final_stop
         if name not in poses[0]:
+            # Remap timestamps on all non-arm channels too so their stop_time matches.
+            for field in ('rotations', 'translations', 'scales'):
+                data = getattr(controller.data, field, None)
+                if data is not None and len(data.keys):
+                    remapped_keys = data.keys.copy()
+                    remapped_keys[:, 0] = [src_to_dst(t) for t in remapped_keys[:, 0]]
+                    data.keys = remapped_keys.astype(np.float32)
             continue
         # Adjacent keys use the same quaternion hemisphere, including the
         # small gaps between independently played attack sections.
@@ -423,11 +721,10 @@ def convert(source, target, retarget):
         for index in range(1, len(rotations)):
             if rotations[index - 1] @ rotations[index] < 0:
                 rotations[index] *= -1
-        controller.data.rotations.keys = np.column_stack((times, rotations)).astype(np.float32)
-        controller.data.translations.keys = np.column_stack((times, [p[name][:3, 3] for p in poses])).astype(np.float32)
+        controller.data.rotations.keys = np.column_stack((dst_times, rotations)).astype(np.float32)
+        controller.data.translations.keys = np.column_stack((dst_times, [p[name][:3, 3] for p in poses])).astype(np.float32)
     if not set(poses[0]).issubset(names):
         raise ValueError(f'Missing arm channels in {source.name}')
-    source_keys = list(marks.keys)
     if group in ('weapononehand', 'brutal_fallattack'):
         source_keys.append((0., group + ': brutal paired grip'))
         source_keys.sort(key=lambda key: key[0])
@@ -436,7 +733,23 @@ def convert(source, target, retarget):
                            for time, label in source_keys], dtype=marks.keys.dtype)
     stream.save(target)
     if yaml.is_file():
-        target.with_suffix('.yaml').write_text(yaml.read_text().replace(group + ':', target.stem + ':'))
+        # Rename both phase-keyed rules ('group:phase') and whole-group gait rules ('group').
+        yaml_text = (yaml.read_text()
+                     .replace(f"'{group}:", f"'{target.stem}:")
+                     .replace(f"'{group}'", f"'{target.stem}'"))
+        if group == 'weapononehand':
+            # Crisp yet smooth blend-in for over-the-back draw and heavy fast combo.
+            for key, dur in (('equip start', '0.12'), ('fasta start', '0.14'), ('fastb start', '0.14'),
+                             ('fastc start', '0.14'), ('fastd start', '0.14'), ('faste start', '0.14'),
+                             ('fastenda start', '0.14')):
+                yaml_text = re.sub(
+                    rf"(- from: '\*'\n\s+to: '{re.escape(target.stem)}:{re.escape(key)}'\n\s+easing: linear\n\s+duration:) [^\n]+",
+                    rf'\g<1> {dur}', yaml_text)
+        elif group == 'idle1h':
+            yaml_text = re.sub(
+                rf"(- from: '\*'\n\s+to: '{re.escape(target.stem)}'\n\s+easing: linear\n\s+duration:) [^\n]+",
+                r'\g<1> 0.24', yaml_text)
+        target.with_suffix('.yaml').write_text(yaml_text)
 
 
 def build(arms, clinch, native_skeleton, native_animation):
