@@ -78,6 +78,17 @@ namespace
         }
         return libraries;
     }
+
+    bool hasDarkMessiahResources(const QString& folder)
+    {
+        for (const QString& candidate : { folder, folder + "/vpks", folder + "/mm", folder + "/mm/vpks" })
+            if (!QDir(candidate)
+                    .entryList({ QStringLiteral("*_dir.vpk"), QStringLiteral("*.gcf") }, QDir::Files)
+                    .isEmpty())
+                return true;
+        const QString content = QFileInfo(folder + "/mm").isDir() ? folder + "/mm" : folder;
+        return QFileInfo(content + "/models/npc/player/first_basic.mdl").isFile();
+    }
 }
 
 Launcher::DarkMessiahPage::DarkMessiahPage(
@@ -204,9 +215,11 @@ bool Launcher::DarkMessiahPage::isGameFolder(const QString& folder)
 {
     if (folder.isEmpty())
         return false;
-    for (const QString& candidate : { folder, folder + "/vpks", folder + "/mm", folder + "/mm/vpks" })
-        if (!QDir(candidate).entryList({ QStringLiteral("*_dir.vpk"), QStringLiteral("*.gcf") }, QDir::Files).isEmpty()
-            || QFileInfo::exists(candidate + "/models/npc/player/first_basic.mdl"))
+    if (hasDarkMessiahResources(folder))
+        return true;
+    // The importer also accepts a game folder inside the selected folder.
+    for (const auto& child : QDir(folder).entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot))
+        if (hasDarkMessiahResources(child.filePath()))
             return true;
     return false;
 }

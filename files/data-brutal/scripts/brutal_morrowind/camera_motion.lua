@@ -62,15 +62,15 @@ local function addSpearHeadMotion(set, clips)
         clips[name]={fps=12,loop=false,frames=frames}
         set[#set+1]={start=group..' '..from,stop=group..' '..to,clip=name,duration=1}
     end
-    -- Keep the point readable through the fast drive. The eye dips briefly as
-    -- the forward foot takes the weight, then settles while the hands return.
+    -- Directional head commitment matching each chamber's strike line.
+    -- Roll carries the shoulder drive without pulling the point off-aim.
     local quick={
-        fasta={cock={0.2,-0.15,0.55,0,0,0},drive={1.6,0.3,-1.8,0,0,0},kick={3.1,0.45,-3.1,0,0,0},rebound={0.6,0,0.30,0,0,0}},
-        fastb={cock={0.2,-0.10,0.45,0,0,0},drive={1.4,0.2,-1.5,0,0,0},kick={2.8,0.35,-2.7,0,0,0},rebound={0.5,0,0.20,0,0,0}},
-        fastc={cock={0.25,-0.20,0.65,0,0,0},drive={1.7,0.4,-2.0,0,0,0},kick={3.3,0.55,-3.4,0,0,0},rebound={0.6,0,0.35,0,0,0}},
-        fastd={cock={0.30,-0.25,0.80,0,0,0},drive={1.9,0.5,-2.4,0,0,0},kick={3.6,0.65,-4.0,0,0,0},rebound={0.7,0,0.45,0,0,0}},
+        fasta={cock={-0.35,-0.25,0.85,0,0,0},drive={1.9,0.35,-2.3,0,0,0},kick={3.4,0.55,-3.6,0,0,0},rebound={0.6,0,0.30,0,0,0}},
+        fastb={cock={-0.55, 0.25,1.35,0,0,0},drive={2.2,-0.45,-2.6,0,0,0},kick={3.8,-0.65,-4.0,0,0,0},rebound={0.7,0,0.35,0,0,0}},
+        fastc={cock={ 0.45,-0.35,-0.95,0,0,0},drive={1.6,0.45,-2.4,0,0,0},kick={3.1,0.65,-3.8,0,0,0},rebound={0.5,0,0.25,0,0,0}},
+        fastd={cock={-0.25,-0.45,1.25,0,0,0},drive={2.0,0.55,-2.8,0,0,0},kick={3.7,0.75,-4.3,0,0,0},rebound={0.7,0,0.40,0,0,0}},
+        fastloopa={cock={0.35,0.20,-0.75,0,0,0},drive={1.8,-0.30,-2.4,0,0,0},kick={3.4,-0.45,-3.8,0,0,0},rebound={0.6,0,0.30,0,0,0}},
     }
-    quick.fastloopa=quick.fasta
     for _,group in ipairs({'fasta','fastloopa','fastb','fastc','fastd'}) do
         local q=quick[group]
         add(group,'start','plant',ZERO,q.cock)
@@ -79,22 +79,127 @@ local function addSpearHeadMotion(set, clips)
         add(group,'weight forward','settle end',q.kick,q.rebound)
         add(group,'settle end','stop',q.rebound,ZERO)
     end
-    -- Charged: a long cock-back held while charging, then DM's staff lunge.
-    local charged={0.5,-1.5,3.85,0,0,0}
-    local inhale={0.5,-1.7,4.29,0,0,0}
-    local drive={2.4,1.88,-7.7,0,0,0}
-    local kick={3,2.12,-9.35,0,0,0}
-    local rebound={0.5,-1.25,-2.75,0,0,0}
-    add('thrust','start','max attack',ZERO,charged)
-    add('thrust hold','start','breath',charged,inhale)
-    add('thrust hold','breath','stop',inhale,charged)
-    add('thrust','plant','hit',charged,drive,'drive')
-    add('thrust','hit','weight forward',drive,kick,'snap')
-    add('thrust','weight forward','settle end',kick,rebound)
-    add('thrust','settle end','large follow stop',rebound,ZERO)
+    -- Charged: deep coiled draw-back, taut hold breath, then heavy piercing lunge.
+    -- Apply identically to both moving ('thrust') and standing ('neutral') charges.
+    local charged={0.6,-1.6,4.2,0,0,0}
+    local inhale={0.4,-1.85,4.7,0,0,0}
+    local drive={2.8,2.0,-8.2,0,0,0}
+    local kick={3.6,2.3,-10.0,0,0,0}
+    local rebound={0.6,-1.1,-2.6,0,0,0}
+    for _,group in ipairs({'thrust','neutral'}) do
+        add(group,'start','max attack',ZERO,charged)
+        add(group..' hold','start','breath',charged,inhale)
+        add(group..' hold','breath','stop',inhale,charged)
+        add(group,'plant','hit',charged,drive,'drive')
+        add(group,'hit','weight forward',drive,kick,'snap')
+        add(group,'weight forward','settle end',kick,rebound)
+        add(group,'settle end','large follow stop',rebound,ZERO)
+    end
+end
+local okImpulse, nativeImpulse = pcall(require, 'scripts.brutal_morrowind.native_impulse')
+local function addSpearRushHeadMotion(sets, clips)
+    local rush={}
+    local function add(name, from, to, a, b, shape)
+        local key='spear_rush_'..name
+        local frames={}
+        for i=0,12 do
+            local u=i/12
+            local w
+            if shape=='drive' then w=u*u*(2.6-1.6*u)
+            elseif shape=='snap' then w=1-(1-u)^3
+            else w=u*u*(3-2*u) end
+            local frame={0,0,0,0,0,0}
+            for k=1,3 do frame[k]=math.rad(a[k]+(b[k]-a[k])*w) end
+            for k=4,6 do frame[k]=a[k]+(b[k]-a[k])*w end
+            frames[#frames+1]=frame
+        end
+        clips[key]={fps=12,loop=false,frames=frames}
+        rush[#rush+1]={start=from,stop=to,clip=key,duration=1}
+    end
+    -- Whole-body forward & downward torso commitment (x, y_forward, z_up in
+    -- slots 4..6) so the eye and shoulders surge forward while keeping the
+    -- entire outstretched right arm visibly extended in front of the player.
+    local coil={1.2,-2.5,4.5,-1.0,3.5,-2.8}
+    local drive={4.2,3.0,-11.5,2.2,8.5,-7.5}
+    local kick={5.4,3.6,-13.5,2.6,10.5,-9.0}
+    local hold={3.4,2.2,-9.8,2.0,8.0,-7.0}
+    add('coil','start','swing',ZERO,coil)
+    add('drive','swing','hit2',coil,drive,'drive')
+    add('kick','hit2','hold start',drive,kick,'snap')
+    add('hold','hold start','hold end',kick,hold)
+    add('return','hold end','stop',hold,ZERO)
+    sets.brutal_rush=rush
 end
 if data and data.sets and data.sets.brutal_fp_spear then
     addSpearHeadMotion(data.sets.brutal_fp_spear.weapononehand, data.clips)
+    addSpearRushHeadMotion(data.sets.brutal_fp_spear, data.clips)
+end
+if okImpulse and nativeImpulse and nativeImpulse.available and I.AnimationController then
+    -- Carry real sprint momentum into the spear rush lunge so starting the
+    -- attack never feels like slamming on the brakes.
+    I.AnimationController.addTextKeyHandler('brutal_rush', function(_, key)
+        if key ~= 'start' and key ~= 'swing' then return end
+        if not settings.get('enabled') or settings.get('firstPersonAnimations') ~= 'darkMessiah' then return end
+        if types.Actor.isDead(self) or not types.Actor.isOnGround(self) or types.Actor.isSwimming(self) then return end
+        local weapon = types.Actor.getEquipment(self)[types.Actor.EQUIPMENT_SLOT.CarriedRight]
+        if not weapon or not types.Weapon.objectIsInstance(weapon)
+            or types.Weapon.record(weapon).type ~= types.Weapon.TYPE.SpearTwoWide then return end
+        local forward = self.rotation * util.vector3(0, 1, 0)
+        forward = util.vector3(forward.x, forward.y, 0)
+        if forward:length() < 1e-3 then return end
+        forward = forward:normalize()
+        nativeImpulse.apply(self, forward * (key == 'start' and 220 or 360))
+    end)
+end
+
+-- Two-handed swords, battle axes and warhammers: a subtle over-the-back draw
+-- weight shift (without the 1H flourish sway) and torso inertia on wide fast swings.
+local function addPairedHeadMotion(set, clips, tag)
+    if not set then return end
+    local function add(name, from, to, a, b, shape)
+        local key='paired_'..tag..'_'..name
+        local frames={}
+        for i=0,12 do
+            local u=i/12
+            local w
+            if shape=='drive' then w=u*u*(2.5-1.5*u)
+            elseif shape=='out' then w=1-(1-u)*(1-u)
+            else w=u*u*(3-2*u) end
+            local frame={0,0,0,0,0,0}
+            for k=1,3 do frame[k]=math.rad(a[k]+(b[k]-a[k])*w) end
+            for k=4,6 do frame[k]=a[k]+(b[k]-a[k])*w end
+            frames[#frames+1]=frame
+        end
+        clips[key]={fps=12,loop=false,frames=frames}
+        set[#set+1]={start=from,stop=to,clip=key,duration=1}
+    end
+    -- Clean over-the-back draw: slight reach right, then a single weighty settle.
+    local reach={-0.6,0.9,1.2,0,0,0}
+    local settle={1.0,-0.4,-1.0,0,0,0}
+    add('equip_reach','equip start','equip attach',ZERO,reach)
+    add('equip_pull','equip attach','equip catch',reach,settle)
+    add('equip_settle','equip catch','equip stop',settle,ZERO)
+    -- Heavy two-handed fast chain: anticipation counter-roll -> committed cut drive -> settle.
+    local fast={
+        fasta={hit='slashright hit',antic={-0.6,1.1,1.8,0,0,0},drive={1.6,-2.2,-4.4,0,0,0}},
+        fastb={hit='slash hit',antic={-0.6,-1.1,-1.8,0,0,0},drive={1.5,2.2,4.4,0,0,0}},
+        fastc={hit='slashright hit',antic={-1.0,1.0,1.6,0,0,0},drive={2.2,-1.9,-4.6,0,0,0}},
+        fastd={hit='slash hit',antic={0.9,-1.0,-1.6,0,0,0},drive={-1.2,2.1,4.2,0,0,0}},
+        faste={hit='slashright hit',antic={-0.7,1.1,1.8,0,0,0},drive={1.8,-2.1,-4.5,0,0,0}},
+    }
+    for name,cfg in pairs(fast) do
+        add(name..'_antic',name..' start',name..' swing',ZERO,cfg.antic)
+        add(name..'_drive',name..' swing',name..' '..cfg.hit,cfg.antic,cfg.drive,'drive')
+        add(name..'_follow',name..' '..cfg.hit,name..' stop',cfg.drive,ZERO,'out')
+    end
+end
+if data and data.sets then
+    if data.sets.brutal_fp_paired then
+        addPairedHeadMotion(data.sets.brutal_fp_paired.weapontwohand, data.clips, '2c')
+    end
+    if data.sets.brutal_fp_paired_blunt then
+        addPairedHeadMotion(data.sets.brutal_fp_paired_blunt.blunttwohand, data.clips, '2b')
+    end
 end
 
 local function sample(clip,t)

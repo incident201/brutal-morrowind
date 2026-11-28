@@ -1355,17 +1355,19 @@ namespace MWRender
         // source fade rules. Never turn on global smoothing for their camera,
         // root, classic animations or other actors.
         const bool polearm = kfname.starts_with("animations/brutal_fp_staff/") || kfname.starts_with("animations/brutal_fp_spear/");
+        const bool paired = kfname.starts_with("animations/brutal_fp_paired/")
+            || kfname.starts_with("animations/brutal_fp_paired_blunt/");
         const bool importedFamily = mPtr == MWBase::Environment::get().getWorld()->getPlayerPtr()
             && (kfname.starts_with("animations/brutal_fp/")
                 || kfname.starts_with("animations/brutal_fp_shield/")
                 || polearm
+                || paired
                 || kfname.starts_with("animations/brutal_fp_dagger/"));
         animsrc->mImportedFamilyArms = importedFamily;
         animsrc->mImportedFarArms = importedFamily
             && (polearm || kfname.starts_with("animations/brutal_fp_dagger/"));
         animsrc->mImportedDaggerArms = importedFamily && kfname.starts_with("animations/brutal_fp_dagger/");
-        animsrc->mImportedPairedArms = kfname.starts_with("animations/brutal_fp_paired/")
-            || kfname.starts_with("animations/brutal_fp_paired_blunt/");
+        animsrc->mImportedPairedArms = paired;
         animsrc->mImportedBow = kfname.starts_with("animations/brutal_fp_bow/");
         if (Settings::game().mSmoothAnimTransitions || importedNpc || importedFamily)
         {
