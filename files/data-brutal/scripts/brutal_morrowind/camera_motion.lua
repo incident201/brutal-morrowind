@@ -96,8 +96,60 @@ local function addSpearHeadMotion(set, clips)
         add(group,'settle end','large follow stop',rebound,ZERO)
     end
 end
+local okImpulse, nativeImpulse = pcall(require, 'scripts.brutal_morrowind.native_impulse')
+local function addSpearRushHeadMotion(sets, clips)
+    local rush={}
+    local function add(name, from, to, a, b, shape)
+        local key='spear_rush_'..name
+        local frames={}
+        for i=0,12 do
+            local u=i/12
+            local w
+            if shape=='drive' then w=u*u*(2.6-1.6*u)
+            elseif shape=='snap' then w=1-(1-u)^3
+            else w=u*u*(3-2*u) end
+            local frame={0,0,0,0,0,0}
+            for k=1,3 do frame[k]=math.rad(a[k]+(b[k]-a[k])*w) end
+            for k=4,6 do frame[k]=a[k]+(b[k]-a[k])*w end
+            frames[#frames+1]=frame
+        end
+        clips[key]={fps=12,loop=false,frames=frames}
+        rush[#rush+1]={start=from,stop=to,clip=key,duration=1}
+    end
+    -- Whole-body forward & downward torso commitment (x, y_forward, z_up in
+    -- slots 4..6) so the eye and shoulders surge forward while keeping the
+    -- entire outstretched right arm visibly extended in front of the player.
+    local coil={1.2,-2.5,4.5,-1.0,3.5,-2.8}
+    local drive={4.2,3.0,-11.5,2.2,8.5,-7.5}
+    local kick={5.4,3.6,-13.5,2.6,10.5,-9.0}
+    local hold={3.4,2.2,-9.8,2.0,8.0,-7.0}
+    add('coil','start','swing',ZERO,coil)
+    add('drive','swing','hit2',coil,drive,'drive')
+    add('kick','hit2','hold start',drive,kick,'snap')
+    add('hold','hold start','hold end',kick,hold)
+    add('return','hold end','stop',hold,ZERO)
+    sets.brutal_rush=rush
+end
 if data and data.sets and data.sets.brutal_fp_spear then
     addSpearHeadMotion(data.sets.brutal_fp_spear.weapononehand, data.clips)
+    addSpearRushHeadMotion(data.sets.brutal_fp_spear, data.clips)
+end
+if okImpulse and nativeImpulse and nativeImpulse.available and I.AnimationController then
+    -- Carry real sprint momentum into the spear rush lunge so starting the
+    -- attack never feels like slamming on the brakes.
+    I.AnimationController.addTextKeyHandler('brutal_rush', function(_, key)
+        if key ~= 'start' and key ~= 'swing' then return end
+        if not settings.get('enabled') or settings.get('firstPersonAnimations') ~= 'darkMessiah' then return end
+        if types.Actor.isDead(self) or not types.Actor.isOnGround(self) or types.Actor.isSwimming(self) then return end
+        local weapon = types.Actor.getEquipment(self)[types.Actor.EQUIPMENT_SLOT.CarriedRight]
+        if not weapon or not types.Weapon.objectIsInstance(weapon)
+            or types.Weapon.record(weapon).type ~= types.Weapon.TYPE.SpearTwoWide then return end
+        local forward = self.rotation * util.vector3(0, 1, 0)
+        forward = util.vector3(forward.x, forward.y, 0)
+        if forward:length() < 1e-3 then return end
+        forward = forward:normalize()
+        nativeImpulse.apply(self, forward * (key == 'start' and 220 or 360))
+    end)
 end
 
 -- Two-handed swords, battle axes and warhammers: a subtle over-the-back draw

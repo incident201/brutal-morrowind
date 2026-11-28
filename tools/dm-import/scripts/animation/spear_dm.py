@@ -284,8 +284,10 @@ def build(arms, body=None):
     bind_pose = Pose(rig, {}, 0.)
     bind_wrists = {side: bind_pose.local(grasp.names[-1])[:3, :3] for side, grasp in grasps.items()}
     right_fingers_open = {name: bind_pose.local(name) for name in grasps['R'].fingers}
+    left_fingers_open = {name: bind_pose.local(name) for name in grasps['L'].fingers}
 
-    def fitted_grip(item, lead_slide=0., r_clav_yaw=0., regrip=0.):
+    def fitted_grip(item, lead_slide=0., r_clav_yaw=0., regrip=0., left_release=0.,
+                    r_pronation=None, r_slide=0., r_clav_pitch=0.):
         result = {n: source_pose.local(n) for n in animated}
         for side, grasp in grasps.items():
             clavicle, upper, fore, wrist = grasp.names
@@ -294,11 +296,11 @@ def build(arms, body=None):
             shoulder_base = matrix(mirror_world @ other[:3, :3] @ mirror_local, mirror_world @ other[:3, 3])
             if side == 'R':
                 shoulder_base = blend(source_pose.world(clavicle), shoulder_base, .4)
-                if abs(r_clav_yaw) > 1e-4:
+                if abs(r_clav_yaw) > 1e-4 or abs(r_clav_pitch) > 1e-4:
                     # Pure rotation around clavicle socket: zero socket drift,
-                    # natural shoulder retraction on chamber & protraction on lunge.
-                    shoulder_base = matrix(turn_about((0., 0., 1.), r_clav_yaw) @ shoulder_base[:3, :3],
-                                           shoulder_base[:3, 3])
+                    # natural shoulder retraction on chamber & full torso lunge forward.
+                    c_rot = turn_about((0., 0., 1.), r_clav_yaw) @ turn_about((1., 0., 0.), r_clav_pitch)
+                    shoulder_base = matrix(c_rot @ shoulder_base[:3, :3], shoulder_base[:3, 3])
             result[clavicle] = inverse(source_pose.world(rig.parents[clavicle])) @ shoulder_base
             shoulder = (shoulder_base @ source_pose.local(upper))[:3, 3]
             offset = matrix(np.eye(3), shoulder - grasp.shoulder)
@@ -309,7 +311,18 @@ def build(arms, body=None):
                 # Pivot about the shaft centre and move the rear hand slightly
                 # forward. The lead hand continues to carry the spear.
                 mount = item @ matrix(turn_about(shaft_axis, 110. * regrip), shaft_axis * (5. * regrip))
+            elif r_slide:
+                # Slide the right hand toward the butt end for maximum reach on
+                # the one-handed outstretched rush lunge.
+                mount[:3, 3] += item[:3, 1] * r_slide
             hand = mount @ grasp.grip
+            if side == 'L' and left_release > 0.:
+                # Smoothly release the shaft and drop the left hand down-left
+                # into a natural athletic counterbalance while the right arm
+                # drives the spear far forward one-handed.
+                free_pos = eye + np.array((-9.5, 16.5, -17.5))
+                free_rot = turn_about((0., 0., 1.), 18.) @ turn_about((1., 0., 0.), -16.) @ hand[:3, :3]
+                hand = blend(hand, matrix(free_rot, free_pos), left_release)
             if side == 'L':
                 # Keep the lead elbow naturally low and out of view instead of
                 # chicken-winging up into the frame.
@@ -320,9 +333,17 @@ def build(arms, body=None):
                 if regrip:
                     wrist_axis = unit(hand[:3, 3] - shoulder)
                     pole = turn_about(wrist_axis, 48. * regrip) @ pole
-            chain, _ = grasp.fit(inverse(offset) @ mount, elbow_hint=grasp.shoulder + pole, swivels=np.zeros(1))
+                elif r_slide:
+                    # Keep the extended right elbow slightly below and outside
+                    # the shaft so the butt never clips through the forearm.
+                    pole = pole + np.array((.45, 0., -.55)) * min(1., abs(r_slide) / 3.)
+            if side == 'L' and left_release > 0.:
+                chain, _ = grasp.fit_hand(inverse(offset) @ hand, elbow_hint=grasp.shoulder + pole,
+                                          swivels=np.zeros(1))
+            else:
+                chain, _ = grasp.fit(inverse(offset) @ mount, elbow_hint=grasp.shoulder + pole, swivels=np.zeros(1))
             worlds = [offset @ joint for joint in chain[1:]]
-            pronation = 1. if side == 'L' else .66 * regrip
+            pronation = 1. if side == 'L' else (r_pronation if r_pronation is not None else .66 * regrip)
             if pronation:
                 # Share axial rotation with the forearm around its bone axis.
                 fore_w, hand_w = worlds[1].copy(), worlds[2]
@@ -339,6 +360,10 @@ def build(arms, body=None):
                 opening = .42 * np.sin(np.pi * regrip)
                 for name, closed in grasp.fingers.items():
                     result[name] = blend(closed, right_fingers_open[name], opening)
+            elif side == 'L' and left_release > 0.:
+                opening = min(1., left_release * 1.15) * .68
+                for name, closed in grasp.fingers.items():
+                    result[name] = blend(closed, left_fingers_open[name], opening)
         result[ITEM] = inverse(LocalPose(rig, result).world(rig.parents[ITEM])) @ item
         return result
 
@@ -737,6 +762,133 @@ def build(arms, body=None):
     replace_frames(block_stream, block_samples, [(start, end)])
     block_stream.save(target / block.name)
     shutil.copyfile(block.with_suffix('.yaml'), target / block.with_suffix('.yaml').name)
+
+    # Sprint rush attack (brutal_rush.kf): replaces the staff's wild two-swing
+    # flurry with a single explosive, full-body one-handed extended spear lunge.
+    # The left hand releases immediately while the right shoulder & outstretched
+    # arm throw the spear far forward near the butt grip, hold firmly at full
+    # reach, then draw back into the two-handed guard.
+    rush_src = folder / 'brutal_rush.kf'
+    if rush_src.is_file():
+        RUSH_COIL = .115       # snappy forward-leaning coil + immediate left-hand release
+        RUSH_DRIVE = .130      # violent outstretched lunge to 'hit2' (at 0.245s)
+        RUSH_FOLLOW = .045     # impact punch-through into full straight-arm lock (at 0.290s)
+        RUSH_HOLD = .420       # deliberate extended fixation on outstretched right arm (to 0.710s)
+        RUSH_RETURN = .440     # controlled withdrawal + smooth left-hand re-catch (to 1.150s)
+        rush_hit = RUSH_COIL + RUSH_DRIVE
+        rush_hold_start = rush_hit + RUSH_FOLLOW
+        rush_hold_end = rush_hold_start + RUSH_HOLD
+        rush_stop = rush_hold_end + RUSH_RETURN
+
+        rush_chamber_anchor = np.array((2.6, 0., -2.8)) - drive_axis * 10.5
+        rush_target_world = eye + np.array((.7, 132., -.2))
+        rush_axis = unit(rush_target_world - (eye + rest + rush_chamber_anchor))
+        # Total forward spear travel from chamber: 47.0 units (+36.5u past guard!),
+        # driving the right arm to near-full straight extension (~0.95 reach).
+        rush_travel = 47.0
+        rush_contact_p = .93
+        rush_r_slide = -2.5
+        rush_end_anchor = rush_chamber_anchor + rush_axis * rush_travel + np.array((-1.8, 0., 1.8))
+
+        def rush_pose(elapsed):
+            if elapsed < RUSH_COIL:
+                # Snappy coil while surging forward; left hand releases early.
+                w = ease(elapsed / RUSH_COIL)
+                rel = ease(max(0., (elapsed - RUSH_COIL * .35) / (RUSH_COIL * .65))) * .50
+                anchor = eye + rest + rush_chamber_anchor * w
+                axis = unit(lerp(drive_axis, rush_axis, w))
+                roll_deg = -8. * w
+                rot = turn_about(axis, roll_deg) @ rotate_between(contact_item[:3, 1], axis) @ contact_item[:3, :3]
+                item = matrix(rot, anchor - lead_station * axis)
+                return fitted_grip(item, lead_slide=5.0 * w * (1. - rel), r_clav_yaw=-12. * w,
+                                   left_release=rel, r_pronation=.5 * rel, r_slide=0., r_clav_pitch=0.)
+            if elapsed < rush_hit:
+                # Explosive full-body lunge along the locked strike line.
+                u = (elapsed - RUSH_COIL) / RUSH_DRIVE
+                p = rush_contact_p * (u * u * (2.3 - 1.3 * u))
+                rel = min(1., .50 + .50 * ease(min(1., u / .35)))
+                lateral = np.array((-1.8, 0., 1.8)) * p
+                anchor = eye + rest + rush_chamber_anchor + rush_axis * (rush_travel * p) + lateral
+                roll_deg = lerp(-8., 20., p)
+                rot = turn_about(rush_axis, roll_deg) @ rotate_between(contact_item[:3, 1], rush_axis) @ contact_item[:3, :3]
+                item = matrix(rot, anchor - lead_station * rush_axis)
+                return fitted_grip(item, lead_slide=0., r_clav_yaw=lerp(-12., 28., p),
+                                   left_release=rel, r_pronation=.85 * p,
+                                   r_slide=rush_r_slide * p, r_clav_pitch=-9. * p)
+            if elapsed < rush_hold_start:
+                # Impact penetration into fully outstretched straight-arm lock.
+                u = (elapsed - rush_hit) / RUSH_FOLLOW
+                rem = 1. - u
+                p = 1. - (1. - rush_contact_p) * rem * rem
+                dip = -.75 * np.sin(np.pi * .5 * u)
+                lateral = np.array((-1.8, 0., 1.8 + dip)) * p
+                anchor = eye + rest + rush_chamber_anchor + rush_axis * (rush_travel * p) + lateral
+                roll_deg = lerp(-8., 20., p)
+                rot = turn_about(rush_axis, roll_deg) @ rotate_between(contact_item[:3, 1], rush_axis) @ contact_item[:3, :3]
+                item = matrix(rot, anchor - lead_station * rush_axis)
+                return fitted_grip(item, lead_slide=0., r_clav_yaw=lerp(-12., 28., p),
+                                   left_release=1., r_pronation=.85,
+                                   r_slide=rush_r_slide * p, r_clav_pitch=-9. * p)
+            if elapsed < rush_hold_end:
+                # Deliberate fixation at maximum outstretched reach with taut
+                # muscular settle.
+                u = (elapsed - rush_hold_start) / RUSH_HOLD
+                settle = np.array((0., -.40 * ease(u), -.75 + .30 * ease(u) + .12 * np.sin(2. * np.pi * u)))
+                anchor = eye + rest + rush_end_anchor + settle
+                roll_deg = 20. - 1.5 * ease(u)
+                rot = turn_about(rush_axis, roll_deg) @ rotate_between(contact_item[:3, 1], rush_axis) @ contact_item[:3, :3]
+                item = matrix(rot, anchor - lead_station * rush_axis)
+                return fitted_grip(item, lead_slide=0., r_clav_yaw=28. - 1.5 * ease(u),
+                                   left_release=1., r_pronation=.85,
+                                   r_slide=rush_r_slide, r_clav_pitch=-9. + 1. * ease(u))
+            # Controlled withdrawal back to two-handed guard while left hand
+            # rises smoothly to re-catch the shaft.
+            u = min(1., (elapsed - rush_hold_end) / RUSH_RETURN)
+            w = ease(u)
+            catch = ease(max(0., (u - .14) / .72))
+            rel = 1. - catch
+            start_off = rush_end_anchor + np.array((0., -.40, -.45))
+            arc = np.array((.8, 0., -1.4)) * np.sin(np.pi * w)
+            anchor = eye + rest + lerp(start_off, np.zeros(3), w) + arc
+            axis = unit(lerp(rush_axis, drive_axis, w))
+            roll_deg = lerp(18.5, 0., w)
+            rot = turn_about(axis, roll_deg) @ rotate_between(contact_item[:3, 1], axis) @ contact_item[:3, :3]
+            item = matrix(rot, anchor - lead_station * axis)
+            return fitted_grip(item, lead_slide=0., r_clav_yaw=lerp(26.5, 0., w),
+                               left_release=rel, r_pronation=.85 * (1. - w),
+                               r_slide=rush_r_slide * (1. - w), r_clav_pitch=-8. * (1. - w))
+
+        rush_times = np.linspace(0., rush_stop, int(np.ceil(rush_stop * CHARGED_SAMPLE_RATE)) + 1)
+        rush_samples = {float(t): rush_pose(float(t)) for t in rush_times}
+        rush_stream = load(rush_src)
+        rush_text = keys(rush_stream)
+        rush_events = [
+            (0., 'brutal_rush: start'),
+            (RUSH_COIL, 'brutal_rush: swing'),
+            (rush_hit, 'brutal_rush: hit2'),
+            (rush_hold_start, 'brutal_rush: hold start'),
+            (rush_hold_end, 'brutal_rush: hold end'),
+            (rush_stop, 'brutal_rush: stop'),
+        ]
+        rush_text.keys = np.array(rush_events, dtype=rush_text.keys.dtype)
+        replace_frames(rush_stream, rush_samples, [(0., 10.)], stop_time=rush_stop)
+        for ctl in rush_stream.root.controllers:
+            ctl.start_time = 0.
+            ctl.stop_time = rush_stop
+        rush_stream.save(target / rush_src.name)
+        rush_yaml = (
+            "blending_rules:\n"
+            "  - from: '*'\n"
+            "    to: 'brutal_rush:start'\n"
+            "    easing: linear\n"
+            "    duration: 0.08\n"
+            "    clock: animation\n"
+            "  - from: ''\n"
+            "    to: 'brutal_rush:start'\n"
+            "    easing: linear\n"
+            "    duration: 0\n"
+        )
+        (target / rush_src.with_suffix('.yaml').name).write_text(rush_yaml)
 
     def gait_pose(phase, mode):
         """Rigid, braced spear carry locked to the stride (no floppy tip whip).
