@@ -250,9 +250,9 @@ class Grasp:
             # bent elbow. The angle between forearm and native palm stays measurable.
             flex = np.arccos(np.clip(fore_axis @ desired_fore[:, 0], -1., 1.))
             palm_flex = np.arccos(np.clip(fore_axis @ palm_along, -1., 1.))
-            # The arm segments can be collinear at full extension. Their
-            # plane still follows the same elbow bend used by the solver.
-            normal = cross(bend, axis)
+            # The smooth swing solver carries the elbow plane through full
+            # extension, where the arm segments can become collinear.
+            normal = cross(bend, axis) if smooth_bend else cross(elbow - shoulder, wrist - elbow)
             upper_rotation = basis(elbow - shoulder, normal) @ self.upper_frame
             fore_rotation = basis(wrist - elbow, normal) @ self.fore_frame
             twist_sine = fore_rotation[:, 2] @ desired_fore[:, 1] - fore_rotation[:, 1] @ desired_fore[:, 2]
