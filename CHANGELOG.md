@@ -1,3 +1,11 @@
+Brutal Morrowind 0.3.3
+----------------------------
+
+    Fix a crash when a weapon breaks during an attack, including dual-blade sneak attacks and backstabs.
+    Smooth animation transitions keep first-person camera offsets from being applied twice when crouching or moving.
+    Sprinting with fists or another stance without a dedicated sprint clip keeps its movement animation running continuously.
+    This release uses Dark Messiah import recipe 38. Existing imports from 0.3.2 can be reused.
+
 Brutal Morrowind 0.3.2
 ----------------------------
 

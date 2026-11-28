@@ -1,14 +1,5 @@
-## First-person animations
+- Fixed a crash when a weapon breaks during an attack, including dual-blade sneak attacks and backstabs.
+- Fixed the first-person camera dipping towards or below the floor when starting to move while crouching with **Smooth animation transitions** enabled.
+- Fixed excessive camera movement when sprinting with fists. Stances without a dedicated sprint clip keep their movement animation running continuously.
 
-- Smoother weapon draws, quick attack recoveries, and charged windups for two-handed swords, battle axes, and warhammers.
-- More directed spear and halberd thrusts and smoother grip changes when raising or lowering the guard. A sprint attack carries momentum into a single forward lunge.
-- Argonian and Khajiit first-person bodies use their own sprint and crouch gait. The camera lowers when crouching, and armor clears the crosshair when looking down.
-
-## Dark Messiah import
-
-- Select the Dark Messiah game directory, its extracted `mm/` folder, or a parent directory containing a single installation.
-- Loose resources take priority over matching files in VPK or GCF archives.
-
-## Updating
-
-This release uses import recipe **36**. After replacing the Linux package or running the Windows installer, select **Import and play** in the launcher to rebuild the import from your installed games. Existing saves and settings carry over.
+To update from **0.3.2**, replace the Linux package or run the Windows installer. This release uses import recipe **38** and reuses your existing Dark Messiah import. Saves and settings carry over.
