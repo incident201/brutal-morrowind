@@ -78,6 +78,7 @@
 #include "../mwmechanics/weapontype.hpp"
 
 #include "actorutil.hpp"
+#include "projectilemodel.hpp"
 #include "rotatecontroller.hpp"
 #include "releasedequipment.hpp"
 #include "releasedequipmentcompat.hpp"
@@ -2547,12 +2548,12 @@ namespace MWRender
         return addStuckProjectile(model, tipPosition, flight, item, *parent, parentToWorld, bone);
     }
 
-    static float projectileModelTip(osg::Node& projectile)
+    static float projectileModelTip(osg::Node& projectile, bool backward)
     {
-        // Missile models point along +Y; the tip is the far end.
         osg::ComputeBoundsVisitor bounds;
         projectile.accept(bounds);
-        return bounds.getBoundingBox().valid() ? bounds.getBoundingBox().yMax() : 0.f;
+        const auto& box = bounds.getBoundingBox();
+        return box.valid() ? (backward ? box.yMin() : box.yMax()) : 0.f;
     }
 
     ProjectileAttachment Animation::addStuckProjectile(
@@ -2588,15 +2589,17 @@ namespace MWRender
         }
 
         osg::ref_ptr<osg::Node> projectile = mResourceSystem->getSceneManager()->getInstance(model);
-        const float tip = projectileModelTip(*projectile);
+        const bool backward = projectileModelFacesBackward(model);
+        const float tip = projectileModelTip(*projectile, backward);
+        const osg::Vec3f modelForward = backward ? -flight : flight;
 
-        osg::Vec3f right = flight ^ osg::Z_AXIS;
+        osg::Vec3f right = modelForward ^ osg::Z_AXIS;
         if (right.normalize() < 1e-4f)
             right = osg::X_AXIS;
-        const osg::Vec3f up = right ^ flight;
-        const osg::Matrixf rotation(right.x(), right.y(), right.z(), 0.f, flight.x(), flight.y(), flight.z(), 0.f,
-            up.x(), up.y(), up.z(), 0.f, 0.f, 0.f, 0.f, 1.f);
-        const osg::Matrixf projectileToWorld = rotation * osg::Matrixf::translate(tipPosition - flight * tip);
+        const osg::Vec3f up = right ^ modelForward;
+        const osg::Matrixf rotation(right.x(), right.y(), right.z(), 0.f, modelForward.x(), modelForward.y(),
+            modelForward.z(), 0.f, up.x(), up.y(), up.z(), 0.f, 0.f, 0.f, 0.f, 1.f);
+        const osg::Matrixf projectileToWorld = rotation * osg::Matrixf::translate(tipPosition - modelForward * tip);
 
         const osg::Matrixf local = projectileToWorld * osg::Matrixf::inverse(parentToWorld);
         mountProjectile(*projectile, parent, local, item, bone, tip);
@@ -2642,7 +2645,8 @@ namespace MWRender
         {
             const auto model = Misc::ResourceHelpers::correctMeshPath(VFS::Path::Normalized(record->mModel));
             const auto projectile = mResourceSystem->getSceneManager()->getInstance(model);
-            mountProjectile(*projectile, parent, transform, item, bone, projectileModelTip(*projectile));
+            mountProjectile(*projectile, parent, transform, item, bone,
+                projectileModelTip(*projectile, projectileModelFacesBackward(model)));
         }
         catch (const std::exception& error)
         {

@@ -147,6 +147,7 @@ namespace MWWorld
 
             osg::Vec3f mVelocity;
             float mAttackStrength;
+            bool mModelFacesBackward = false;
             std::uint64_t mFinisherAttackId = 0;
             std::optional<Finisher> mFinisher;
         };

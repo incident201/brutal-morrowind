@@ -64,6 +64,7 @@
 #include "../mwrender/animation.hpp"
 #include "../mwrender/camera.hpp"
 #include "../mwrender/npcanimation.hpp"
+#include "../mwrender/projectilemodel.hpp"
 #include "../mwrender/renderingmanager.hpp"
 #include "../mwrender/util.hpp"
 #include "../mwrender/vismask.hpp"
@@ -166,7 +167,7 @@ namespace
         return lightDiffuseColor;
     }
 
-    osg::Quat lookAt(const osg::Vec3f& pos)
+    osg::Quat lookAt(const osg::Vec3f& pos, bool backward)
     {
         // Rotate the forward vector towards the position (used for gravity-affected projectiles)
         // Can't use Quat::makeRotate as the shortest angle contains undesirable local roll
@@ -174,7 +175,7 @@ namespace
         if (dist < 1e-4f)
             return {};
 
-        const osg::Vec3f dir = pos / dist;
+        const osg::Vec3f dir = (backward ? -pos : pos) / dist;
         osg::Vec3f right = dir ^ osg::Z_AXIS;
         if (right.normalize() < 1e-4f)
             right = osg::X_AXIS;
@@ -494,8 +495,10 @@ namespace MWWorld
         MWWorld::Ptr ptr = ref.getPtr();
 
         const VFS::Path::Normalized model = ptr.getClass().getCorrectedModel(ptr);
-        createModel(
-            state, model, pos, selected ? lookAt(state.mVelocity) : orient, false, false, osg::Vec4(0, 0, 0, 0));
+        state.mModelFacesBackward = MWRender::projectileModelFacesBackward(model);
+        const osg::Quat attitude = selected || state.mModelFacesBackward
+            ? lookAt(state.mVelocity, state.mModelFacesBackward) : orient;
+        createModel(state, model, pos, attitude, false, false, osg::Vec4(0, 0, 0, 0));
         if (!ptr.getClass().getEnchantment(ptr).empty())
             SceneUtil::addEnchantedGlow(state.mNode, mResourceSystem, ptr.getClass().getEnchantmentColor(ptr));
 
@@ -537,7 +540,7 @@ namespace MWWorld
                 }
         }
 
-        float missileTip(Resource::ResourceSystem* resources, VFS::Path::NormalizedView model)
+        float missileTip(Resource::ResourceSystem* resources, VFS::Path::NormalizedView model, bool backward)
         {
             static std::map<std::string, float, std::less<>> tips;
             if (const auto found = tips.find(model.value()); found != tips.end())
@@ -545,7 +548,8 @@ namespace MWWorld
             osg::ref_ptr<osg::Node> node = resources->getSceneManager()->getInstance(model);
             osg::ComputeBoundsVisitor bounds;
             node->accept(bounds);
-            const float tip = bounds.getBoundingBox().valid() ? bounds.getBoundingBox().yMax() : 0.f;
+            const auto& box = bounds.getBoundingBox();
+            const float tip = box.valid() ? (backward ? box.yMin() : box.yMax()) : 0.f;
             tips.emplace(std::string(model.value()), tip);
             return tip;
         }
@@ -571,10 +575,11 @@ namespace MWWorld
         osg::Vec3f d = direction;
         d.normalize();
         MWWorld::ManualRef ref(*MWBase::Environment::get().getESMStore(), id, 1);
-        const float modelTip = missileTip(mResourceSystem, ref.getPtr().getClass().getCorrectedModel(ref.getPtr()));
+        const auto model = ref.getPtr().getClass().getCorrectedModel(ref.getPtr());
+        const bool backward = MWRender::projectileModelFacesBackward(model);
+        const float modelTip = missileTip(mResourceSystem, model, backward);
         ESM::Position pos;
-        missileRotation(d, pos.rot);
-        // The model's tip lies modelTip along its +Y from the origin.
+        missileRotation(backward ? -d : d, pos.rot);
         const osg::Vec3f forward = Misc::Convert::makeOsgQuat(pos.rot) * osg::Vec3f(0, 1, 0);
         const osg::Vec3f origin = tip + d * depth - forward * modelTip;
         pos.pos[0] = origin.x();
@@ -1113,7 +1118,8 @@ namespace MWWorld
 
             projectile->setVelocity(projectileState.mVelocity);
 
-            projectileState.mNode->setAttitude(lookAt(projectileState.mVelocity));
+            projectileState.mNode->setAttitude(
+                lookAt(projectileState.mVelocity, projectileState.mModelFacesBackward));
 
             update(projectileState, duration);
 
@@ -1349,6 +1355,7 @@ namespace MWWorld
                 MWWorld::ManualRef ref(*MWBase::Environment::get().getESMStore(), esm.mId);
                 MWWorld::Ptr ptr = ref.getPtr();
                 model = ptr.getClass().getCorrectedModel(ptr);
+                state.mModelFacesBackward = MWRender::projectileModelFacesBackward(model);
 
                 state.mProjectileId
                     = mPhysics->addProjectile(state.getCaster(), osg::Vec3f(esm.mPosition), model, false);
@@ -1360,8 +1367,9 @@ namespace MWWorld
                 return true;
             }
 
-            createModel(state, model, osg::Vec3f(esm.mPosition), osg::Quat(esm.mOrientation), false, false,
-                osg::Vec4(0, 0, 0, 0));
+            const osg::Quat attitude = state.mModelFacesBackward
+                ? lookAt(state.mVelocity, true) : osg::Quat(esm.mOrientation);
+            createModel(state, model, osg::Vec3f(esm.mPosition), attitude, false, false, osg::Vec4(0, 0, 0, 0));
 
             mProjectiles.push_back(std::move(state));
             return true;
